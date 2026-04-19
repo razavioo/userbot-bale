@@ -193,13 +193,17 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
     if args.livekit_url and args.livekit_token:
         return args.livekit_url, args.livekit_token
 
-    jwt = args.bale_jwt
-    if not jwt and args.bale_jwt_file:
+    jwt = args.bale_jwt or os.environ.get("BALE_JWT")
+    jwt_file = args.bale_jwt_file or "/tmp/bale_jwt.txt"
+    if not jwt:
         from pathlib import Path
-        jwt = Path(args.bale_jwt_file).read_text().strip()
+        jwt_path = Path(jwt_file)
+        if jwt_path.exists():
+            jwt = jwt_path.read_text().strip()
+
     if not jwt:
         raise SystemExit(
-            "Need either --livekit-url/--livekit-token OR --bale-jwt(-file) "
+            "Need either --livekit-url/--livekit-token OR --bale-jwt (or BALE_JWT env var / /tmp/bale_jwt.txt) "
             "with --peer-id/--answer."
         )
 
