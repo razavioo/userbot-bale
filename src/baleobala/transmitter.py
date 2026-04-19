@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import secrets
 from typing import Iterable, Iterator
 
 import numpy as np
@@ -47,10 +48,15 @@ class Transmitter:
         device: str | int | None = None,
         protocol: Protocol = Protocol.AUDIBLE_FAST,
         volume: int = 50,
-        start_msg_id: int = 0,
+        start_msg_id: int | None = None,
     ) -> None:
         self.device = device
         self._codec = Codec(protocol=protocol, volume=volume)
+        # Random start so two independent sender sessions don't collide with
+        # the receiver's duplicate-suppression window. Callers can pin a
+        # specific start for tests.
+        if start_msg_id is None:
+            start_msg_id = secrets.randbits(16)
         self._msg_counter = itertools.count(start_msg_id & 0xFFFF)
 
     def __enter__(self) -> "Transmitter":

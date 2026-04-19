@@ -140,9 +140,32 @@ Messages up to `132 × 255 ≈ 33 KiB` are fragmented and reassembled
 in-order. Short messages take the SINGLE fast path: one frame, no
 reassembly state, emitted immediately.
 
+## How device routing works
+
+PortAudio (what `sounddevice` uses) exposes PulseAudio/PipeWire as a
+single ALSA device named `pulse`; individual sinks and sources are not
+visible to it directly. Baleobala's CLI detects this and, when
+`--device <name>` names a PulseAudio sink or source that isn't a
+sounddevice device, sets `PULSE_SINK` / `PULSE_SOURCE` in the process
+environment and routes through the `pulse` device. That's why
+`baleobala send --device baleobala_sink` and
+`baleobala recv --device baleobala` just work, even though neither
+name appears in `baleobala devices`.
+
 ## Troubleshooting
 
 **`pactl: command not found`** — install `pulseaudio-utils`.
+
+**`libportaudio2` unavailable via apt** — on restricted networks the
+universe repo may be unreachable. Download directly:
+```bash
+wget http://archive.ubuntu.com/ubuntu/pool/universe/p/portaudio19/libportaudio2_19.6.0-1.1_amd64.deb
+sudo dpkg -i libportaudio2_19.6.0-1.1_amd64.deb
+```
+
+**`ALSA lib pcm.c: underrun occurred`** on transmit — cosmetic warnings
+from PortAudio-ALSA when the null-sink drains faster than we feed it.
+Does not affect the encoded data.
 
 **Virtual mic doesn't appear in Zoom** — Zoom caches the device list at
 launch. Create the virtmic *before* opening Zoom, or fully quit and

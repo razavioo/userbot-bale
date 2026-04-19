@@ -13,14 +13,73 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import shutil
+import subprocess
 import sys
 import time
-from typing import Iterator
+from typing import Iterator, Literal
 
 from baleobala.codec import Protocol
 from baleobala.virtmic import VirtualMic
 
 log = logging.getLogger("baleobala")
+
+
+def _pactl_has(kind: Literal["sinks", "sources"], name: str) -> bool:
+    """Check if a PulseAudio sink/source with this exact name exists."""
+    if shutil.which("pactl") is None:
+        return False
+    try:
+        out = subprocess.run(
+            ["pactl", "list", "short", kind],
+            check=True, capture_output=True, text=True, timeout=3,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1] == name:
+            return True
+    return False
+
+
+def _sounddevice_has(name: str, kind: Literal["input", "output"]) -> bool:
+    import sounddevice as sd
+    for d in sd.query_devices():
+        if d["name"] == name and d[f"max_{kind}_channels"] > 0:
+            return True
+    return False
+
+
+def _resolve_device(
+    arg: str | None,
+    kind: Literal["input", "output"],
+) -> str | None:
+    """
+    Accept a device string that may be:
+      * None                                 → default
+      * a sounddevice device name or index   → pass through
+      * a PulseAudio sink/source name        → route via "pulse" device + env var
+
+    PortAudio on Linux exposes PulseAudio as a single "pulse" device; the
+    way to target a specific sink/source is via PULSE_SINK / PULSE_SOURCE.
+    This makes `--device baleobala_sink` work even though sounddevice never
+    sees that name directly.
+    """
+    if arg is None:
+        return None
+    if arg.isdigit():
+        return arg  # sounddevice accepts numeric indices via str
+    if _sounddevice_has(arg, kind):
+        return arg
+    pulse_kind: Literal["sinks", "sources"] = "sinks" if kind == "output" else "sources"
+    if _pactl_has(pulse_kind, arg):
+        env_var = "PULSE_SINK" if kind == "output" else "PULSE_SOURCE"
+        os.environ[env_var] = arg
+        log.info("routing via pulse: %s=%s", env_var, arg)
+        return "pulse"
+    return arg  # let sounddevice raise its own error
 
 
 def _proto(name: str) -> Protocol:
@@ -39,9 +98,10 @@ def _stdin_lines() -> Iterator[str]:
 
 
 def cmd_send(args: argparse.Namespace) -> int:
+    device = _resolve_device(args.device, "output")
     from baleobala.transmitter import Transmitter
     with Transmitter(
-        device=args.device,
+        device=device,
         protocol=_proto(args.protocol),
         volume=args.volume,
     ) as tx:
@@ -53,8 +113,9 @@ def cmd_send(args: argparse.Namespace) -> int:
 
 
 def cmd_recv(args: argparse.Namespace) -> int:
+    device = _resolve_device(args.device, "input")
     from baleobala.receiver import Receiver
-    with Receiver(device=args.device, protocol=_proto(args.protocol)) as rx:
+    with Receiver(device=device, protocol=_proto(args.protocol)) as rx:
         try:
             for msg in rx.iter_messages():
                 print(msg.text(), flush=True)
