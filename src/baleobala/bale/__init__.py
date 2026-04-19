@@ -24,6 +24,7 @@ isolation — give it a URL and token and baleobala frames flow. That
 lets the RE work on auth/api proceed without blocking the audio half.
 """
 
+from baleobala.bale.endpoints import Endpoint, fetch_endpoints
 from baleobala.bale.livekit_backend import (
     LiveKitSink,
     LiveKitSource,
@@ -31,6 +32,8 @@ from baleobala.bale.livekit_backend import (
 )
 
 __all__ = [
+    "Endpoint",
+    "fetch_endpoints",
     "LiveKitSink",
     "LiveKitSource",
     "LiveKitSession",

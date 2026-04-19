@@ -132,11 +132,35 @@ headless client must not assume they work: `RequestSend`,
 `RequestStartLiveKitCall` is **not** in the disabled list, so calls
 remain accessible.
 
+## Endpoint pin format (resolved 2026-04-19)
+
+Empirical test against `rpc-ssl-c002.bale.ai:443`
+(`scripts/smoketest_transport.py`) showed that **none** of the common
+TLS hash variants match the 32-byte hex in the endpoints response:
+
+- SHA-256(cert-DER):    `b2bb944a...`  — no match
+- SHA-256(SPKI-DER):    `edcc33d9...`  — no match
+- SHA-256(RSA-modulus): `d54a5075...`  — no match
+- Expected pin:         `6d9ba5c5...`
+
+Conclusion: the pin is **not** a TLS-layer pin. It is the
+Actor-Platform-style **server RSA pubkey fingerprint** consumed
+during the MTProto auth-key handshake. At the TLS layer Bale
+connects with the standard public CA chain (no pinning); trust flows
+through the MTProto handshake, which verifies the server holds the
+private key matching this fingerprint.
+
+This aligns with upstream Actor Platform where `Endpoint.key` carries
+the MTProto server identity. `src/baleobala/bale/mtproto/endpoint.py`
+is updated accordingly: TLS is plain, pin flows into the next layer.
+
 ## RE milestones to finish the headless client
 
 1. ✅ **Endpoint bootstrap.** Done — see `endpoints.py`. Live-tested
    against bale.ai on 2026-04-19.
-2. **Extract the client identifier (api_id / device_hash).** Not
+2. ✅ **Live TLS endpoint connect.** Done — see
+   `src/baleobala/bale/mtproto/endpoint.py`. Live-tested same day.
+3. **Extract the client identifier (api_id / device_hash).** Not
    found as a literal in the decompile; likely derived at runtime in
    `ir.nasim.core.modules.*` initialization or passed as a
    session-negotiated value. Needs a mitmproxy capture to confirm.
