@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baleobala"
+version = "0.1.0"
+description = "Acoustic data bridge over voice/video calls via a virtual microphone."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "baleobala" }]
+keywords = ["ggwave", "data-over-sound", "virtual-microphone", "pipewire", "voip"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Communications",
+  "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+  "ggwave>=0.4.0",
+  "sounddevice>=0.4.6",
+  "numpy>=1.23",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-timeout>=2",
+]
+
+[project.scripts]
+baleobala = "baleobala.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
