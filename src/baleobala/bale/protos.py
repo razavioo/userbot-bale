@@ -178,14 +178,23 @@ class RequestSearchContacts:
     query: str
 
     def encode(self) -> bytes:
-        inner = _enc_len_delim(1, self.query.encode("utf-8"))
-        return _enc_len_delim(4, inner)
+        """SearchContacts takes the query directly at top-level field 1
+        (the proto's `request` string field). No outer wrap: unlike
+        StartCall/ImportContacts, this RPC payload is the unwrapped
+        RequestSearchContacts message body."""
+        return _enc_len_delim(1, self.query.encode("utf-8"))
 
 
 def parse_search_contacts_response(buf: bytes) -> list:
     """Parse ResponseSearchContacts → list[ResolvedContact].
 
-    Layout: repeated UserOutPeer at tag 2 (a top-level list).
+    Per the proto:
+        field 1 = repeated User          (full records, skip here)
+        field 2 = repeated UserOutPeer   (user_id + access_hash — what we need)
+        field 4 = repeated Group         (group results)
+        field 5 = repeated GroupOutPeer
+
+    Empty payload (6 bytes: just the envelope + empty) means no match.
     """
     out: list[ResolvedContact] = []
     pos = 0
