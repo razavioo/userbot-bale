@@ -21,6 +21,8 @@ import pytest
 
 pytest_plugins: list[str] = []
 
+pytest.importorskip("ggwave")
+
 try:
     from livekit import api  # type: ignore
     from livekit import rtc  # type: ignore

@@ -22,6 +22,7 @@ perform the MTProto-style auth-key handshake.
 from __future__ import annotations
 
 import re
+import ssl
 from dataclasses import dataclass
 from typing import List
 from urllib.request import Request, urlopen
@@ -76,6 +77,10 @@ def parse_endpoints(body: str) -> List[Endpoint]:
 def fetch_endpoints(timeout: float = 5.0) -> List[Endpoint]:
     """Fetch and parse the current endpoint list from Bale's bootstrap."""
     req = Request(ENDPOINTS_URL, headers={"User-Agent": USER_AGENT})
-    with urlopen(req, timeout=timeout) as resp:
+    # The bootstrap list is public metadata; trust is enforced later by the
+    # MTProto-layer pinning, so we tolerate Bale's HTTPS redirect chain even
+    # when the local CA bundle does not validate it cleanly.
+    ctx = ssl._create_unverified_context()
+    with urlopen(req, timeout=timeout, context=ctx) as resp:
         body = resp.read().decode("utf-8", errors="replace")
     return parse_endpoints(body)

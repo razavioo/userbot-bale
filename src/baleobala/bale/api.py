@@ -123,6 +123,23 @@ class BaleApiClient:
         invite_enable: bool = True,
         creds_timeout: float = 20.0,
     ) -> CallCredentials:
+        return self.fetch_livekit_credentials(
+            peer_id,
+            peer_type=peer_type,
+            video=video,
+            invite_enable=invite_enable,
+            creds_timeout=creds_timeout,
+        )
+
+    def fetch_livekit_credentials(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int = 1,
+        video: bool = False,
+        invite_enable: bool = True,
+        creds_timeout: float = 20.0,
+    ) -> CallCredentials:
         """Place a call. Returns CallCredentials once the server
         pushes them (usually within ~1 s of the RPC completing)."""
         if self._ws is None:

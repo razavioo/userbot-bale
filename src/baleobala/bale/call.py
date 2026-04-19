@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from baleobala.bale.api import BaleApiClient, LiveKitCredentials
-from baleobala.bale.livekit_backend import LiveKitSession
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +32,8 @@ def livekit_session(
             with Transmitter(sink=session.sink()) as tx:
                 tx.send("hello from bale")
     """
+    from baleobala.bale.livekit_backend import LiveKitSession
+
     session = LiveKitSession(url=url, token=token, identity=identity)
     session.start()
     try:
