@@ -15,8 +15,10 @@ venv/
 
 # Reverse-engineering artefacts (regenerate with `jadx -d re/jadx-out bale.apk`)
 /re/
-# Upstream binary — keep locally, do not redistribute
+# Upstream + patched APKs — keep locally, do not redistribute
 /bale.apk
+/bale.objection.apk
+/*.apktool.yml
 # Persistent Bale session (contains auth_key + JWT)
 /.baleobala/
 # mitmproxy captures (contain session secrets)
