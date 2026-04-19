@@ -5,6 +5,10 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
+pytest.importorskip("ggwave")
+
 from baleobala.backends.memory import MemorySink, MemorySource
 from baleobala.codec import Protocol
 from baleobala.receiver import Receiver

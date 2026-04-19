@@ -20,7 +20,6 @@ import sys
 import time
 from typing import Iterator, Literal
 
-from baleobala.codec import Protocol
 from baleobala.virtmic import VirtualMic
 
 log = logging.getLogger("baleobala")
@@ -83,6 +82,8 @@ def _resolve_device(
 
 
 def _proto(name: str) -> Protocol:
+    from baleobala.codec import Protocol
+
     return {
         "normal": Protocol.AUDIBLE_NORMAL,
         "fast": Protocol.AUDIBLE_FAST,
@@ -182,16 +183,46 @@ def cmd_loopback(args: argparse.Namespace) -> int:
     return 0 if ok == len(messages) else 1
 
 
-def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
-    """Return (url, token) for a LiveKit room, using whichever of three
-    sources the caller provided:
+def cmd_tunnel_loopback(args: argparse.Namespace) -> int:
+    """Exercise the byte-stream tunnel over an in-memory carrier."""
+    from baleobala.runtime import MemoryByteChannel, TunnelRole, TunnelSession
 
-    1. `--livekit-url` + `--livekit-token` (explicit; still supported).
-    2. `--peer-id` + `--bale-jwt`        (we place the call ourselves).
-    3. `--answer` + `--bale-jwt`         (we listen for a call pushed to us).
-    """
+    left_ch, right_ch = MemoryByteChannel.pair()
+    left = TunnelSession(left_ch, role=TunnelRole.CLIENT)
+    right = TunnelSession(right_ch, role=TunnelRole.SERVER)
+    left.open()
+    right.open()
+
+    messages = [m.encode("utf-8") for m in (args.messages or ["alpha", "beta", "gamma"])]
+    got: list[bytes] = []
+    for msg in messages:
+        left.send(msg)
+        deadline = time.time() + 1.0
+        item = None
+        while time.time() < deadline and item is None:
+            item = right.recv(timeout=0.05)
+        got.append(item or b"")
+
+    left.close()
+    right.close()
+
+    if got != messages:
+        raise SystemExit(f"tunnel loopback mismatch: got={got!r}")
+    for i, msg in enumerate(messages):
+        print(f"OK  [{i}] {msg!r}")
+    return 0
+
+
+def _resolve_carrier_credentials(args: argparse.Namespace):
+    from baleobala.carrier.bale import CarrierCredentials
+
     if args.livekit_url and args.livekit_token:
-        return args.livekit_url, args.livekit_token
+        return CarrierCredentials(
+            url=args.livekit_url,
+            token=args.livekit_token,
+            room=args.livekit_room or "",
+            identity=args.identity,
+        )
 
     jwt = args.bale_jwt or os.environ.get("BALE_JWT")
     jwt_file = args.bale_jwt_file or "/tmp/bale_jwt.txt"
@@ -200,62 +231,51 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
         jwt_path = Path(jwt_file)
         if jwt_path.exists():
             jwt = jwt_path.read_text().strip()
-
     if not jwt:
         raise SystemExit(
-            "Need either --livekit-url/--livekit-token OR --bale-jwt (or BALE_JWT env var / /tmp/bale_jwt.txt) "
-            "with --peer-id/--answer."
+            "Need either --livekit-url/--livekit-token OR --bale-jwt (or BALE_JWT env var / /tmp/bale_jwt.txt)."
         )
 
-    from baleobala.bale import BaleApiClient
+    from baleobala.bale.api import BaleApiClient
+    from baleobala.carrier.bale import BaleCarrierController
 
-    client = BaleApiClient(jwt=jwt)
-    client.start()
+    controller = BaleCarrierController(client=BaleApiClient(jwt=jwt))
     try:
         peer_id = args.peer_id
         if peer_id is None and args.peer_name:
-            matches = client.search_contacts(args.peer_name)
+            matches = controller.search_contacts(args.peer_name)
             if not matches:
-                raise SystemExit(
-                    f"no contacts match name {args.peer_name!r}"
-                )
+                raise SystemExit(f"no contacts match name {args.peer_name!r}")
             peer_id = matches[0].user_id
-            print(f"[bale-call] matched name {args.peer_name!r} -> "
-                  f"user_id {peer_id} ({len(matches)} total matches)",
-                  file=sys.stderr)
-        if peer_id is None and args.peer:
-            peer_id = client.resolve_peer(args.peer)
-            print(f"[bale-call] resolved {args.peer} -> user_id {peer_id}",
-                  file=sys.stderr)
-        if peer_id is not None:
-            creds = client.start_call(peer_id=peer_id, video=False)
-        elif args.answer:
-            import threading
-            got = threading.Event()
-            holder: list = []
-
-            def on_creds(c):
-                if not holder:
-                    holder.append(c)
-                    got.set()
-
-            client.listen_incoming_calls(on_creds)
             print(
-                "[bale-call] listening for incoming call. Ask the caller "
-                "to ring you now. (Ctrl-C to abort.)",
+                f"[bale-call] matched name {args.peer_name!r} -> user_id {peer_id} ({len(matches)} total matches)",
                 file=sys.stderr,
             )
-            if not got.wait(timeout=args.answer_timeout):
-                raise TimeoutError(
-                    f"no incoming call within {args.answer_timeout}s"
-                )
-            creds = holder[0]
-        else:
-            raise SystemExit(
-                "Need one of --peer-id, --peer, --peer-name, or --answer."
+        if peer_id is None and args.peer:
+            peer_id = controller.resolve_peer(args.peer)
+            print(f"[bale-call] resolved {args.peer} -> user_id {peer_id}", file=sys.stderr)
+        if peer_id is not None:
+            return controller.dial(peer_id=peer_id)
+        if args.answer:
+            print(
+                "[bale-call] listening for incoming call. Ask the caller to ring you now. (Ctrl-C to abort.)",
+                file=sys.stderr,
             )
+            return controller.answer(timeout=args.answer_timeout)
+        raise SystemExit("Need one of --peer-id, --peer, --peer-name, or --answer.")
     finally:
-        client.stop()
+        controller._client.stop()
+
+
+def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    """Return (url, token) for a LiveKit room, using whichever of three
+    sources the caller provided:
+
+    1. `--livekit-url` + `--livekit-token` (explicit; still supported).
+    2. `--peer-id` + `--bale-jwt`        (we place the call ourselves).
+    3. `--answer` + `--bale-jwt`         (we listen for a call pushed to us).
+    """
+    creds = _resolve_carrier_credentials(args)
     return creds.url, creds.token
 
 
@@ -273,12 +293,8 @@ def cmd_bale_call(args: argparse.Namespace) -> int:
        incoming call; server pushes creds when a caller rings us.
     """
     url, token = _resolve_livekit_credentials(args)
-
-    from baleobala.bale import LiveKitSession
-
-    session = LiveKitSession(
-        url=url, token=token, identity=args.identity,
-    )
+    from baleobala.bale.livekit_backend import LiveKitSession
+    session = LiveKitSession(url=url, token=token, identity=args.identity)
     session.start()
     try:
         if args.mode == "send":
@@ -305,6 +321,105 @@ def cmd_bale_call(args: argparse.Namespace) -> int:
                     pass
     finally:
         session.stop()
+    return 0
+
+
+def cmd_bale_tunnel(args: argparse.Namespace) -> int:
+    """Run the full byte tunnel over Bale/LiveKit."""
+    creds = _resolve_carrier_credentials(args)
+    from baleobala.carrier.bale import BaleCarrierController
+    from baleobala.runtime.bridge import AudioTunnelBridge
+    from baleobala.runtime.frame import TunnelRole
+
+    controller = BaleCarrierController()
+    carrier = controller.open_session(creds)
+    role = TunnelRole.CLIENT if args.mode == "send" else TunnelRole.SERVER
+    bridge = AudioTunnelBridge(
+        carrier=carrier,
+        role=role,
+        protocol=args.protocol,
+        volume=args.volume,
+    )
+    with bridge:
+        if args.mode == "send":
+            source = [args.text] if args.text else _stdin_lines()
+            for text in source:
+                msg_id = bridge.send(text.encode("utf-8"))
+                print(f"[tx] id={msg_id} bytes={len(text.encode('utf-8'))}", file=sys.stderr)
+        else:
+            try:
+                while True:
+                    payload = bridge.recv(timeout=0.25)
+                    if payload is None:
+                        continue
+                    print(payload.decode("utf-8", errors="replace"), flush=True)
+            except KeyboardInterrupt:
+                pass
+    return 0
+
+
+def _open_audio_tunnel(args: argparse.Namespace, role):
+    creds = _resolve_carrier_credentials(args)
+    from baleobala.carrier.bale import BaleCarrierController
+    from baleobala.runtime.bridge import AudioTunnelBridge
+
+    controller = BaleCarrierController()
+    carrier = controller.open_session(creds)
+    bridge = AudioTunnelBridge(
+        carrier=carrier,
+        role=role,
+        protocol=args.protocol,
+        volume=args.volume,
+    )
+    bridge.start()
+    return bridge
+
+
+def _resolve_proxy_secret(args: argparse.Namespace) -> bytes | None:
+    secret = getattr(args, "proxy_secret", None) or os.environ.get("BALE_PROXY_SECRET")
+    if not secret:
+        return None
+    return secret.encode("utf-8")
+
+
+def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
+    """Run a local SOCKS5/HTTP CONNECT server over Bale-backed transport."""
+    from baleobala.runtime import QueuedTunnelTransport, Socks5ProxyServer
+    from baleobala.runtime.frame import TunnelRole
+
+    bridge = _open_audio_tunnel(args, TunnelRole.CLIENT)
+    transport = QueuedTunnelTransport(bridge)
+    server = Socks5ProxyServer(
+        transport,
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        secret=_resolve_proxy_secret(args),
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.stop()
+    finally:
+        transport.close()
+        bridge.close()
+    return 0
+
+
+def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
+    """Run the remote TCP relay over Bale-backed transport."""
+    from baleobala.runtime import QueuedTunnelTransport, TunnelTcpRelay
+    from baleobala.runtime.frame import TunnelRole
+
+    bridge = _open_audio_tunnel(args, TunnelRole.SERVER)
+    transport = QueuedTunnelTransport(bridge)
+    relay = TunnelTcpRelay(transport, secret=_resolve_proxy_secret(args))
+    try:
+        relay.serve_forever()
+    except KeyboardInterrupt:
+        relay.stop()
+    finally:
+        transport.close()
+        bridge.close()
     return 0
 
 
@@ -344,6 +459,73 @@ def build_parser() -> argparse.ArgumentParser:
     lb.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     lb.add_argument("messages", nargs="*")
     lb.set_defaults(func=cmd_loopback)
+
+    tl = sub.add_parser("tunnel-loopback", help="in-process byte-tunnel self-test")
+    tl.add_argument("messages", nargs="*")
+    tl.set_defaults(func=cmd_tunnel_loopback)
+
+    bt = sub.add_parser(
+        "bale-tunnel",
+        help="run the byte tunnel over a Bale LiveKit room",
+    )
+    bt.add_argument("mode", choices=["send", "recv"])
+    bt.add_argument("--livekit-url", default=None)
+    bt.add_argument("--livekit-token", default=None)
+    bt.add_argument("--livekit-room", default=None)
+    bt.add_argument("--bale-jwt", default=None)
+    bt.add_argument("--bale-jwt-file", default=None)
+    bt.add_argument("--peer-id", type=int, default=None)
+    bt.add_argument("--peer", default=None)
+    bt.add_argument("--peer-name", default=None)
+    bt.add_argument("--answer", action="store_true")
+    bt.add_argument("--answer-timeout", type=float, default=120.0)
+    bt.add_argument("--identity", default="baleobala")
+    bt.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
+    bt.add_argument("--volume", type=int, default=50)
+    bt.add_argument("--text", default=None)
+    bt.set_defaults(func=cmd_bale_tunnel)
+
+    bp = sub.add_parser(
+        "bale-proxy",
+        help="run a SOCKS5/HTTP CONNECT proxy over Bale/LiveKit",
+    )
+    bp_sub = bp.add_subparsers(dest="proxy_mode", required=True)
+
+    bp_client = bp_sub.add_parser("client", help="listen locally as SOCKS5 or HTTP CONNECT")
+    bp_client.add_argument("--listen-host", default="127.0.0.1")
+    bp_client.add_argument("--listen-port", type=int, default=1080)
+    bp_client.add_argument("--livekit-url", default=None)
+    bp_client.add_argument("--livekit-token", default=None)
+    bp_client.add_argument("--livekit-room", default=None)
+    bp_client.add_argument("--bale-jwt", default=None)
+    bp_client.add_argument("--bale-jwt-file", default=None)
+    bp_client.add_argument("--peer-id", type=int, default=None)
+    bp_client.add_argument("--peer", default=None)
+    bp_client.add_argument("--peer-name", default=None)
+    bp_client.add_argument("--answer", action="store_true")
+    bp_client.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_client.add_argument("--identity", default="baleobala")
+    bp_client.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
+    bp_client.add_argument("--volume", type=int, default=50)
+    bp_client.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
+    bp_client.set_defaults(func=cmd_bale_proxy_client)
+
+    bp_relay = bp_sub.add_parser("relay", help="relay proxy traffic to TCP targets")
+    bp_relay.add_argument("--livekit-url", default=None)
+    bp_relay.add_argument("--livekit-token", default=None)
+    bp_relay.add_argument("--livekit-room", default=None)
+    bp_relay.add_argument("--bale-jwt", default=None)
+    bp_relay.add_argument("--bale-jwt-file", default=None)
+    bp_relay.add_argument("--peer-id", type=int, default=None)
+    bp_relay.add_argument("--peer", default=None)
+    bp_relay.add_argument("--peer-name", default=None)
+    bp_relay.add_argument("--answer", action="store_true")
+    bp_relay.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_relay.add_argument("--identity", default="baleobala")
+    bp_relay.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
+    bp_relay.add_argument("--volume", type=int, default=50)
+    bp_relay.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
+    bp_relay.set_defaults(func=cmd_bale_proxy_relay)
 
     bc = sub.add_parser(
         "bale-call",
