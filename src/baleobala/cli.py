@@ -209,6 +209,16 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
     client.start()
     try:
         peer_id = args.peer_id
+        if peer_id is None and args.peer_name:
+            matches = client.search_contacts(args.peer_name)
+            if not matches:
+                raise SystemExit(
+                    f"no contacts match name {args.peer_name!r}"
+                )
+            peer_id = matches[0].user_id
+            print(f"[bale-call] matched name {args.peer_name!r} -> "
+                  f"user_id {peer_id} ({len(matches)} total matches)",
+                  file=sys.stderr)
         if peer_id is None and args.peer:
             peer_id = client.resolve_peer(args.peer)
             print(f"[bale-call] resolved {args.peer} -> user_id {peer_id}",
@@ -237,7 +247,9 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
                 )
             creds = holder[0]
         else:
-            raise SystemExit("Need one of --peer, --peer-id, or --answer.")
+            raise SystemExit(
+                "Need one of --peer-id, --peer, --peer-name, or --answer."
+            )
     finally:
         client.stop()
     return creds.url, creds.token
@@ -347,7 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Bale user_id to call via StartCall RPC")
     bc.add_argument("--peer", default=None,
                     help="phone number (E.164, e.g. +989...) — "
-                    "resolved via SearchContacts then called")
+                         "tries SearchContacts then ImportContacts. "
+                         "Note: phone lookup often returns empty; "
+                         "--peer-name works for contacts you know by name.")
+    bc.add_argument("--peer-name", default=None,
+                    help="search by name/username (SearchContacts). "
+                         "Takes the first match.")
     bc.add_argument("--answer", action="store_true",
                     help="wait for an incoming call; join the pushed room")
     bc.add_argument("--answer-timeout", type=float, default=120.0,
