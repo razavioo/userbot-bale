@@ -54,26 +54,9 @@ pip install -e ".[dev]"
 
 ## Quick start
 
-```bash
-# 1. Create the virtual mic (keeps running until Ctrl-C)
-baleobala virtmic
-# or, from a shell script:
-./scripts/setup-virtmic.sh
+Full two-machine walkthrough: **[docs/SETUP.md](docs/SETUP.md)**.
 
-# 2. In your call app (Zoom/Meet/etc), select "Baleobala Virtual Mic"
-#    as the input device.
-
-# 3. In another terminal, send messages (one per line from stdin):
-baleobala send --device baleobala_sink
-> hello world
-> streaming chunk 1
-> streaming chunk 2
-
-# 4. On the receiving machine, capture and print:
-baleobala recv
-```
-
-### Self-test (no audio hardware required)
+Single-host smoke test (no audio device required):
 
 ```bash
 baleobala loopback "hello" "streaming test" "unicode: سلام"
@@ -101,23 +84,8 @@ debug logging.
 | `fast`    | ~16 B/s    | **recommended default**              |
 | `fastest` | ~32 B/s    | acceptable only with NS turned off   |
 
-## Recommended call-app settings (maximize survival)
-
-Any ML-based noise suppression will shred FEC signals. Before the call:
-
-**Zoom** — Settings → Audio → Advanced
-- `Original sound for musicians` → **ON**
-- `Echo cancellation` → *Auto*
-- `Background noise suppression` → **Low**
-- `High fidelity music mode` → **ON**
-
-**Google Meet** — ⋮ → Settings → Audio
-- `Noise cancellation` → **OFF**
-
-**Discord** — Settings → Voice & Video
-- `Noise Suppression` → **OFF**
-- `Echo Cancellation` → off if tolerable
-- `Advanced Voice Activity` → OFF
+Call-app noise-suppression settings that must be tuned for audible FEC
+tones to survive are documented in [docs/SETUP.md](docs/SETUP.md).
 
 ## Framing protocol
 
@@ -154,32 +122,7 @@ name appears in `baleobala devices`.
 
 ## Troubleshooting
 
-**`pactl: command not found`** — install `pulseaudio-utils`.
-
-**`libportaudio2` unavailable via apt** — on restricted networks the
-universe repo may be unreachable. Download directly:
-```bash
-wget http://archive.ubuntu.com/ubuntu/pool/universe/p/portaudio19/libportaudio2_19.6.0-1.1_amd64.deb
-sudo dpkg -i libportaudio2_19.6.0-1.1_amd64.deb
-```
-
-**`ALSA lib pcm.c: underrun occurred`** on transmit — cosmetic warnings
-from PortAudio-ALSA when the null-sink drains faster than we feed it.
-Does not affect the encoded data.
-
-**Virtual mic doesn't appear in Zoom** — Zoom caches the device list at
-launch. Create the virtmic *before* opening Zoom, or fully quit and
-relaunch.
-
-**Nothing decodes on the receiver** — first run `baleobala loopback` to
-confirm the software path works. If that passes, the issue is either
-(a) noise suppression on the transmit side (see settings above) or
-(b) the receiver is capturing a different device than the one the call
-app is playing to. Use `baleobala devices` to pick the right input.
-
-**Decoder reports non-baleobala packets** — GGWave decoded something
-but it didn't match our magic byte. Usually benign: ambient audio can
-occasionally survive RS at random. The magic + CRC-8 reject it.
+See [docs/SETUP.md](docs/SETUP.md#troubleshooting).
 
 ## Roadmap / non-goals
 
