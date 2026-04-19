@@ -40,7 +40,10 @@ from typing import Callable, List, Optional
 
 from baleobala.bale.endpoints import Endpoint, fetch_endpoints
 from baleobala.bale.protos import (
-    CallCredentials, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
+    CallCredentials, OutPeer, PhoneToImport, RequestImportContacts,
+    RequestSearchContacts, RequestStartLiveKitCall, ResolvedContact,
+    parse_call_credentials, parse_import_contacts_response,
+    parse_search_contacts_response,
 )
 from baleobala.bale.rpc_envelope import Response
 from baleobala.bale.ws_client import WsClient
@@ -157,6 +160,86 @@ class BaleApiClient:
             f"StartCall ACKed but no credentials in response or push "
             f"within {creds_timeout}s"
         )
+
+    def import_contacts(
+        self, phones: list[str | int], name_prefix: str = "baleobala",
+    ) -> list[ResolvedContact]:
+        """Resolve phone numbers to user_ids via bale.users.v1.Users/ImportContacts.
+
+        Accepts phones in any of these forms:
+          - E.164 with '+' prefix: "+989120000000"
+          - digits-only string:    "989120000000"
+          - int:                   989120000000
+
+        Returns a list of ResolvedContact in the server's response
+        order (same order as the input list for matched numbers;
+        unmatched numbers are dropped by the server, so the output
+        length may be shorter than the input length).
+        """
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        normalized: list[int] = []
+        for p in phones:
+            if isinstance(p, str):
+                p = p.strip().lstrip("+")
+                p = int(p)
+            normalized.append(int(p))
+
+        phone_msgs = [
+            PhoneToImport(phone_number=n, name=f"{name_prefix}-{n}")
+            for n in normalized
+        ]
+        payload = RequestImportContacts(phones=phone_msgs).encode()
+        log.info("ImportContacts phones=%s", normalized)
+        resp = self._ws.rpc(
+            "bale.users.v1.Users", "ImportContacts", payload, timeout=15.0,
+        )
+        contacts = parse_import_contacts_response(resp.payload or resp.raw)
+        log.info("ImportContacts returned %d user(s)", len(contacts))
+        # Pair each resolved user with the phone it came from, in order.
+        paired: list[ResolvedContact] = []
+        for i, c in enumerate(contacts):
+            phone = normalized[i] if i < len(normalized) else 0
+            paired.append(ResolvedContact(
+                phone_number=phone, user_id=c.user_id,
+                access_hash=c.access_hash, name=c.name,
+            ))
+        return paired
+
+    def search_contacts(self, query: str) -> list[ResolvedContact]:
+        """bale.users.v1.Users/SearchContacts — query by phone or name.
+
+        Accepts any query string; typical use is a phone number in
+        E.164 format ('+989...') or a display name fragment.
+        """
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestSearchContacts(query=query).encode()
+        log.info("SearchContacts query=%r", query)
+        resp = self._ws.rpc(
+            "bale.users.v1.Users", "SearchContacts", payload, timeout=10.0,
+        )
+        return parse_search_contacts_response(resp.payload or resp.raw)
+
+    def resolve_peer(self, phone: str | int) -> int:
+        """Convenience: one phone → one user_id.
+
+        Uses SearchContacts first (server-side phone search over your
+        contact graph + public directory). Falls back to
+        ImportContacts if SearchContacts yields nothing.
+
+        Raises LookupError if neither RPC resolves the phone.
+        """
+        q = str(phone).strip()
+        if not q.startswith("+") and q.isdigit():
+            q = "+" + q
+        results = self.search_contacts(q)
+        if results:
+            return results[0].user_id
+        imported = self.import_contacts([phone])
+        if imported:
+            return imported[0].user_id
+        raise LookupError(f"no Bale user found for phone {phone!r}")
 
     def listen_incoming_calls(
         self,

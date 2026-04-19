@@ -208,10 +208,13 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
     client = BaleApiClient(jwt=jwt)
     client.start()
     try:
-        if args.peer_id is not None:
-            creds = client.start_call(
-                peer_id=args.peer_id, video=False,
-            )
+        peer_id = args.peer_id
+        if peer_id is None and args.peer:
+            peer_id = client.resolve_peer(args.peer)
+            print(f"[bale-call] resolved {args.peer} -> user_id {peer_id}",
+                  file=sys.stderr)
+        if peer_id is not None:
+            creds = client.start_call(peer_id=peer_id, video=False)
         elif args.answer:
             import threading
             got = threading.Event()
@@ -234,7 +237,7 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
                 )
             creds = holder[0]
         else:
-            raise SystemExit("Need one of --peer-id or --answer.")
+            raise SystemExit("Need one of --peer, --peer-id, or --answer.")
     finally:
         client.stop()
     return creds.url, creds.token
@@ -342,6 +345,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="file to read the JWT from (default: /tmp/bale_jwt.txt)")
     bc.add_argument("--peer-id", type=int, default=None,
                     help="Bale user_id to call via StartCall RPC")
+    bc.add_argument("--peer", default=None,
+                    help="phone number (E.164, e.g. +989...) — "
+                    "resolved via SearchContacts then called")
     bc.add_argument("--answer", action="store_true",
                     help="wait for an incoming call; join the pushed room")
     bc.add_argument("--answer-timeout", type=float, default=120.0,

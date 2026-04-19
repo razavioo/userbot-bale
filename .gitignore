@@ -23,3 +23,4 @@ venv/
 /.baleobala/
 # mitmproxy captures (contain session secrets)
 /captures/
+/.claude/
