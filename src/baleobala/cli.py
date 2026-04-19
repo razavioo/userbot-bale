@@ -182,19 +182,83 @@ def cmd_loopback(args: argparse.Namespace) -> int:
     return 0 if ok == len(messages) else 1
 
 
+def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    """Return (url, token) for a LiveKit room, using whichever of three
+    sources the caller provided:
+
+    1. `--livekit-url` + `--livekit-token` (explicit; still supported).
+    2. `--peer-id` + `--bale-jwt`        (we place the call ourselves).
+    3. `--answer` + `--bale-jwt`         (we listen for a call pushed to us).
+    """
+    if args.livekit_url and args.livekit_token:
+        return args.livekit_url, args.livekit_token
+
+    jwt = args.bale_jwt
+    if not jwt and args.bale_jwt_file:
+        from pathlib import Path
+        jwt = Path(args.bale_jwt_file).read_text().strip()
+    if not jwt:
+        raise SystemExit(
+            "Need either --livekit-url/--livekit-token OR --bale-jwt(-file) "
+            "with --peer-id/--answer."
+        )
+
+    from baleobala.bale import BaleApiClient
+
+    client = BaleApiClient(jwt=jwt)
+    client.start()
+    try:
+        if args.peer_id is not None:
+            creds = client.start_call(
+                peer_id=args.peer_id, video=False,
+            )
+        elif args.answer:
+            import threading
+            got = threading.Event()
+            holder: list = []
+
+            def on_creds(c):
+                if not holder:
+                    holder.append(c)
+                    got.set()
+
+            client.listen_incoming_calls(on_creds)
+            print(
+                "[bale-call] listening for incoming call. Ask the caller "
+                "to ring you now. (Ctrl-C to abort.)",
+                file=sys.stderr,
+            )
+            if not got.wait(timeout=args.answer_timeout):
+                raise TimeoutError(
+                    f"no incoming call within {args.answer_timeout}s"
+                )
+            creds = holder[0]
+        else:
+            raise SystemExit("Need one of --peer-id or --answer.")
+    finally:
+        client.stop()
+    return creds.url, creds.token
+
+
 def cmd_bale_call(args: argparse.Namespace) -> int:
     """
-    Run baleobala over a Bale LiveKit room. Takes the room URL and
-    access token directly — the Bale API layer that would fetch these
-    (api.BaleApiClient.fetch_livekit_credentials) is scaffolded but
-    not yet wired to the Nasim-MTProto transport, so obtain them
-    out-of-band (mitmproxy on a real call, or the upcoming auth module)
-    and pass via --livekit-url / --livekit-token.
+    Run baleobala over a Bale LiveKit room.
+
+    Three modes of obtaining the LiveKit url+token:
+
+    1. Explicit tokens (`--livekit-url`/`--livekit-token`): for debugging
+       or when you captured the creds out-of-band.
+    2. Place a call (`--peer-id <user_id>` + `--bale-jwt ...`): we call
+       the peer via Bale's API; server pushes us the creds.
+    3. Answer a call (`--answer` + `--bale-jwt ...`): we wait for an
+       incoming call; server pushes creds when a caller rings us.
     """
+    url, token = _resolve_livekit_credentials(args)
+
     from baleobala.bale import LiveKitSession
 
     session = LiveKitSession(
-        url=args.livekit_url, token=args.livekit_token, identity=args.identity,
+        url=url, token=token, identity=args.identity,
     )
     session.start()
     try:
@@ -268,10 +332,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bc.add_argument("mode", choices=["send", "recv"],
                     help="transmit from stdin, or receive and print")
-    bc.add_argument("--livekit-url", required=True,
-                    help="LiveKit WSS URL (from RequestStartLiveKitCall response)")
-    bc.add_argument("--livekit-token", required=True,
-                    help="LiveKit access token (JWT)")
+    bc.add_argument("--livekit-url", default=None,
+                    help="LiveKit WSS URL (debug/explicit mode)")
+    bc.add_argument("--livekit-token", default=None,
+                    help="LiveKit access token (debug/explicit mode)")
+    bc.add_argument("--bale-jwt", default=None,
+                    help="Bale access_token JWT for WS auth")
+    bc.add_argument("--bale-jwt-file", default=None,
+                    help="file to read the JWT from (default: /tmp/bale_jwt.txt)")
+    bc.add_argument("--peer-id", type=int, default=None,
+                    help="Bale user_id to call via StartCall RPC")
+    bc.add_argument("--answer", action="store_true",
+                    help="wait for an incoming call; join the pushed room")
+    bc.add_argument("--answer-timeout", type=float, default=120.0,
+                    help="seconds to wait in --answer mode")
     bc.add_argument("--identity", default="baleobala",
                     help="participant identity in the LiveKit room")
     bc.add_argument("--protocol", choices=["normal", "fast", "fastest"],
