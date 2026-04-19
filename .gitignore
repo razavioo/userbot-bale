@@ -12,3 +12,12 @@ venv/
 .ruff_cache/
 *.wav
 *.log
+
+# Reverse-engineering artefacts (regenerate with `jadx -d re/jadx-out bale.apk`)
+/re/
+# Upstream binary — keep locally, do not redistribute
+/bale.apk
+# Persistent Bale session (contains auth_key + JWT)
+/.baleobala/
+# mitmproxy captures (contain session secrets)
+/captures/

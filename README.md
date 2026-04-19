@@ -72,6 +72,7 @@ pytest
 | `baleobala recv`         | Capture audio, decode, print each message            |
 | `baleobala devices`      | List audio devices visible to sounddevice            |
 | `baleobala loopback`     | In-process self-test (no audio devices)              |
+| `baleobala bale-call`    | Send/recv directly over a Bale LiveKit room          |
 
 Shared flags: `--device NAME`, `--protocol {normal,fast,fastest}`, `-v` for
 debug logging.
@@ -119,6 +120,19 @@ environment and routes through the `pulse` device. That's why
 `baleobala send --device baleobala_sink` and
 `baleobala recv --device baleobala` just work, even though neither
 name appears in `baleobala devices`.
+
+## Bale integration
+
+Three integration paths, tiered by effort:
+
+| Phase | Path                                  | Doc                                        |
+| ----- | ------------------------------------- | ------------------------------------------ |
+| 1     | web.bale.ai in a browser + virtmic    | [docs/BALE_WEB.md](docs/BALE_WEB.md)       |
+| 2     | Bale Android app inside Waydroid      | [docs/BALE_WAYDROID.md](docs/BALE_WAYDROID.md) |
+| 3     | Headless Python client over LiveKit   | [docs/BALE_HEADLESS.md](docs/BALE_HEADLESS.md) |
+
+RE findings that underpin Phase 3 (Bale = Nasim fork + Bale gRPC +
+LiveKit WebRTC) are in [docs/BALE_RE_NOTES.md](docs/BALE_RE_NOTES.md).
 
 ## Troubleshooting
 

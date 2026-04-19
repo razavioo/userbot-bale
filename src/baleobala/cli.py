@@ -182,6 +182,49 @@ def cmd_loopback(args: argparse.Namespace) -> int:
     return 0 if ok == len(messages) else 1
 
 
+def cmd_bale_call(args: argparse.Namespace) -> int:
+    """
+    Run baleobala over a Bale LiveKit room. Takes the room URL and
+    access token directly — the Bale API layer that would fetch these
+    (api.BaleApiClient.fetch_livekit_credentials) is scaffolded but
+    not yet wired to the Nasim-MTProto transport, so obtain them
+    out-of-band (mitmproxy on a real call, or the upcoming auth module)
+    and pass via --livekit-url / --livekit-token.
+    """
+    from baleobala.bale import LiveKitSession
+
+    session = LiveKitSession(
+        url=args.livekit_url, token=args.livekit_token, identity=args.identity,
+    )
+    session.start()
+    try:
+        if args.mode == "send":
+            from baleobala.transmitter import Transmitter
+            with Transmitter(
+                sink=session.sink(),
+                protocol=_proto(args.protocol),
+                volume=args.volume,
+            ) as tx:
+                source = [args.text] if args.text else _stdin_lines()
+                for text in source:
+                    msg_id = tx.send(text)
+                    print(f"[tx] id={msg_id} bytes={len(text.encode('utf-8'))}",
+                          file=sys.stderr)
+        else:  # recv
+            from baleobala.receiver import Receiver
+            with Receiver(
+                source=session.source(), protocol=_proto(args.protocol),
+            ) as rx:
+                try:
+                    for msg in rx.iter_messages():
+                        print(msg.text(), flush=True)
+                except KeyboardInterrupt:
+                    pass
+    finally:
+        session.stop()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="baleobala",
@@ -218,6 +261,25 @@ def build_parser() -> argparse.ArgumentParser:
     lb.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     lb.add_argument("messages", nargs="*")
     lb.set_defaults(func=cmd_loopback)
+
+    bc = sub.add_parser(
+        "bale-call",
+        help="connect to a Bale LiveKit room and send/recv baleobala frames",
+    )
+    bc.add_argument("mode", choices=["send", "recv"],
+                    help="transmit from stdin, or receive and print")
+    bc.add_argument("--livekit-url", required=True,
+                    help="LiveKit WSS URL (from RequestStartLiveKitCall response)")
+    bc.add_argument("--livekit-token", required=True,
+                    help="LiveKit access token (JWT)")
+    bc.add_argument("--identity", default="baleobala",
+                    help="participant identity in the LiveKit room")
+    bc.add_argument("--protocol", choices=["normal", "fast", "fastest"],
+                    default="fast", help="GGWave audible protocol")
+    bc.add_argument("--volume", type=int, default=50, help="send: 0-100")
+    bc.add_argument("--text", default=None,
+                    help="send: single message; omit to read lines from stdin")
+    bc.set_defaults(func=cmd_bale_call)
 
     return p
 

@@ -1,17 +1,9 @@
 """
 Receiver: capture → GGWave decode → frame decode → reassemble → emit.
 
-Architecture:
-  * sounddevice InputStream with a callback pushes int16/float32 blocks
-    into a thread-safe queue. Callback stays short; no allocations in it
-    beyond the queue put.
-  * A worker thread pulls blocks, feeds them into the Codec. When a
-    packet completes, it runs Frame.decode and Reassembler.push, and
-    invokes the user callback for each completed logical message.
-
-Callbacks are invoked on the worker thread — keep them fast or offload
-to the caller's own queue. `iter_messages()` offers a synchronous
-pull-style API that avoids the threading question entirely.
+The audio source is pluggable (AudioSource protocol). Default is
+sounddevice; LiveKit injects its own source, tests use MemorySource.
+A single worker thread walks source.iter_blocks() and feeds the codec.
 """
 
 from __future__ import annotations
@@ -22,15 +14,11 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Iterator
 
-import numpy as np
-import sounddevice as sd
-
-from baleobala.codec import SAMPLE_RATE, Codec, Protocol
+from baleobala.audio_backend import AudioSource
+from baleobala.codec import Codec, Protocol
 from baleobala.framing import Frame, Reassembler
 
 log = logging.getLogger(__name__)
-
-BLOCK_SIZE = 1024
 
 
 @dataclass(frozen=True)
@@ -44,32 +32,41 @@ class Message:
 
 class Receiver:
     """
-    Start/stop the capture pipeline. Two ways to consume results:
+    Start/stop the capture pipeline. Two consumption patterns:
 
-        rx = Receiver(); rx.start()
-        for msg in rx.iter_messages():
-            print(msg.text())
+        rx = Receiver()
+        with rx:
+            for msg in rx.iter_messages():
+                print(msg.text())
 
-    or with a callback:
+    Or callback form:
 
         rx = Receiver(on_message=lambda m: print(m.text()))
         with rx:
             rx.wait_forever()
+
+    Construct with either `source=...` (any AudioSource) or `device=...`
+    (CLI convenience; resolved to SoundDeviceSource).
     """
 
     def __init__(
         self,
         device: str | int | None = None,
+        *,
+        source: AudioSource | None = None,
         protocol: Protocol = Protocol.AUDIBLE_FAST,
         on_message: Callable[[Message], None] | None = None,
         on_raw_packet: Callable[[bytes], None] | None = None,
     ) -> None:
-        self.device = device
+        if source is not None and device is not None:
+            raise ValueError("pass either source= or device=, not both")
+        if source is None:
+            from baleobala.backends.sounddevice_backend import SoundDeviceSource
+            source = SoundDeviceSource(device=device)
+        self._source = source
         self._codec = Codec(protocol=protocol)
         self._reassembler = Reassembler()
-        self._audio_q: "queue.Queue[np.ndarray | None]" = queue.Queue(maxsize=64)
         self._msg_q: "queue.Queue[Message]" = queue.Queue()
-        self._stream: sd.InputStream | None = None
         self._worker: threading.Thread | None = None
         self._stop = threading.Event()
         self._on_message = on_message
@@ -91,50 +88,23 @@ class Receiver:
             target=self._run_worker, name="baleobala-rx", daemon=True
         )
         self._worker.start()
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="float32",
-            device=self.device,
-            blocksize=BLOCK_SIZE,
-            callback=self._audio_callback,
-        )
-        self._stream.start()
-        log.info("receiver started on device=%r", self.device)
+        log.info("receiver started")
 
     def stop(self) -> None:
         self._stop.set()
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            finally:
-                self._stream = None
-        self._audio_q.put(None)  # sentinel
+        try:
+            self._source.close()
+        except Exception:  # noqa: BLE001
+            log.exception("source.close failed")
         if self._worker is not None:
             self._worker.join(timeout=2.0)
             self._worker = None
         self._codec.__exit__(None, None, None)
         log.info("receiver stopped")
 
-    def _audio_callback(
-        self,
-        indata: np.ndarray,
-        frames: int,
-        time_info: object,
-        status: sd.CallbackFlags,
-    ) -> None:
-        if status:
-            log.debug("input stream status: %s", status)
-        try:
-            self._audio_q.put_nowait(indata.copy())
-        except queue.Full:
-            log.warning("audio queue full; dropping block")
-
     def _run_worker(self) -> None:
-        while not self._stop.is_set():
-            chunk = self._audio_q.get()
-            if chunk is None:
+        for chunk in self._source.iter_blocks():
+            if self._stop.is_set():
                 return
             try:
                 payload = self._codec.decode_chunk(chunk)
@@ -164,10 +134,10 @@ class Receiver:
                     log.exception("on_message callback failed")
 
     def iter_messages(self, timeout: float | None = None) -> Iterator[Message]:
-        """Yield messages as they complete. Blocks until stop() is called."""
+        """Yield messages as they complete. Returns when stop() is called and the queue drains."""
         while True:
             try:
-                msg = self._msg_q.get(timeout=timeout)
+                msg = self._msg_q.get(timeout=timeout if timeout is not None else 0.25)
             except queue.Empty:
                 if self._stop.is_set():
                     return
