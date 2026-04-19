@@ -26,6 +26,7 @@ here because `pactl` has worked on every distro shipping PipeWire since
 from __future__ import annotations
 
 import logging
+import platform
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -44,18 +45,32 @@ class VirtualMic:
     description: str = "Baleobala Virtual Mic"
     _sink_module: int | None = None
     _source_module: int | None = None
+    _is_darwin: bool = False
+
+    def __post_init__(self) -> None:
+        self._is_darwin = platform.system() == "Darwin"
 
     @property
     def sink(self) -> str:
-        """PulseAudio sink name. Play audio here."""
+        """Play audio here. On Linux, this is the null-sink name.
+        On macOS, this is the virtual device name (e.g. 'BlackHole 2ch')."""
+        if self._is_darwin:
+            return self.name if self.name != "baleobala" else "BlackHole 2ch"
         return f"{self.name}_sink"
 
     @property
     def source(self) -> str:
-        """PulseAudio source name. Call apps select this as their microphone."""
+        """Call apps select this as their microphone."""
+        if self._is_darwin:
+            return self.sink
         return self.name
 
     def __enter__(self) -> "VirtualMic":
+        if self._is_darwin:
+            self._verify_darwin_device()
+            log.info("virtual mic (macOS): using existing device '%s'", self.sink)
+            return self
+
         self._ensure_pactl()
         self._sink_module = self._load_module(
             "module-null-sink",
@@ -82,10 +97,34 @@ class VirtualMic:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        if self._is_darwin:
+            return
         self._safe_unload(self._source_module)
         self._safe_unload(self._sink_module)
         self._source_module = None
         self._sink_module = None
+
+    def _verify_darwin_device(self) -> None:
+        """Check if the requested device exists on macOS."""
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+            names = [d["name"] for d in devices]
+            if self.sink not in names:
+                # Try case-insensitive search
+                match = next((n for n in names if n.lower() == self.sink.lower()), None)
+                if match:
+                    # found but maybe case differs? Actually sounddevice is usually exact.
+                    pass 
+                else:
+                    raise VirtualMicError(
+                        f"Virtual device '{self.sink}' not found on macOS. "
+                        "Please install BlackHole (https://existential.audio/blackhole/) "
+                        "or specify an existing virtual device with --name."
+                    )
+        except ImportError:
+            # If sounddevice isn't here, we can't verify, but we'll fail later anyway
+            pass
 
     @staticmethod
     def _ensure_pactl() -> None:

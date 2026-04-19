@@ -119,11 +119,11 @@ class WsClient:
         ]
         try:
             conn = websockets.connect(
-                self._url, extra_headers=headers, max_size=None,
+                self._url, additional_headers=headers, max_size=None,
             )
         except TypeError:
             conn = websockets.connect(
-                self._url, additional_headers=headers, max_size=None,
+                self._url, extra_headers=headers, max_size=None,
             )
         try:
             async with conn as ws:

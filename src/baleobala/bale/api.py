@@ -22,12 +22,11 @@ Protobuf catalog (from the APK decompile under
 
 The outer RPC-payload envelope wraps it at tag 6 (empirically).
 
-Peer resolution (phone → OutPeer) is **not yet implemented**. Bale's
-web client caches contacts and does not hit a contacts RPC for known
-numbers during a call; resolving arbitrary phones would need a
-capture of `bale.users.v1.Users/*` or `bale.contacts.*` which wasn't
-triggered in the session we reversed. The CLI accepts `--peer-id`
-(numeric user_id) as the definitive form and documents the gap.
+Peer resolution (phone → OutPeer) is **implemented** via `resolve_peer`. It
+uses `SearchContacts` (server-side phone search) with a fallback to
+`ImportContacts` if the search yields nothing. The CLI accepts
+`--peer` (phone), `--peer-name`, and `--peer-id` to trigger these
+paths.
 """
 
 from __future__ import annotations
