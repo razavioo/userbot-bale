@@ -1,4 +1,4 @@
-"""Argparse + wiring smoke test for `baleobala vpn exit-node-mesh`."""
+"""Argparse + wiring smoke test for `baleobala tunnel exit-node-mesh`."""
 from __future__ import annotations
 
 import pytest
@@ -9,7 +9,7 @@ from baleobala.cli import build_parser
 def test_exit_node_mesh_subcommand_parses():
     parser = build_parser()
     args = parser.parse_args([
-        "vpn", "exit-node-mesh",
+        "tunnel", "exit-node-mesh",
         "--bale-jwt", "eyJ.X.Y",
         "--tun", "vpn0",
         "--wan", "eth0",
@@ -17,7 +17,7 @@ def test_exit_node_mesh_subcommand_parses():
         "--skip-nat-setup",
         "--psk", "shared-secret",
     ])
-    assert args.cmd == "vpn"
+    assert args.cmd == "tunnel"
     assert args.vpn_cmd == "exit-node-mesh"
     assert args.tun == "vpn0"
     assert args.pool_cidr == "10.99.0.0/24"

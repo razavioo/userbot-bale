@@ -84,6 +84,21 @@ def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
     assert service.status().state == "stopped"
 
 
+def test_local_tunnel_service_clears_stale_socket(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.tunnel_service import LocalTunnelService
+
+    socket_path = tmp_path / "stale.sock"
+    socket_path.write_text("stale", encoding="utf-8")
+
+    service = LocalTunnelService(socket_path=socket_path)
+    state = service.start(profile_id="p1", backend="packet-tunnel")
+    assert state.state == "running"
+    assert state.endpoint is not None
+    assert state.endpoint.startswith("unix://")
+    service.stop()
+
+
 def test_tunnel_services_default_to_shared_container_socket(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     monkeypatch.setenv("BALEOBALA_SHARED_CONTAINER", "/tmp/baleobala-shared")
@@ -175,24 +190,49 @@ def test_carrier_tunnel_service_bridges_bytes(tmp_path, monkeypatch) -> None:
 def test_build_parser_exposes_control_plane_commands() -> None:
     from baleobala.cli import build_parser
 
-    parser = build_parser()
-    subcommands = {}
-    for action in parser._actions:
-        choices = getattr(action, "choices", None)
-        if isinstance(choices, dict):
-            subcommands = choices
-            break
+    def _subparser_choices(parser):
+        for action in parser._actions:
+            choices = getattr(action, "choices", None)
+            if isinstance(choices, dict):
+                return choices
+        return {}
 
-    for cmd in ("auth", "pair", "relay", "vpn"):
+    def _arg_choices(parser, dest):
+        for action in parser._actions:
+            if getattr(action, "dest", None) == dest:
+                return action.choices
+        raise AssertionError(f"missing argument {dest!r}")
+
+    parser = build_parser()
+    subcommands = _subparser_choices(parser)
+
+    for cmd in ("auth", "pair", "relay", "vpn", "tunnel"):
         assert cmd in subcommands
     vpn_parser = subcommands["vpn"]
-    vpn_subcommands = {}
-    for action in vpn_parser._actions:
-        choices = getattr(action, "choices", None)
-        if isinstance(choices, dict):
-            vpn_subcommands = choices
-            break
+    vpn_subcommands = _subparser_choices(vpn_parser)
     assert "agent" in vpn_subcommands
+
+    vpn_up_parser = vpn_subcommands["up"]
+    assert "linux-tun" in _arg_choices(vpn_up_parser, "backend")
+
+    relay_parser = subcommands["relay"]
+    relay_subcommands = _subparser_choices(relay_parser)
+    relay_enable_parser = relay_subcommands["enable"]
+    assert "linux-tun" in _arg_choices(relay_enable_parser, "backend")
+
+    tunnel_parser = subcommands["tunnel"]
+    tunnel_subcommands = _subparser_choices(tunnel_parser)
+    for cmd in ("up", "exit-node", "exit-node-mesh", "loopback"):
+        assert cmd in tunnel_subcommands
+
+
+def test_default_backends_choose_linux_tun_on_linux(monkeypatch) -> None:
+    monkeypatch.setattr("sys.platform", "linux")
+    from baleobala.control.backend import default_backend_name
+    from baleobala.control.vpn import default_vpn_backend
+
+    assert default_backend_name() == "linux-tun"
+    assert default_vpn_backend() == "linux-tun"
 
 
 def test_vpn_profile_roundtrip_includes_peer_fields(tmp_path, monkeypatch) -> None:
@@ -530,3 +570,147 @@ def test_vpn_up_rejects_packet_tunnel_on_darwin(tmp_path, monkeypatch) -> None:
         cli.cmd_vpn(Args())
     assert "packet-tunnel" in str(excinfo.value).lower()
     assert "direct" in str(excinfo.value).lower()
+
+
+def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setattr("sys.platform", "linux")
+
+    from baleobala.control import AuthStore, PairingStore, VpnStore
+    from baleobala.control.vpn import VpnProfile
+    import baleobala.cli as cli
+
+    AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
+    pairing_store = PairingStore()
+    pairing = pairing_store.begin("relay-a", role="client", peer_id=777, relay_mode="proxy")
+    pairing_store.accept(pairing.pair_code)
+    VpnStore().save(
+        VpnProfile(
+            profile_id=pairing.profile_id,
+            name="client",
+            backend="linux-tun",
+            role="client",
+            pairing_id=pairing.profile_id,
+            peer_id=777,
+            answer=False,
+        )
+    )
+
+    events: list[tuple[str, object]] = []
+
+    class FakeBackend:
+        def up(self, profile):  # noqa: ANN001
+            events.append(("up", profile.backend))
+            return {"backend": "linux-tun", "state": "running"}
+
+        def down(self):
+            events.append(("down", None))
+
+    def fake_backend_for_profile(profile):  # noqa: ANN001
+        events.append(("factory", profile.backend))
+        return FakeBackend()
+
+    def fake_run_tunnel_session(args, *, is_exit_node):  # noqa: ANN001
+        events.append((
+            "session",
+            {
+                "cmd": args.tun,
+                "addr": args.tun_addr,
+                "identity": args.identity,
+                "peer_id": args.peer_id,
+                "is_exit_node": is_exit_node,
+            },
+        ))
+        return 0
+
+    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", fake_backend_for_profile)
+    monkeypatch.setattr("baleobala.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
+
+    class Args:
+        vpn_cmd = "up"
+        profile_id = None
+        backend = None
+
+    assert cli.cmd_vpn(Args()) == 0
+    assert events[0] == ("factory", "linux-tun")
+    assert events[1] == ("up", "linux-tun")
+    assert events[2][0] == "session"
+    assert events[2][1]["cmd"] == "vpn0"
+    assert events[2][1]["addr"] == "10.77.0.2/24"
+    assert events[2][1]["peer_id"] == 777
+    assert events[2][1]["is_exit_node"] is False
+    assert events[-1] == ("down", None)
+
+
+def test_vpn_up_linux_tun_exit_node_runs_nat_setup(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setattr("sys.platform", "linux")
+
+    from baleobala.control import AuthStore, PairingStore, VpnStore
+    from baleobala.control.vpn import VpnProfile
+    import baleobala.cli as cli
+
+    AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
+    pairing_store = PairingStore()
+    pairing = pairing_store.begin("relay-a", role="relay", peer_id=777, relay_mode="proxy")
+    pairing_store.accept(pairing.pair_code)
+    VpnStore().save(
+        VpnProfile(
+            profile_id=pairing.profile_id,
+            name="relay",
+            backend="linux-tun",
+            role="relay",
+            pairing_id=pairing.profile_id,
+            peer_id=777,
+            answer=True,
+        )
+    )
+
+    events: list[tuple[str, object]] = []
+
+    class FakeBackend:
+        def up(self, profile):  # noqa: ANN001
+            events.append(("up", profile.backend))
+            return {"backend": "linux-tun", "state": "running"}
+
+        def down(self):
+            events.append(("down", None))
+
+    def fake_backend_for_profile(profile):  # noqa: ANN001
+        events.append(("factory", profile.backend))
+        return FakeBackend()
+
+    def fake_nat_setup(tun, wan):  # noqa: ANN001
+        events.append(("nat", (tun, wan)))
+
+    def fake_run_tunnel_session(args, *, is_exit_node):  # noqa: ANN001
+        events.append((
+            "session",
+            {
+                "cmd": args.tun,
+                "addr": args.tun_addr,
+                "identity": args.identity,
+                "answer": args.answer,
+                "is_exit_node": is_exit_node,
+            },
+        ))
+        return 0
+
+    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", fake_backend_for_profile)
+    monkeypatch.setattr("baleobala.vpn.cli._run_nat_setup", fake_nat_setup)
+    monkeypatch.setattr("baleobala.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
+
+    class Args:
+        vpn_cmd = "up"
+        profile_id = None
+        backend = None
+
+    assert cli.cmd_vpn(Args()) == 0
+    assert events[0] == ("factory", "linux-tun")
+    assert events[1] == ("up", "linux-tun")
+    assert events[2] == ("nat", ("vpn0", "eth0"))
+    assert events[3][0] == "session"
+    assert events[3][1]["addr"] == "10.77.0.1/24"
+    assert events[3][1]["answer"] is True
+    assert events[3][1]["is_exit_node"] is True
+    assert events[-1] == ("down", None)

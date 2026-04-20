@@ -321,6 +321,8 @@ def default_backend_name() -> str:
         return os.environ["BALEOBALA_VPN_BACKEND"]
     if os.sys.platform == "darwin":
         return "direct"
+    if os.sys.platform.startswith("linux"):
+        return "linux-tun"
     return "proxy"
 
 

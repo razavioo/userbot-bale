@@ -10,7 +10,8 @@ The repo now has three layers:
 
 ## Current state
 
-- Linux-first audio transport works today through `send`, `recv`, `virtmic`, and the Bale LiveKit tunnel path.
+- Linux-first audio transport works today through `send`, `recv`, `virtmic`, the Bale LiveKit tunnel path, and the `tunnel` CLI family for full IP sessions.
+- On Linux, `baleobala vpn up` now defaults to the native `linux-tun` backend so the control plane can bring up a real TUN session.
 - A tunneled proxy path is already present for SOCKS5 and HTTP CONNECT.
 - On macOS, `vpn up` currently uses the local proxy plus system proxy settings so the machine can be exercised end-to-end now.
 - The native macOS app/packet-tunnel scaffold now lives under `native/macos/` and is wired around the same carrier socket contract as the Python runtime.
@@ -131,6 +132,7 @@ For an always-on macOS launch agent, install it once with
 | `baleobala relay` | Save relay runtime settings |
 | `baleobala vpn` | Run or inspect the product control plane |
 | `baleobala vpn agent` | Install or manage the macOS LaunchAgent |
+| `baleobala tunnel` | Run the IP tunnel over Bale LiveKit |
 | `baleobala bale-call` | Use Bale LiveKit credentials directly |
 | `baleobala bale-tunnel` | Run the byte tunnel over Bale LiveKit |
 | `baleobala bale-proxy` | Run the SOCKS5/HTTP CONNECT proxy transport |
@@ -138,6 +140,7 @@ For an always-on macOS launch agent, install it once with
 ## Platform notes
 
 - Linux is the primary platform for current audio transport and the first full VPN target.
+- On Linux, `baleobala vpn up` defaults to the native `linux-tun` backend.
 - macOS is a first-class target for the desktop product and signed release flow.
 - The current audio mic helper is Linux-native; macOS support in the product plan is based on an app shell and platform-specific VPN plumbing, not the current `virtmic` helper.
 

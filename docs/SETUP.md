@@ -26,10 +26,12 @@ pip install -e ".[dev,bale,desktop]"
 
 - `baleobala loopback` verifies codec/framing in-process.
 - `baleobala tunnel-loopback` verifies the byte tunnel in-process.
+- `baleobala tunnel` runs the full IP tunnel over Bale LiveKit.
 - `baleobala bale-call` uses Bale LiveKit credentials directly.
 - `baleobala bale-tunnel` runs the tunnel over Bale LiveKit.
 - `baleobala bale-proxy` exposes a local SOCKS5/HTTP CONNECT endpoint over the tunnel.
 - `baleobala auth`, `pair`, `relay`, and `vpn` manage the product control plane and saved state.
+- On Linux, `baleobala vpn up` defaults to the native `linux-tun` backend.
 - On macOS, `baleobala vpn agent install` creates a LaunchAgent that can start `vpn up` automatically at login.
 
 The Bale-backed commands still need either explicit LiveKit credentials or the Bale auth flow that is being finished for the desktop product.
