@@ -467,10 +467,10 @@ def _parse_update_message(buf: bytes) -> InboundMessage | None:
 # ============================================================
 # Field numbers read from AuthOuterClass$RequestStartPhoneAuth.java,
 # RequestValidateCode.java, ResponseAuth.java in the APK decompile.
-# Wire format is NOT yet live-verified — Bale's `app_id` + `api_key`
-# are the device-attestation credentials the server uses to throttle
-# account creation; they're not present in the decompile and must be
-# captured from web.bale.ai's bundled JS (or passed in by the user).
+# Web-platform credentials extracted 2026-04-20 from web.bale.ai's
+# bundled index.js — public client constants, not secrets. Other
+# platforms: iOS is app_id=2, Android has its own pair; use whichever
+# your account was created on.
 #
 # Once captured, the flow is:
 #   1. StartPhoneAuth → returns transaction_hash, server sends SMS.
@@ -484,17 +484,34 @@ def _parse_update_message(buf: bytes) -> InboundMessage | None:
 
 AUTH_SERVICE = "bale.auth.v1.Auth"
 
+# Web client defaults (observed in web.bale.ai index.js, 2026-04-20).
+# These are public platform identifiers, same across all web users.
+WEB_APP_ID = 4
+WEB_API_KEY = "C28D46DC4C3A7A26564BFCC48B929086A95C93C98E789A19847BEE8627DE4E7D"
+
 
 @dataclass(frozen=True)
 class RequestStartPhoneAuth:
+    """Matches the exact shape web.bale.ai sends (verified from
+    bundled JS: `this.api.StartPhoneAuth({phoneNumber, deviceTitle,
+    sendCodeType, apiKey, appId, deviceHash, timeZone:void 0,
+    imeiList:void 0, preferredLanguages:[], options})`).
+
+    time_zone, preferred_languages, imei_list are intentionally
+    omitted from the wire — the web client sends them as undefined
+    / empty which protobuf3 encodes as absent. Our encoder follows
+    that shape. If you need to override on a non-web account, pass
+    a non-empty value and the field will be emitted."""
+
     phone_number: int                   # int64 (no '+', digits only)
-    app_id: int                         # int32 — Bale-specific, see docstring
-    api_key: str                        # string — Bale-specific
-    device_hash: bytes                  # opaque per-install ID
-    device_title: str                   # human label e.g. "baleobala"
-    time_zone: str = "UTC"
-    preferred_languages: tuple = ("en",)
-    send_code_type: int = 0             # 0=SMS (default)
+    app_id: int = WEB_APP_ID
+    api_key: str = WEB_API_KEY
+    device_hash: bytes = b""
+    device_title: str = "baleobala"
+    time_zone: str = ""                 # empty => omitted
+    preferred_languages: tuple = ()     # empty => omitted
+    send_code_type: int = 0
+    options: int = 0                    # 0=SUPPORT_TELEGRAM_GATEWAY
 
     def encode(self) -> bytes:
         out = bytearray()
@@ -503,11 +520,14 @@ class RequestStartPhoneAuth:
         out += _enc_len_delim(3, self.api_key.encode("utf-8"))
         out += _enc_len_delim(4, self.device_hash)
         out += _enc_len_delim(5, self.device_title.encode("utf-8"))
-        out += _enc_len_delim(6, self.time_zone.encode("utf-8"))
+        if self.time_zone:
+            out += _enc_len_delim(6, self.time_zone.encode("utf-8"))
         for lang in self.preferred_languages:
             out += _enc_len_delim(7, lang.encode("utf-8"))
         if self.send_code_type:
             out += _enc_tag(9, 0) + _enc_varint(self.send_code_type)
+        if self.options:
+            out += _enc_tag(10, 0) + _enc_varint(self.options)
         return bytes(out)
 
 

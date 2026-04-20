@@ -104,11 +104,12 @@ class BaleApiClient:
             self._endpoints = fetch_endpoints()
         return self._endpoints
 
-    def start(self, timeout: float = 15.0) -> None:
-        if not self._jwt:
+    def start(self, timeout: float = 15.0, *, allow_unauth: bool = False) -> None:
+        if not self._jwt and not allow_unauth:
             raise RuntimeError(
                 "BaleApiClient requires a JWT access_token. Pass it to "
-                "__init__ or implement auth.start_phone_auth first."
+                "__init__ or pass allow_unauth=True if you're about to "
+                "run the phone-auth flow (StartPhoneAuth / ValidateCode)."
             )
         kwargs = {}
         if self._ws_url:
