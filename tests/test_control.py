@@ -73,6 +73,23 @@ def test_pairing_store_begin_accept(tmp_path, monkeypatch) -> None:
     assert store.active() == accepted
 
 
+def test_pairing_store_prefers_most_recently_used_pairing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import PairingStore
+
+    store = PairingStore()
+    a = store.begin("relay-a", role="client", peer_id=7)
+    b = store.begin("relay-b", role="client", peer_id=8)
+    a = store.accept(a.pair_code)
+    b = store.accept(b.pair_code)
+    assert store.active() == b
+
+    touched = store.touch(a.profile_id)
+    assert touched is not None
+    assert touched.profile_id == a.profile_id
+    assert store.active() == touched
+
+
 def test_vpn_store_default_and_status(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import VpnStore

@@ -22,6 +22,8 @@ class PairingRecord:
     peer_id: int | None = None
     peer_name: str | None = None
     status: str = "pending"
+    paired_at: float | None = None
+    last_used_at: float | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -39,6 +41,16 @@ class PairingRecord:
             peer_id=data.get("peer_id"),
             peer_name=data.get("peer_name"),
             status=str(data.get("status", "pending")),
+            paired_at=(
+                float(data["paired_at"])
+                if data.get("paired_at") not in {None, ""}
+                else None
+            ),
+            last_used_at=(
+                float(data["last_used_at"])
+                if data.get("last_used_at") not in {None, ""}
+                else None
+            ),
             created_at=float(data.get("created_at", time.time())),
             updated_at=float(data.get("updated_at", time.time())),
         )
@@ -105,6 +117,8 @@ class PairingStore:
             peer_id=current.peer_id,
             peer_name=current.peer_name,
             status="paired",
+            paired_at=time.time(),
+            last_used_at=time.time(),
             created_at=current.created_at,
             updated_at=time.time(),
         )
@@ -112,12 +126,42 @@ class PairingStore:
         self._save_all(items)
         return updated
 
+    def touch(self, profile_id: str) -> PairingRecord | None:
+        items = self._load_all()
+        updated = None
+        for idx, item in enumerate(items):
+            if item.profile_id != profile_id:
+                continue
+            updated = PairingRecord(
+                profile_id=item.profile_id,
+                name=item.name,
+                role=item.role,
+                pair_code=item.pair_code,
+                relay_mode=item.relay_mode,
+                peer_id=item.peer_id,
+                peer_name=item.peer_name,
+                status=item.status,
+                paired_at=item.paired_at,
+                last_used_at=time.time(),
+                created_at=item.created_at,
+                updated_at=time.time(),
+            )
+            items[idx] = updated
+            break
+        if updated is not None:
+            self._save_all(items)
+        return updated
+
     def remove(self, profile_id: str) -> None:
         items = [item for item in self._load_all() if item.profile_id != profile_id]
         self._save_all(items)
 
     def active(self) -> PairingRecord | None:
-        for item in self._load_all():
-            if item.status == "paired":
-                return item
-        return None
+        paired = [item for item in self._load_all() if item.status == "paired"]
+        if not paired:
+            return None
+
+        def _score(item: PairingRecord) -> float:
+            return item.last_used_at or item.paired_at or item.updated_at or item.created_at
+
+        return max(paired, key=_score)

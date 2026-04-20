@@ -279,6 +279,7 @@ def cmd_relay(args: argparse.Namespace) -> int:
             profile = pairing_store.active()
         if profile is None:
             raise SystemExit("Need a pairing profile before enabling relay.")
+        pairing_store.touch(profile.profile_id)
         vpn_profile = VpnProfile(
             profile_id=profile.profile_id,
             name=args.name or profile.name,
@@ -492,6 +493,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     if profile.pairing_id is None:
         active_pairing = pairing_store.active()
         if active_pairing is not None:
+            pairing_store.touch(active_pairing.profile_id)
             profile = VpnProfile(
                 profile_id=active_pairing.name,
                 name=active_pairing.name,
@@ -512,6 +514,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         pairing = pairing_store.get(args.profile_id)
         if pairing is None:
             raise SystemExit(f"no pairing profile {args.profile_id!r} found")
+        pairing_store.touch(pairing.profile_id)
         profile = VpnProfile(
             profile_id=pairing.profile_id,
             name=pairing.name,
