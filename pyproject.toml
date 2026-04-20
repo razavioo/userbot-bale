@@ -35,6 +35,7 @@ dev = [
 bale = [
   "livekit>=0.17",
   "livekit-api>=0.7",
+  "httpx[http2]>=0.25",   # gRPC-Web auth (phone/SMS → JWT)
 ]
 vpn-video = [
   "opencv-python-headless>=4.8",

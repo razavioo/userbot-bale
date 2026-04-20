@@ -378,14 +378,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="send: single message; omit to read lines from stdin")
     bc.set_defaults(func=cmd_bale_call)
 
+    from baleobala.bale.protos import WEB_API_KEY, WEB_APP_ID
     ba = sub.add_parser(
         "bale-auth",
-        help="phone/SMS login flow → prints a JWT. app_id+api_key must "
-             "be captured from web.bale.ai (see docs/BALE_HEADLESS.md).",
+        help="phone/SMS login flow → prints a JWT. Defaults to Bale Web "
+             "credentials (app_id=4), which is what web.bale.ai uses.",
     )
     ba.add_argument("--phone", required=True, help="phone in E.164, with or without '+'")
-    ba.add_argument("--app-id", type=int, required=True)
-    ba.add_argument("--api-key", required=True)
+    ba.add_argument("--app-id", type=int, default=WEB_APP_ID,
+                    help=f"default: {WEB_APP_ID} (Bale Web)")
+    ba.add_argument("--api-key", default=WEB_API_KEY,
+                    help="default: Bale Web's public api_key")
     ba.add_argument("--device-title", default="baleobala")
     ba.add_argument("--device-hash-hex", default=None,
                     help="hex-encoded device hash (default: random 16B)")
@@ -398,42 +401,50 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_bale_auth(args: argparse.Namespace) -> int:
-    import os, secrets
-    from baleobala.bale import BaleApiClient
+    """Phone/SMS login over gRPC-Web HTTP/2 — live-verified 2026-04-20.
+    Prints the JWT on stdout; SMS prompt goes to stderr so you can
+    pipe the JWT to a file:
+        baleobala bale-auth --phone +98... > ~/.bale_jwt
+    """
+    from baleobala.bale.auth import BaleAuth
+    from baleobala.bale.grpc_web import GrpcWebError
 
     phone = str(args.phone).lstrip("+")
     if not phone.isdigit():
         raise SystemExit("invalid phone number (digits only, optional +)")
     device_hash = (
-        bytes.fromhex(args.device_hash_hex)
-        if args.device_hash_hex else secrets.token_bytes(16)
+        bytes.fromhex(args.device_hash_hex) if args.device_hash_hex else None
     )
 
-    # Start WS without JWT — it will fail unless the transport
-    # supports unauthenticated RPCs. Bale's auth endpoint does; others
-    # don't. See BaleApiClient source.
-    client = BaleApiClient(jwt="")  # type: ignore[arg-type]
+    auth = BaleAuth(
+        app_id=args.app_id,
+        api_key=args.api_key,
+        device_title=args.device_title,
+        device_hash=device_hash,
+    )
     try:
-        client.start()
-    except Exception as e:
-        raise SystemExit(
-            f"could not establish unauthenticated WS: {e}. Bale may "
-            f"require a bootstrap token; capture web.bale.ai's own."
-        )
-    try:
-        tx = client.start_phone_auth(
-            phone_number=int(phone),
-            app_id=args.app_id,
-            api_key=args.api_key,
-            device_hash=device_hash,
-            device_title=args.device_title,
-        )
-        print(f"SMS sent. transaction_hash = {tx}", file=sys.stderr)
+        tx = auth.start_phone_auth(int(phone))
+    except GrpcWebError as e:
+        raise SystemExit(f"StartPhoneAuth failed: {e}")
+    print(f"[bale-auth] SMS sent; transaction_hash={tx}", file=sys.stderr)
+
+    # Loop: some accounts get 1 wrong code; let them retry without
+    # re-sending SMS (since the transaction is still valid).
+    for attempt in range(1, 4):
         code = input("SMS code: ").strip()
-        resp = client.validate_code(tx, code)
-        print(resp.jwt)
-    finally:
-        client.stop()
+        try:
+            session = auth.validate_code(code)
+            break
+        except GrpcWebError as e:
+            if "EXPIRED" in e.message:
+                raise SystemExit(
+                    f"code expired (attempt {attempt}); rerun to send a fresh SMS"
+                )
+            print(f"[bale-auth] {e.message}; retry {attempt}/3", file=sys.stderr)
+    else:
+        raise SystemExit("too many invalid codes; giving up")
+
+    print(session.jwt)
     return 0
 
 
