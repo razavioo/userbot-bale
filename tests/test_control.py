@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+import base64
+import json
+import time
+
+
+def _mk_jwt(**claims) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    return f"{header}.{body}."
+
 def test_auth_store_roundtrip(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import AuthStore
@@ -14,6 +24,38 @@ def test_auth_store_roundtrip(tmp_path, monkeypatch) -> None:
 
     store.clear()
     assert store.load() is None
+
+
+def test_auth_store_tracks_token_expiry(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import AuthStore
+
+    jwt = _mk_jwt(exp=int(time.time()) + 3600, iat=int(time.time()) - 10)
+    store = AuthStore()
+    record = store.save_jwt(jwt, user_id=42, phone="+989")
+
+    assert record.expires_at is not None
+    assert record.issued_at is not None
+
+    loaded = store.load()
+    assert loaded is not None
+    assert loaded.expires_at == record.expires_at
+    assert store.status()["state"] == "configured"
+    assert "expires_in" in store.status()
+
+
+def test_auth_store_treats_expired_token_as_missing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import AuthStore
+
+    jwt = _mk_jwt(exp=1, iat=1)
+    store = AuthStore()
+    store.save_jwt(jwt, user_id=42, phone="+989")
+
+    assert store.load() is None
+    status = store.status()
+    assert status["state"] == "expired"
+    assert "expires_in" in status
 
 
 def test_pairing_store_begin_accept(tmp_path, monkeypatch) -> None:

@@ -75,7 +75,7 @@ If these pass, the codec and tunnel core are healthy and the local machine has t
 - If Bale LiveKit setup fails, start by verifying the current `baleobala bale-call` path with explicit LiveKit credentials before moving to the automated auth work.
 - If `baleobala doctor` reports missing `sounddevice`, re-check the Python environment that is currently active.
 - If `baleobala doctor` is green but the proxy still fails, test `baleobala tunnel-loopback` first so we know the byte-tunnel core is healthy.
-- If `baleobala vpn up` complains about auth, run `baleobala auth login` first and then retry with the saved session.
+- If `baleobala vpn up` complains about auth or your stored JWT has expired, run `baleobala auth login` first and then retry with the saved session.
 - If `baleobala relay enable` says there is no pairing record, create one with `baleobala pair start` and `baleobala pair accept` first.
 - If a paired relay already exists locally, `baleobala vpn up` will use it automatically.
 - If you want the app to come back on login on macOS, run `baleobala vpn agent install` once after pairing.
