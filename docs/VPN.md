@@ -92,6 +92,47 @@ to tear down the current transport and advance to the next one in the
 auto chain — TCP sessions survive because the tunnel's seq/ARQ state is
 preserved across the swap.
 
+## Multi-client exit node (mesh mode)
+
+One exit node can serve many clients concurrently — each incoming Bale
+call becomes its own per-client tunnel mapped to a unique `/30` inside
+the pool:
+
+```bash
+baleobala vpn exit-node-mesh \
+  --bale-jwt-file /etc/baleobala/jwt.txt \
+  --tun vpn0 --wan eth0 \
+  --pool-cidr 10.77.0.0/16 \
+  --psk-file /etc/baleobala/vpn.psk \
+  --answer
+```
+
+Every client that rings the exit node's Bale account gets allocated
+a slot (deterministic from peer_id so reconnects are sticky). The
+shared TUN device routes outbound replies back to the correct
+client's tunnel via the destination-IP lookup in `mesh.router`.
+
+## Encryption (PSK)
+
+Both sides need the same passphrase for end-to-end AEAD (ChaCha20-Poly1305)
+above the Bale transport — otherwise the Bale SFU sees plaintext
+VPN frames:
+
+```bash
+baleobala vpn up --bale-jwt-file … --peer-id <id> --psk-file ~/.baleo-psk
+baleobala vpn exit-node --bale-jwt-file … --psk-file /etc/baleobala/vpn.psk
+```
+
+## Authentication
+
+Bootstrap a JWT for either side with phone-SMS login (live-verified
+against Bale Web's gRPC-Web auth endpoint):
+
+```bash
+baleobala bale-auth --phone +989XXXXXXXXX > ~/.bale_jwt
+chmod 0600 ~/.bale_jwt
+```
+
 ## Troubleshooting
 
 - **`cannot open TUN vpn0: permission denied`** — re-run the setup

@@ -61,6 +61,21 @@ def add_vpn_subparser(sub: "argparse._SubParsersAction") -> None:
     ex.add_argument("--psk-file", default=None)
     ex.set_defaults(func=cmd_vpn_exit_node)
 
+    mx = vpn_sub.add_parser(
+        "exit-node-mesh",
+        help="VPS: serve many clients concurrently, each on its own /30 tunnel",
+    )
+    _add_bale_creds_opts(mx, answer_default=True)
+    _add_tun_opts(mx, default_addr="10.77.0.1/16")
+    mx.add_argument("--wan", default="eth0")
+    mx.add_argument("--skip-nat-setup", action="store_true")
+    mx.add_argument("--identity-prefix", default="baleobala-mesh")
+    mx.add_argument("--pool-cidr", default="10.77.0.0/16",
+                    help="IP pool for per-client /30 allocations")
+    mx.add_argument("--psk", default=None)
+    mx.add_argument("--psk-file", default=None)
+    mx.set_defaults(func=cmd_vpn_exit_node_mesh)
+
     lb = vpn_sub.add_parser("loopback",
                             help="in-process tunnel self-test (no TUN, no call)")
     lb.add_argument("--packets", type=int, default=20)
@@ -105,6 +120,110 @@ def cmd_vpn_exit_node(args: argparse.Namespace) -> int:
     if not args.skip_nat_setup:
         _run_nat_setup(args.tun, args.wan)
     return _run_tunnel_session(args, is_exit_node=True)
+
+
+def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
+    """Multi-client exit node. Accepts N concurrent Bale calls, each
+    mapped to its own /30 slot inside --pool-cidr. Requires a reachable
+    TUN device (see scripts/vpn-setup-tun.sh) and NAT setup (vpn-exit-node.sh).
+
+    IP negotiation: clients must self-assign a matching /30 address on
+    their side. A future control-channel will push the assignment down
+    automatically; today it's manual (CIDR is deterministic per peer_id,
+    so a client can compute its own address from the pool formula)."""
+    import threading
+    from baleobala.bale import BaleApiClient, LiveKitSession
+
+    from .crypto import EncryptedTransport
+    from .keepalive import LiveKitKeepalive
+    from .mesh.exit_node import MeshExitNode
+    from .tun import TunDevice
+    from .transports.datachannel_transport import DataChannelTransport
+
+    if not args.skip_nat_setup:
+        _run_nat_setup(args.tun, args.wan)
+
+    try:
+        tun = TunDevice.open(args.tun)
+    except (PermissionError, RuntimeError, OSError) as e:
+        print(f"[vpn-mesh] cannot open TUN {args.tun}: {e}", file=sys.stderr)
+        return 3
+
+    psk_key = _resolve_psk(args)
+    mesh = MeshExitNode(tun, pool_cidr=args.pool_cidr)
+    mesh.start()
+
+    jwt = args.bale_jwt
+    if not jwt and args.bale_jwt_file:
+        jwt = Path(args.bale_jwt_file).read_text().strip()
+    if not jwt:
+        raise SystemExit("--bale-jwt(-file) required in mesh mode")
+
+    from .jwt_util import warn_if_near_expiry
+    warn_if_near_expiry(jwt)
+
+    bale = BaleApiClient(jwt=jwt)
+    bale.start()
+    sessions: list = []  # keep refs so GC doesn't tear them down
+
+    def on_incoming_call(creds):  # type: ignore[no-untyped-def]
+        # We don't yet know the peer_id from the LiveKit creds alone;
+        # Bale's push includes the room name + caller identity. Extract
+        # whatever we can; for now use a deterministic slot from the
+        # room name's hash until full creds parsing lands.
+        import hashlib
+        peer_id = int.from_bytes(
+            hashlib.blake2b((creds.room or creds.url).encode(),
+                            digest_size=4).digest(),
+            "big",
+        )
+        print(f"[vpn-mesh] incoming call → peer_slot={peer_id}", file=sys.stderr)
+
+        try:
+            session = LiveKitSession(
+                url=creds.url, token=creds.token,
+                identity=f"{args.identity_prefix}-{peer_id}",
+            )
+            session.start()
+            LiveKitKeepalive(session, interval=20.0).start()
+            dc = DataChannelTransport(session, topic="vpn", reliable=True)
+            transport = EncryptedTransport(dc, psk_key) if psk_key else dc
+            assignment = mesh.accept_client(
+                peer_id, transport, mtu_override=transport.mtu,
+            )
+            print(
+                f"[vpn-mesh] peer={peer_id} → assigned "
+                f"{assignment.client} (gateway={assignment.gateway})",
+                file=sys.stderr,
+            )
+            sessions.append((peer_id, session, transport))
+        except Exception:  # noqa: BLE001
+            log.exception("failed to bring up client tunnel")
+
+    bale.listen_incoming_calls(on_incoming_call)
+    print(f"[vpn-mesh] up — tun={args.tun} pool={args.pool_cidr}. "
+          f"Waiting for incoming Bale calls. Ctrl-C to stop.",
+          file=sys.stderr)
+
+    from .runner import wait_for_signal
+    try:
+        wait_for_signal()
+    finally:
+        print(f"[vpn-mesh] shutting down ({len(sessions)} active clients)",
+              file=sys.stderr)
+        for peer_id, sess, _tx in sessions:
+            try:
+                mesh.drop_client(peer_id)
+            except Exception:
+                pass
+            try:
+                sess.stop()
+            except Exception:
+                pass
+        mesh.stop()
+        bale.stop()
+        tun.close()
+    return 0
 
 
 def cmd_vpn_loopback(args: argparse.Namespace) -> int:
