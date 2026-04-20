@@ -62,6 +62,17 @@ def test_cli_tunnel_loopback() -> None:
     assert cmd_tunnel_loopback(Args()) == 0
 
 
+def test_cli_doctor_smoke(capsys) -> None:
+    from baleobala.cli import cmd_doctor
+
+    class Args:
+        strict = False
+
+    assert cmd_doctor(Args()) == 0
+    out = capsys.readouterr().out
+    assert "baleobala doctor" in out
+
+
 def test_build_parser_exposes_bale_tunnel() -> None:
     from baleobala.cli import build_parser
 
@@ -74,3 +85,4 @@ def test_build_parser_exposes_bale_tunnel() -> None:
             break
     assert "bale-tunnel" in subcommands
     assert "bale-proxy" in subcommands
+    assert "doctor" in subcommands

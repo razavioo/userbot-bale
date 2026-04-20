@@ -5,7 +5,7 @@ import threading
 import time
 
 from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, QueuedTunnelTransport, TunnelRole, TunnelSession
-from baleobala.runtime.proxy import ProxyPacket, ProxyPacketType, Socks5ProxyServer, TunnelTcpRelay
+from baleobala.runtime.proxy import ProxyHub, ProxyPacket, ProxyPacketType, Socks5ProxyServer, TunnelTcpRelay
 
 PROXY_SECRET = b"proxy-secret"
 
@@ -81,6 +81,24 @@ def test_proxy_packet_roundtrip_with_secret() -> None:
     encoded = packet.encode(PROXY_SECRET)
     assert ProxyPacket.decode(encoded, PROXY_SECRET) == packet
     assert ProxyPacket.decode(encoded, None) is None
+
+
+def test_proxy_hub_handshake() -> None:
+    left_ch, right_ch = MemoryByteChannel.pair()
+    left = TunnelSession(left_ch, role=TunnelRole.CLIENT, security=NullSecurityProvider(session_id="left"))
+    right = TunnelSession(right_ch, role=TunnelRole.SERVER, security=NullSecurityProvider(session_id="right"))
+    left.open()
+    right.open()
+
+    left_hub = ProxyHub(left)
+    right_hub = ProxyHub(right)
+    assert left_hub.negotiate(timeout=1.0)
+    assert right_hub.negotiate(timeout=1.0)
+
+    left_hub.close()
+    right_hub.close()
+    left.close()
+    right.close()
 
 
 def test_socks5_proxy_roundtrip_over_memory_tunnel() -> None:

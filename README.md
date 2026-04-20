@@ -1,152 +1,126 @@
 # baleobala
 
-Acoustic data bridge over voice/video calls. Creates a virtual microphone
-on Linux, encodes text into audible packets with [GGWave], plays them
-into a live Zoom / Google Meet / WhatsApp call, and decodes each packet
-independently on the receiver — so streamed messages show up one by one
-as soon as they arrive, not when the whole stream finishes.
+`baleobala` is a transport project for moving bytes over Bale-hosted audio or media sessions, with a clear path toward a full desktop VPN experience on Linux and macOS.
 
-Why the audible band and not ultrasound? Voice codecs (Opus, the one
-Zoom/Meet/WhatsApp all use) aggressively suppress non-voice signals and
-cut everything above ~8 kHz in narrowband mode. GGWave's audible
-protocols are tuned to sound voice-like and carry Reed-Solomon FEC,
-which is why they survive real VoIP conditions.
+The repo now has three layers:
 
-## Architecture
+- a transport core for framing, tunneling, and proxying bytes,
+- Bale carrier integration for LiveKit session bootstrap,
+- and a product plan that moves this into an easy-to-install desktop VPN client plus relay.
 
-```
-  ┌────────────┐    ┌───────────┐    ┌───────────────┐    ┌──────────┐
-  │  text      │ ─▶ │  framing  │ ─▶ │   ggwave      │ ─▶ │ PipeWire │ ═╗
-  │  stream    │    │  8-byte   │    │  encode       │    │ null-sink│  ║
-  │            │    │  header + │    │  (audible)    │    │          │  ║
-  │            │    │  CRC-8    │    │               │    │          │  ║
-  └────────────┘    └───────────┘    └───────────────┘    └──────────┘  ║
-                                                                         ║
-                                                           Zoom / Meet ══╝
-                                                           picks up
-                                                           "VirtualMic"
-                                                           as microphone
-                                                                ║
-                                                                ▼
-                                                   (transported by Opus)
-                                                                ║
-                                                                ▼
-  ┌────────────┐    ┌───────────┐    ┌───────────────┐    ┌──────────┐
-  │  display   │ ◀─ │ reassembl │ ◀─ │   ggwave      │ ◀─ │ speaker  │
-  │  per msg   │    │  + order  │    │  streaming    │    │ / mic    │
-  │            │    │  + dedup  │    │  decode       │    │ capture  │
-  └────────────┘    └───────────┘    └───────────────┘    └──────────┘
-```
+## Current state
 
-## Installation
+- Linux-first audio transport works today through `send`, `recv`, `virtmic`, and the Bale LiveKit tunnel path.
+- A tunneled proxy path is already present for SOCKS5 and HTTP CONNECT.
+- On macOS, `vpn up` currently uses the local proxy plus system proxy settings so the machine can be exercised end-to-end now.
+- The native macOS app/packet-tunnel scaffold now lives under `native/macos/` and is wired around the same carrier socket contract as the Python runtime.
+- The long-term product direction is a signed desktop client with full-device VPN support, saved relay pairing, and no manual JWT workflow.
+
+## Install
 
 ```bash
-cd /home/razavioo/StudioProjects/baleobala
-
-# One-time system deps (Debian/Ubuntu)
-sudo apt install -y pulseaudio-utils libportaudio2
-
-# Python env
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## Quick start
-
-Full two-machine walkthrough: **[docs/SETUP.md](docs/SETUP.md)**.
-
-Single-host smoke test (no audio device required):
+For Bale LiveKit integration:
 
 ```bash
-baleobala loopback "hello" "streaming test" "unicode: سلام"
-pytest
+pip install -e ".[dev,bale]"
 ```
 
-## CLI reference
+For the desktop app stack that is planned for the VPN release:
 
-| Command                  | Purpose                                              |
-| ------------------------ | ---------------------------------------------------- |
-| `baleobala virtmic`      | Create PipeWire null-sink + remap-source             |
-| `baleobala send`         | Read lines from stdin, encode & play                 |
-| `baleobala recv`         | Capture audio, decode, print each message            |
-| `baleobala devices`      | List audio devices visible to sounddevice            |
-| `baleobala loopback`     | In-process self-test (no audio devices)              |
-| `baleobala bale-call`    | Send/recv directly over a Bale LiveKit room          |
-
-Shared flags: `--device NAME`, `--protocol {normal,fast,fastest}`, `-v` for
-debug logging.
-
-## Protocol choice
-
-| Protocol  | Throughput | Robustness through Opus/NS           |
-| --------- | ---------- | ------------------------------------ |
-| `normal`  | ~ 8 B/s    | best — use if `fast` drops packets   |
-| `fast`    | ~16 B/s    | **recommended default**              |
-| `fastest` | ~32 B/s    | acceptable only with NS turned off   |
-
-Call-app noise-suppression settings that must be tuned for audible FEC
-tones to survive are documented in [docs/SETUP.md](docs/SETUP.md).
-
-## Framing protocol
-
-8-byte header + up to 132-byte payload, fits inside one 140-byte GGWave
-packet:
-
-```
- offset  size  field        notes
- ------  ----  ---------    ----------------------------------------
-   0      1    magic        0xBA  (baleobala)
-   1      1    version      0x01
-   2      1    flags        START=0x01  END=0x02  SINGLE=0x04
-   3      2    msg_id       u16 little-endian, wraps
-   5      1    frag_idx     0..frag_total-1
-   6      1    frag_total   1..255
-   7      1    hdr_crc8     CRC-8/SMBUS over bytes [0..6]
+```bash
+pip install -e ".[dev,bale,desktop]"
 ```
 
-Messages up to `132 × 255 ≈ 33 KiB` are fragmented and reassembled
-in-order. Short messages take the SINGLE fast path: one frame, no
-reassembly state, emitted immediately.
+## Quick start
 
-## How device routing works
+If you want the current byte-transport path:
 
-PortAudio (what `sounddevice` uses) exposes PulseAudio/PipeWire as a
-single ALSA device named `pulse`; individual sinks and sources are not
-visible to it directly. Baleobala's CLI detects this and, when
-`--device <name>` names a PulseAudio sink or source that isn't a
-sounddevice device, sets `PULSE_SINK` / `PULSE_SOURCE` in the process
-environment and routes through the `pulse` device. That's why
-`baleobala send --device baleobala_sink` and
-`baleobala recv --device baleobala` just work, even though neither
-name appears in `baleobala devices`.
+```bash
+baleobala loopback "hello" "world"
+baleobala tunnel-loopback
+```
 
-## Bale integration
+If you want the current Bale tunnel path:
 
-Three integration paths, tiered by effort:
+```bash
+baleobala bale-tunnel send --text "hello"
+```
 
-| Phase | Path                                  | Doc                                        |
-| ----- | ------------------------------------- | ------------------------------------------ |
-| 1     | web.bale.ai in a browser + virtmic    | [docs/BALE_WEB.md](docs/BALE_WEB.md)       |
-| 2     | Bale Android app inside Waydroid      | [docs/BALE_WAYDROID.md](docs/BALE_WAYDROID.md) |
-| 3     | Headless Python client over LiveKit   | [docs/BALE_HEADLESS.md](docs/BALE_HEADLESS.md) |
+If you want the local proxy fallback:
 
-RE findings that underpin Phase 3 (Bale = Nasim fork + Bale gRPC +
-LiveKit WebRTC) are in [docs/BALE_RE_NOTES.md](docs/BALE_RE_NOTES.md).
+```bash
+baleobala bale-proxy client --listen-port 1080
+```
 
-## Troubleshooting
+That proxy path still needs a carrier session, either through explicit
+LiveKit credentials or the Bale auth flow in the headless commands.
 
-See [docs/SETUP.md](docs/SETUP.md#troubleshooting).
+Before you try the carrier or proxy commands, run:
 
-## Roadmap / non-goals
+```bash
+baleobala doctor
+```
 
-* **Video channel** (v4l2loopback + streaming QR codes) for ~10×
-  throughput is intentionally out of scope — use [cimbar] or [txqr]
-  with a virtual camera if you need it.
-* **macOS / Windows** virtual-mic creation is out of scope; the codec
-  and framing layers work cross-platform, but creating the virtual
-  device on those OSes is a different problem (BlackHole, VB-Cable).
+It prints the local readiness check and highlights any missing pieces.
 
-[GGWave]: https://github.com/ggerganov/ggwave
-[cimbar]: https://github.com/sz3/cimbar
-[txqr]: https://github.com/divan/txqr
+If you want to set up the product control plane now, the current flow is:
+
+```bash
+baleobala auth login --jwt "$BALE_JWT"
+baleobala pair start --name home-relay --role client
+baleobala pair accept --code "<pair-code>"
+baleobala relay enable
+baleobala vpn up
+```
+
+`vpn up` currently drives the managed proxy-based tunnel path; it uses the saved pairing/auth state, and on macOS it also applies the system proxy settings so the device can route through the local tunnel immediately.
+If there is an active paired relay saved locally, `vpn up` will use it automatically.
+For an always-on macOS launch agent, install it once with `baleobala vpn agent install`.
+
+## What we are delivering
+
+- A Linux/macOS desktop product that can connect a client to a relay and carry full-device traffic.
+- A saved pairing flow so the user does not re-enter peer details on every connect.
+- A secure auth/session model that replaces manual JWT capture.
+- A fallback proxy path for debugging and environments where full VPN setup is not available yet.
+- Signed, installable release builds for macOS and packaged release builds for Linux.
+
+## CLI surface
+
+| Command | Purpose |
+| --- | --- |
+| `baleobala virtmic` | Create the current Linux virtual mic bridge |
+| `baleobala send` | Encode messages and play them to an audio sink |
+| `baleobala recv` | Read audio from a source and decode messages |
+| `baleobala loopback` | Verify the codec/framing path in-process |
+| `baleobala tunnel-loopback` | Verify the byte tunnel in-process |
+| `baleobala doctor` | Check local readiness and missing dependencies |
+| `baleobala auth` | Store, inspect, or clear Bale auth state |
+| `baleobala pair` | Create and accept relay pairing records |
+| `baleobala relay` | Save relay runtime settings |
+| `baleobala vpn` | Run or inspect the product control plane |
+| `baleobala vpn agent` | Install or manage the macOS LaunchAgent |
+| `baleobala bale-call` | Use Bale LiveKit credentials directly |
+| `baleobala bale-tunnel` | Run the byte tunnel over Bale LiveKit |
+| `baleobala bale-proxy` | Run the SOCKS5/HTTP CONNECT proxy transport |
+
+## Platform notes
+
+- Linux is the primary platform for current audio transport and the first full VPN target.
+- macOS is a first-class target for the desktop product and signed release flow.
+- The current audio mic helper is Linux-native; macOS support in the product plan is based on an app shell and platform-specific VPN plumbing, not the current `virtmic` helper.
+
+## Docs
+
+- [Getting Started](docs/SETUP.md)
+- [Desktop VPN Plan](docs/VPN_PLAN.md)
+- [Bale Headless Notes](docs/BALE_HEADLESS.md)
+- [Native macOS Scaffold](native/macos/README.md)
+- [Bale Web Path](docs/BALE_WEB.md)
+- [Waydroid Path](docs/BALE_WAYDROID.md)
+- [RE Notes](docs/BALE_RE_NOTES.md)

@@ -17,6 +17,7 @@ thread, mirroring the pattern used by bale.livekit_backend.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import logging
 import queue
@@ -117,14 +118,13 @@ class WsClient:
              "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"),
             ("Cookie", f"access_token={self._jwt}"),
         ]
-        try:
-            conn = websockets.connect(
-                self._url, additional_headers=headers, max_size=None,
-            )
-        except TypeError:
-            conn = websockets.connect(
-                self._url, extra_headers=headers, max_size=None,
-            )
+        connect_kwargs = {"max_size": None}
+        params = inspect.signature(websockets.connect).parameters
+        if "additional_headers" in params:
+            connect_kwargs["additional_headers"] = headers
+        else:
+            connect_kwargs["extra_headers"] = headers
+        conn = websockets.connect(self._url, **connect_kwargs)
         try:
             async with conn as ws:
                 self._ws = ws

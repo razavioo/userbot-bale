@@ -1,161 +1,86 @@
-# Setup Guide
+# Getting Started
 
-End-to-end walkthrough for two machines: **A** (sender) and **B** (receiver),
-connected via any voice/video call app (Zoom, Meet, WhatsApp, Discord, …).
+This guide covers the current repo state and the easiest way to install and try it on Linux and macOS.
 
-## Prerequisites
-
-Both machines: Linux with PipeWire or PulseAudio, Python ≥ 3.9.
+## Install
 
 ```bash
-sudo apt install -y pulseaudio-utils libportaudio2
-git clone https://github.com/razavioo/baleobala.git
-cd baleobala
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-If `libportaudio2` is unavailable via apt (restricted mirrors), install
-the `.deb` directly:
+If you want Bale LiveKit support:
 
 ```bash
-wget http://archive.ubuntu.com/ubuntu/pool/universe/p/portaudio19/libportaudio2_19.6.0-1.1_amd64.deb
-sudo dpkg -i libportaudio2_19.6.0-1.1_amd64.deb
+pip install -e ".[dev,bale]"
 ```
 
-Verify the install:
+If you want the desktop-app stack that is planned for the VPN release:
+
+```bash
+pip install -e ".[dev,bale,desktop]"
+```
+
+## What works today
+
+- `baleobala loopback` verifies codec/framing in-process.
+- `baleobala tunnel-loopback` verifies the byte tunnel in-process.
+- `baleobala bale-call` uses Bale LiveKit credentials directly.
+- `baleobala bale-tunnel` runs the tunnel over Bale LiveKit.
+- `baleobala bale-proxy` exposes a local SOCKS5/HTTP CONNECT endpoint over the tunnel.
+- `baleobala auth`, `pair`, `relay`, and `vpn` manage the product control plane and saved state.
+- On macOS, `baleobala vpn agent install` creates a LaunchAgent that can start `vpn up` automatically at login.
+
+The Bale-backed commands still need either explicit LiveKit credentials or the Bale auth flow that is being finished for the desktop product.
+
+## Linux audio path
+
+The current Linux audio transport still uses the virtual-mic helper.
+
+```bash
+baleobala virtmic
+```
+
+The command prints the sink/source names. Use the sink as the playback target and the source as the microphone input in your call app.
+
+For browser or conferencing-app flows, continue to use the existing docs:
+
+- [Web path](BALE_WEB.md)
+- [Waydroid path](BALE_WAYDROID.md)
+
+## macOS notes
+
+The repo already treats macOS as a first-class target for the future desktop product, and the current `vpn up` command now applies system proxy settings on macOS so you can test the end-to-end path right now.
+
+For now, macOS users should treat the current audio helper as legacy tooling and focus on the proxy/tunnel path plus the system-proxy bridge in [VPN_PLAN.md](VPN_PLAN.md).
+
+## Verify the install
 
 ```bash
 baleobala loopback "hello" "world"
+baleobala tunnel-loopback
+baleobala doctor
+baleobala vpn status
 ```
 
-All messages should print `OK`.
+If these pass, the codec and tunnel core are healthy and the local machine has the baseline dependencies it needs.
 
-## Machine A — Sender
+## Current troubleshooting
 
-### 1. Create the virtual microphone (terminal 1, keep open)
+- If `sounddevice` cannot see your devices, install the system audio backend packages for your distro.
+- If `pactl` is missing, install `pulseaudio-utils` or the PipeWire Pulse compatibility package.
+- If Bale LiveKit setup fails, start by verifying the current `baleobala bale-call` path with explicit LiveKit credentials before moving to the automated auth work.
+- If `baleobala doctor` reports missing `sounddevice`, re-check the Python environment that is currently active.
+- If `baleobala doctor` is green but the proxy still fails, test `baleobala tunnel-loopback` first so we know the byte-tunnel core is healthy.
+- If `baleobala vpn up` complains about auth, run `baleobala auth login` first and then retry with the saved session.
+- If `baleobala relay enable` says there is no pairing record, create one with `baleobala pair start` and `baleobala pair accept` first.
+- If a paired relay already exists locally, `baleobala vpn up` will use it automatically.
+- If you want the app to come back on login on macOS, run `baleobala vpn agent install` once after pairing.
+- On macOS, `vpn up` now prefers the packet-tunnel backend recorded in the saved profile. If you explicitly choose the proxy fallback, `vpn down` restores the stored system proxy settings.
 
-```bash
-baleobala virtmic
-```
+## Where to go next
 
-This registers two PipeWire/PulseAudio modules: a null-sink `baleobala_sink`
-and a remap-source `baleobala`. `Ctrl-C` tears them down cleanly.
-
-### 2. Select the virtual mic in the call app
-
-Open the call app **after** terminal 1 is running. In the app's audio
-settings, select **Baleobala Virtual Mic** as the microphone.
-
-Call apps cache the device list at launch; if the app was already open
-when you ran `virtmic`, fully quit and relaunch.
-
-### 3. Disable noise suppression
-
-ML-based noise suppression shreds FEC-encoded tones. Configure before
-the call:
-
-| App     | Setting                                                           |
-| ------- | ----------------------------------------------------------------- |
-| Zoom    | Audio → Advanced: Original Sound **ON**, Noise Suppression **Low**, High Fidelity Music Mode **ON** |
-| Meet    | Settings → Audio: Noise Cancellation **OFF**                      |
-| Discord | Voice & Video: Noise Suppression **OFF**, Echo Cancellation **OFF** if tolerable |
-
-### 4. Send messages (terminal 2)
-
-```bash
-baleobala send --device baleobala_sink
-```
-
-Each line you type (and press Enter) is framed, encoded, and played into
-the virtual sink. The call app picks it up as microphone input and
-transports it to B over Opus.
-
-Non-interactive sources work the same way:
-
-```bash
-cat messages.txt | baleobala send --device baleobala_sink
-echo "one-off" | baleobala send --device baleobala_sink
-```
-
-## Machine B — Receiver
-
-### 1. Join the call
-
-Speakers or headphones on, moderate volume. No virtual mic is needed on B.
-
-### 2. Choose the capture source
-
-Two options:
-
-| Source                    | Quality | Notes                                       |
-| ------------------------- | ------- | ------------------------------------------- |
-| Default sink's `.monitor` | Best    | Taps the speaker output digitally; zero ambient noise |
-| Physical microphone       | Worse   | Speaker → air → mic; picks up room noise    |
-
-Monitor capture is strongly preferred. Find the current default sink:
-
-```bash
-MONITOR=$(pactl get-default-sink).monitor
-echo "$MONITOR"
-```
-
-### 3. Receive
-
-```bash
-baleobala recv --device "$MONITOR"
-```
-
-Each completed message prints on its own line, in order, as soon as it
-is decoded — no buffering across messages.
-
-## Single-machine loopback test
-
-Before a real call, confirm the full pipeline on one host:
-
-```bash
-# terminal 1
-baleobala virtmic
-
-# terminal 2
-baleobala recv --device baleobala
-
-# terminal 3
-echo "loopback works" | baleobala send --device baleobala_sink
-```
-
-Terminal 2 prints `loopback works`.
-
-## Protocol tuning
-
-`--protocol` flag, default `fast`:
-
-| Value     | Throughput | Use when                                                  |
-| --------- | ---------- | --------------------------------------------------------- |
-| `normal`  | ~ 8 B/s    | `fast` drops packets, or noise suppression cannot be disabled |
-| `fast`    | ~16 B/s    | Default. Recommended for VoIP                             |
-| `fastest` | ~32 B/s    | Noise suppression is off on both sides                    |
-
-Both endpoints must use the same protocol.
-
-## Troubleshooting
-
-**Virtual mic missing from the app's device list.** The app cached the
-list at launch. Quit fully and relaunch.
-
-**Receiver prints nothing.** Run the loopback test above first. If it
-works, the call-path is the issue: check noise suppression is off, drop
-to `--protocol normal`, and confirm B is capturing the right device
-(`baleobala devices` lists everything sounddevice sees).
-
-**`ALSA lib pcm.c: underrun occurred` on send.** Cosmetic PortAudio
-warnings; payload is not affected.
-
-**Messages appear to be missing on B.** The receiver deduplicates
-messages with identical 16-bit `msg_id`. Sender sessions start at a
-random id by default; if you pinned `start_msg_id` in tests, two
-concurrent senders could collide. Use different starts or restart the
-receiver.
-
-**B captures its own mic instead of the call.** Pass
-`--device $(pactl get-default-sink).monitor` explicitly.
+- [Desktop VPN Plan](VPN_PLAN.md)
+- [Bale Headless Notes](BALE_HEADLESS.md)
+- [Native macOS Scaffold](../native/macos/README.md)
