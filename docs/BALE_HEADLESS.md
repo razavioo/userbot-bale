@@ -9,6 +9,7 @@ These notes document the Bale carrier work and how it maps into the desktop VPN/
 - The byte tunnel, proxy transport, and carrier adapters are split into separate runtime layers.
 - The CLI can exercise the carrier stack, tunnel core, and proxy fallback without the future desktop shell.
 - The product control plane now covers auth, pairing, relay settings, and the current vpn/proxy orchestration path.
+- Stored JWTs now carry expiry metadata; expired sessions are treated as missing so the app can ask for a fresh login.
 - On macOS, the current vpn path uses saved pairing/auth and defaults to the packet-tunnel backend shape; the system-proxy bridge remains available as fallback/debug mode.
 - The packet-tunnel path now has a local Unix-domain runtime socket scaffold that forwards bytes through the carrier tunnel runtime.
 - macOS also has a LaunchAgent install path so the current tunnel can come back on login.
