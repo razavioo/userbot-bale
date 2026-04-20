@@ -45,7 +45,16 @@ DEFAULT_HEADERS: Dict[str, str] = {
     "mt_browser_version": "147.0.0.0",
     "mt_os_type": "4",
     "origin": "https://web.bale.ai",
+    "referer": "https://web.bale.ai/",
     "accept": "*/*",
+    "accept-language": "en-US,en;q=0.9,fa;q=0.8",
+    "accept-encoding": "gzip, deflate, br",
+    "sec-ch-ua": '"Chromium";v="147", "Not/A)Brand";v="24", "Google Chrome";v="147"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Linux"',
+    "sec-fetch-site": "same-site",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
     "user-agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
@@ -84,10 +93,9 @@ def _unpack_frames(buf: bytes):
 
 
 class GrpcWebClient:
-    """One-shot unary caller. Constructs an httpx HTTP/2 client per
-    request; this is cheap enough for the handful of auth calls we make
-    and avoids keeping a long-lived connection when the rest of the
-    application uses the WS gateway."""
+    """Unary gRPC-Web caller. Keeps a single persistent httpx HTTP/2
+    client so that cookies set by one call (e.g. ValidateCode) are
+    automatically carried into the next (e.g. GetJWTToken)."""
 
     def __init__(
         self,
@@ -99,7 +107,7 @@ class GrpcWebClient:
         timeout: float = 30.0,
     ) -> None:
         try:
-            import httpx  # noqa: F401
+            import httpx
         except ImportError as e:
             raise ImportError(
                 "grpc-web auth requires httpx. Install: pip install 'httpx[http2]'"
@@ -109,6 +117,15 @@ class GrpcWebClient:
         self._user_id = user_id
         self._extra = dict(extra_headers or {})
         self._timeout = timeout
+        # Use HTTP/1.1 — HTTP/2 fingerprinting (SETTINGS frame) differs
+        # from Chrome's and causes Bale's WAF to block authenticated calls.
+        self._http = httpx.Client(http2=False, timeout=timeout)
+
+    def set_user_id(self, user_id: int) -> None:
+        self._user_id = user_id
+
+    def close(self) -> None:
+        self._http.close()
 
     def unary(
         self,
@@ -118,8 +135,6 @@ class GrpcWebClient:
         *,
         jwt: Optional[str] = None,
     ) -> GrpcWebResponse:
-        import httpx
-
         url = f"{self._host}/{service}/{method}"
         headers = dict(DEFAULT_HEADERS)
         headers["session_id"] = self._session_id
@@ -128,22 +143,39 @@ class GrpcWebClient:
             headers["user_id"] = str(self._user_id)
         headers.update(self._extra)
 
-        cookies: Dict[str, str] = {}
         if jwt:
-            cookies["access_token"] = jwt
+            self._http.cookies.set("access_token", jwt)
 
         log.debug("gRPC-Web POST %s/%s (%d bytes)", service, method, len(payload))
-        with httpx.Client(http2=True, timeout=self._timeout) as client:
-            r = client.post(
-                url,
-                content=_pack_frame(payload),
-                headers=headers,
-                cookies=cookies,
-            )
+        r = self._http.post(
+            url,
+            content=_pack_frame(payload),
+            headers=headers,
+        )
 
         grpc_status = r.headers.get("grpc-status")
         grpc_message = r.headers.get("grpc-message", "")
-        set_cookies = list(r.headers.get_all("set-cookie"))
+        set_cookies = list(r.headers.get_list("set-cookie"))
+
+        # Force-store ALL Set-Cookie values from the response, including
+        # expired (Max-Age=0) ones that httpx discards. The Bale server
+        # sends `access_token=; Max-Age=0` on StartPhoneAuth to reset any
+        # prior session; a browser stores this empty cookie and echoes it
+        # back in ValidateCode, signalling flow continuity. Without it the
+        # server won't set the real JWT cookie in the ValidateCode response.
+        for sc in set_cookies:
+            head = sc.split(";", 1)[0].strip()
+            if "=" in head:
+                name, value = head.split("=", 1)
+                # httpx.Cookies.set domain=next-ws.bale.ai so it's sent
+                # on subsequent calls to the same host.
+                self._http.cookies.set(name.strip(), value.strip(), domain="next-ws.bale.ai")
+
+        # Synthesize Set-Cookie list from jar for extract_access_token().
+        if not set_cookies and r.cookies:
+            for name, value in r.cookies.items():
+                set_cookies.append(f"{name}={value}")
+        log.debug("gRPC-Web %s/%s: http=%d", service, method, r.status_code)
         body = b""
         trailer_text = ""
         for flags, frame_body in _unpack_frames(r.content):

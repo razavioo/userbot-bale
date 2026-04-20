@@ -566,6 +566,44 @@ def parse_response_auth(buf: bytes) -> ResponseAuth | None:
     return ResponseAuth(jwt=m.group(1).decode("ascii"), raw=buf)
 
 
+def parse_user_id_from_auth_response(buf: bytes) -> int | None:
+    """Scan ResponseAuth for the user_id (a large int, typically 1M-5B range).
+
+    The ValidateCode response carries a User sub-message whose first
+    varint field is the user_id. We scan all varint fields for values
+    in the plausible Bale user_id range (10_000 – 5_000_000_000).
+    The first match is returned."""
+    candidates: list[int] = []
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 0 and 10_000 <= val <= 5_000_000_000:
+            candidates.append(val)
+        elif wt == 2 and isinstance(val, (bytes, bytearray)) and val:
+            for _, v2, w2 in _walk_len_delim(val):
+                if w2 == 0 and 10_000 <= v2 <= 5_000_000_000:
+                    candidates.append(v2)
+    return candidates[0] if candidates else None
+
+
+class RequestGetJWTToken:
+    """bale.auth.v1.Auth/GetJWTToken — empty request body.
+    The server identifies the session via session_id + user_id headers."""
+
+    def encode(self) -> bytes:
+        return b""
+
+
+def parse_get_jwt_token_response(buf: bytes) -> str | None:
+    """ResponseGetJWTToken { jwt: StringValue }.
+    StringValue wraps a string at field 1 of the inner message;
+    the outer response carries it at field 1 as a len-delim.
+    Falls back to a regex scan so we're not brittle to field number changes."""
+    import re
+    m = re.search(rb"(eyJ[A-Za-z0-9_\-.]{50,})", buf)
+    if m is None:
+        return None
+    return m.group(1).decode("ascii")
+
+
 def parse_transaction_hash(buf: bytes) -> str | None:
     """ResponseStartPhoneAuth: the only field is a transaction_hash
     string at some tag. Scan for a long hex/base64-ish token."""

@@ -7,9 +7,11 @@ Flow:
        Server sends SMS to the phone.
     2. User hands over the 5-digit code.
     3. POST ValidateCode(transaction_hash, code, is_jwt=1)
-       → ResponseAuth body + `Set-Cookie: access_token=<JWT>; Domain=bale.ai`
-       The JWT is extracted from the Set-Cookie, NOT the body (the body
-       carries User + Config only; the JWT ships as an HTTP cookie).
+       → ResponseAuth { user, config, jwt? }
+       JWT may be in Set-Cookie OR in the body field 4.
+       For accounts where neither is present:
+    4. POST GetJWTToken (empty body, same session_id header)
+       → ResponseGetJWTToken { jwt: StringValue }
 
 Live-verified 2026-04-20 with a real account. See bale/grpc_web.py for
 the transport wire format.
@@ -36,11 +38,15 @@ from baleobala.bale.grpc_web import (
 )
 from baleobala.bale.protos import (
     AUTH_SERVICE,
+    RequestGetJWTToken,
     RequestStartPhoneAuth,
     RequestValidateCode,
     WEB_API_KEY,
     WEB_APP_ID,
+    parse_get_jwt_token_response,
+    parse_response_auth,
     parse_transaction_hash,
+    parse_user_id_from_auth_response,
 )
 
 log = logging.getLogger(__name__)
@@ -112,10 +118,37 @@ class BaleAuth:
         resp = self._client.unary(AUTH_SERVICE, "ValidateCode", req.encode())
         jwt = extract_access_token(resp.set_cookies)
         if not jwt:
-            raise RuntimeError(
-                "ValidateCode succeeded but no access_token cookie in response. "
-                "Account may require SignUp/2FA — see set_cookies: "
-                f"{resp.set_cookies[:200]!r}"
+            # Fallback: Bale sometimes ships the JWT inside the
+            # ResponseAuth protobuf (field 4) instead of a Set-Cookie —
+            # observed on accounts whose gateway does not set the
+            # access_token cookie on the HTTP response.
+            parsed = parse_response_auth(resp.body)
+            if parsed is not None:
+                jwt = parsed.jwt
+        if not jwt:
+            # Most accounts: Bale requires a follow-up GetJWTToken call.
+            # Set the user_id on the same persistent client so the server
+            # can tie this request to the ValidateCode session.
+            user_id = parse_user_id_from_auth_response(resp.body)
+            log.warning(
+                "No JWT in ValidateCode response; calling GetJWTToken (user_id=%s)",
+                user_id,
             )
-        log.info("ValidateCode OK; JWT length=%d", len(jwt))
+            try:
+                if user_id is not None:
+                    self._client.set_user_id(user_id)
+                jwt_resp = self._client.unary(
+                    AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
+                )
+                jwt = parse_get_jwt_token_response(jwt_resp.body)
+                if jwt:
+                    log.warning("GetJWTToken OK; JWT length=%d", len(jwt))
+            except Exception as e:
+                log.warning("GetJWTToken failed: %s", e)
+        if not jwt:
+            raise RuntimeError(
+                "Could not obtain JWT after ValidateCode + GetJWTToken. "
+                "Check logs for details."
+            )
+        log.info("Auth OK; JWT length=%d", len(jwt))
         return AuthSession(jwt=jwt, response_body=resp.body)
