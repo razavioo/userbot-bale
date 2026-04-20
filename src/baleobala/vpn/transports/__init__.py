@@ -38,10 +38,12 @@ class InMemoryTransport:
         rate_hint: float = 1_000_000.0,
         loss: float = 0.0,
         rng_seed: int | None = None,
+        send_delay: float = 0.0,
     ) -> None:
         self.mtu = mtu
         self.rate_hint = rate_hint
         self._loss = loss
+        self._send_delay = send_delay
         self._rx: "queue.Queue[bytes]" = queue.Queue()
         self._peer: "InMemoryTransport | None" = None
         import random
@@ -64,6 +66,9 @@ class InMemoryTransport:
             raise ValueError(f"frame {len(data)} > mtu {self.mtu}")
         if self._loss > 0 and self._rng.random() < self._loss:
             return  # dropped
+        if self._send_delay > 0:
+            import time as _t
+            _t.sleep(self._send_delay)
         self._peer._rx.put(bytes(data))
 
     def recv_bytes(self, timeout: float | None = None) -> bytes | None:
