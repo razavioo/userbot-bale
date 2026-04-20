@@ -84,6 +84,38 @@ def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
     assert service.status().state == "stopped"
 
 
+def test_tunnel_services_default_to_shared_container_socket(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SHARED_CONTAINER", "/tmp/baleobala-shared")
+    from baleobala.control.tunnel_service import CarrierTunnelService, LocalTunnelService
+
+    class Bridge:
+        def start(self):
+            pass
+
+        def send(self, data):  # noqa: ANN001
+            return len(data)
+
+        def recv(self, timeout=None):  # noqa: ANN001
+            return None
+
+        def close(self):
+            pass
+
+        @property
+        def closed(self):
+            return False
+
+    local = LocalTunnelService()
+    carrier = CarrierTunnelService(Bridge())
+    local_state = local.start(profile_id="p1", backend="packet-tunnel")
+    carrier_state = carrier.start(profile_id="p1", backend="packet-tunnel")
+    assert "/tmp/baleobala-shared" in str(local_state.endpoint or "")
+    assert "/tmp/baleobala-shared" in str(carrier_state.endpoint or "")
+    local.stop()
+    carrier.stop()
+
+
 def test_carrier_tunnel_service_bridges_bytes(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     import socket
@@ -368,13 +400,26 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
     pairing_store = PairingStore()
     pending = pairing_store.begin("relay-a", role="client", peer_id=777, relay_mode="proxy")
     pairing_store.accept(pending.pair_code)
+    active_pairing = pairing_store.active()
     VpnStore().ensure_default()
 
     captured = {}
 
-    def fake_client(args):  # noqa: ANN001
-        captured["args"] = args
-        return 0
+    class FakeRuntime:
+        def start(self, *, profile_id, backend, pairing_id):  # noqa: ANN001
+            captured["runtime_start"] = {
+                "profile_id": profile_id,
+                "backend": backend,
+                "pairing_id": pairing_id,
+            }
+            return __import__("types").SimpleNamespace(endpoint="unix:///tmp/runtime.sock")
+
+        def stop(self):
+            captured["runtime_stop"] = True
+
+    class FakeBridge:
+        def close(self):
+            captured["bridge_close"] = True
 
     class FakeProxySession:
         def __init__(self, **kwargs):  # noqa: ANN001
@@ -386,16 +431,20 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
         def status(self):
             return {"proxy": "127.0.0.1:1080"}
 
-    monkeypatch.setattr(cli, "cmd_bale_proxy_client", fake_client)
     monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
+    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", lambda profile, auth_record: (FakeRuntime(), FakeBridge()))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     class Args:
         vpn_cmd = "up"
         profile_id = None
 
     assert cli.cmd_vpn(Args()) == 0
-    assert captured["args"].peer_id == 777
-    assert captured["args"].answer is False
+    assert captured["runtime_start"]["profile_id"] == "relay-a"
+    assert captured["runtime_start"]["backend"] == "packet-tunnel"
+    assert captured["runtime_start"]["pairing_id"] == active_pairing.profile_id
+    assert captured["runtime_stop"] is True
+    assert captured["bridge_close"] is True
 
 
 def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -> None:

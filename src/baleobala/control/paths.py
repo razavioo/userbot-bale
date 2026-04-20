@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "baleobala"
+APP_GROUP_IDENTIFIER = "group.com.baleobala.vpn"
 
 
 def app_dir() -> Path:
@@ -29,3 +30,12 @@ def config_dir() -> Path:
 
 def data_dir() -> Path:
     return app_dir() / "state"
+
+
+def shared_container_dir() -> Path:
+    override = os.environ.get("BALEOBALA_SHARED_CONTAINER") or os.environ.get("BALEOBALA_APP_GROUP_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Group Containers" / APP_GROUP_IDENTIFIER
+    return app_dir()

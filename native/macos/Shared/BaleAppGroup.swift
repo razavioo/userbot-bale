@@ -9,7 +9,13 @@ enum BaleAppGroup {
     static let tunnelDescription = "baleobala packet tunnel"
 
     static func sharedContainerURL() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
+        if let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) {
+            return containerURL
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Group Containers", isDirectory: true)
+            .appendingPathComponent(identifier, isDirectory: true)
     }
 
     static func carrierSocketURL() -> URL? {
