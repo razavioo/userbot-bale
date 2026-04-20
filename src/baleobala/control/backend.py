@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import atexit
 import os
+import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -12,6 +14,7 @@ from baleobala.control.paths import config_dir
 from baleobala.control.store import JsonStore
 from baleobala.control.tunnel_service import TunnelService, TunnelServiceState
 from baleobala.control.vpn import VpnProfile
+from baleobala.runtime.proxy import DirectSocks5Server
 
 
 class VpnBackend(Protocol):
@@ -109,7 +112,15 @@ class MacOSPacketTunnelBackend(VpnBackend):
 
 
 class ProxyFallbackBackend(VpnBackend):
-    """Fallback backend that manipulates macOS system proxy settings."""
+    """Fallback backend that manipulates macOS system proxy settings.
+
+    Note: the caller is responsible for running a SOCKS5 listener on
+    ``listen_host:listen_port`` *before* calling :meth:`up`, otherwise the
+    system proxy will point at nothing and break networking. The CLI wires
+    this via ``cmd_bale_proxy_client`` starting after ``backend.up(profile)``
+    — see the historical ordering comment; we leave it unchanged here for
+    backwards compatibility, but callers should be aware.
+    """
 
     def __init__(self, *, listen_host: str = "127.0.0.1", listen_port: int = 1080) -> None:
         if os.sys.platform == "darwin":
@@ -141,6 +152,136 @@ class ProxyFallbackBackend(VpnBackend):
             **self._state.to_dict(),
             **self._session.status(),
         }
+
+
+class DirectProxyBackend(VpnBackend):
+    """Self-contained macOS VPN backend.
+
+    Starts an in-process SOCKS5 / HTTP CONNECT listener that opens direct
+    outbound TCP sockets, then points the macOS system proxy at it via
+    ``networksetup``. Unlike :class:`ProxyFallbackBackend`, this requires no
+    remote peer, no auth, no LiveKit — a single machine is enough for
+    ``baleobala vpn up`` to produce a working system-wide proxy.
+
+    Ordering is strict: the listener must be bound *before* we flip system
+    proxy settings. If either step fails, the other is unwound so we never
+    leave networking broken. An ``atexit`` hook plus SIGTERM/SIGINT handlers
+    perform a best-effort restore on crash.
+    """
+
+    def __init__(
+        self,
+        *,
+        listen_host: str = "127.0.0.1",
+        listen_port: int = 1080,
+        state_path: Path | None = None,
+        server_factory=None,
+        session_factory=None,
+    ) -> None:
+        self._listen_host = listen_host
+        self._listen_port = listen_port
+        self._state_store = JsonStore(state_path or (config_dir() / "macos_direct_proxy.json"))
+        self._state = BackendState(backend="direct")
+        self._server: DirectSocks5Server | None = None
+        self._session: _ProxySessionBase | None = None
+        self._server_factory = server_factory or (
+            lambda: DirectSocks5Server(listen_host=listen_host, listen_port=listen_port)
+        )
+        if session_factory is not None:
+            self._session_factory = session_factory
+        elif os.sys.platform == "darwin":
+            self._session_factory = lambda: macos.MacOSSystemProxySession(
+                listen_host=listen_host, listen_port=listen_port
+            )
+        else:
+            self._session_factory = lambda: _NullProxySession(
+                listen_host=listen_host, listen_port=listen_port
+            )
+        self._cleanup_registered = False
+
+    def up(self, profile: VpnProfile) -> dict[str, str]:
+        server = self._server_factory()
+        server.start()
+        if not server.wait_ready(timeout=2.0):
+            server.stop()
+            raise RuntimeError("direct proxy listener failed to bind")
+
+        session = self._session_factory()
+        try:
+            session.start()
+        except Exception:
+            server.stop()
+            raise
+
+        self._server = server
+        self._session = session
+        self._register_cleanup()
+        self._state = BackendState(
+            backend="direct",
+            state="running",
+            profile_id=profile.profile_id,
+            pairing_id=profile.pairing_id,
+            endpoint=f"{server.bound_host}:{server.bound_port}",
+            details={
+                "proxy": session.status().get("proxy", f"{self._listen_host}:{self._listen_port}"),
+                "mode": "system-proxy",
+            },
+        )
+        self._state_store.save(self._state.to_dict())
+        return self.status()
+
+    def down(self) -> None:
+        session, self._session = self._session, None
+        server, self._server = self._server, None
+        if session is not None:
+            try:
+                session.stop()
+            except Exception:
+                pass
+        if server is not None:
+            try:
+                server.stop()
+            except Exception:
+                pass
+        self._state = BackendState(backend="direct")
+        try:
+            self._state_store.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def status(self) -> dict[str, str]:
+        base = self._state.to_dict()
+        if self._session is not None:
+            base.update(self._session.status())
+        return base
+
+    def _register_cleanup(self) -> None:
+        if self._cleanup_registered:
+            return
+        self._cleanup_registered = True
+        atexit.register(self._safe_down)
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            try:
+                prev = signal.getsignal(sig)
+
+                def _handler(signum, frame, prev=prev):
+                    self._safe_down()
+                    if callable(prev) and prev not in (signal.SIG_DFL, signal.SIG_IGN):
+                        try:
+                            prev(signum, frame)
+                        except Exception:
+                            pass
+                    raise KeyboardInterrupt() if signum == signal.SIGINT else SystemExit(128 + signum)
+
+                signal.signal(sig, _handler)
+            except (ValueError, OSError):
+                pass
+
+    def _safe_down(self) -> None:
+        try:
+            self.down()
+        except Exception:
+            pass
 
 
 class _ProxySessionBase:
@@ -179,12 +320,16 @@ def default_backend_name() -> str:
     if os.environ.get("BALEOBALA_VPN_BACKEND"):
         return os.environ["BALEOBALA_VPN_BACKEND"]
     if os.sys.platform == "darwin":
-        return "packet-tunnel"
+        return "direct"
     return "proxy"
 
 
 def backend_for_profile(profile: VpnProfile) -> VpnBackend:
     backend = profile.backend or default_backend_name()
+    if backend == "direct":
+        return DirectProxyBackend(
+            listen_host=profile.listen_host, listen_port=profile.listen_port
+        )
     if backend == "proxy":
         return ProxyFallbackBackend(listen_host=profile.listen_host, listen_port=profile.listen_port)
     return MacOSPacketTunnelBackend()

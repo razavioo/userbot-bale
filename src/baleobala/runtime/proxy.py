@@ -615,6 +615,166 @@ class Socks5ProxyServer:
         return False, "closed"
 
 
+class DirectSocks5Server:
+    """SOCKS5 + HTTP CONNECT proxy that opens real outbound sockets.
+
+    No tunnel, no remote relay — used by the macOS ``direct`` VPN backend to
+    give a single machine a working system-wide proxy with no external
+    dependencies.
+    """
+
+    def __init__(
+        self,
+        *,
+        listen_host: str = "127.0.0.1",
+        listen_port: int = 1080,
+        connect_timeout: float = 10.0,
+        backlog: int = 64,
+    ) -> None:
+        self._listen_host = listen_host
+        self._listen_port = listen_port
+        self._connect_timeout = connect_timeout
+        self._backlog = backlog
+        self._stop = threading.Event()
+        self._listener: socket.socket | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self.bound_host: str | None = None
+        self.bound_port: int | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self._listen_host, self._listen_port))
+        listener.listen(self._backlog)
+        listener.settimeout(0.25)
+        self._listener = listener
+        self.bound_host, self.bound_port = listener.getsockname()[:2]
+        self._ready.set()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def wait_ready(self, timeout: float = 2.0) -> bool:
+        return self._ready.wait(timeout=timeout)
+
+    def stop(self) -> None:
+        self._stop.set()
+        listener = self._listener
+        if listener is not None:
+            try:
+                listener.close()
+            except OSError:
+                pass
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self._listener = None
+        self._thread = None
+
+    def _serve(self) -> None:
+        listener = self._listener
+        if listener is None:
+            return
+        while not self._stop.is_set():
+            try:
+                client, _addr = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
+
+    def _handle_client(self, client: socket.socket) -> None:
+        try:
+            first = _recv_exact(client, 1)
+        except (OSError, EOFError):
+            client.close()
+            return
+        try:
+            if first == b"\x05":
+                self._handle_socks5(client)
+            else:
+                self._handle_http_connect(client, first)
+        except Exception:
+            pass
+        finally:
+            try:
+                client.close()
+            except OSError:
+                pass
+
+    def _handle_socks5(self, client: socket.socket) -> None:
+        nmethods = _recv_exact(client, 1)[0]
+        methods = _recv_exact(client, nmethods)
+        if 0x00 not in methods:
+            client.sendall(b"\x05\xff")
+            return
+        client.sendall(b"\x05\x00")
+
+        try:
+            target_host, target_port = _parse_socks5_target(client)
+        except (ValueError, EOFError, OSError):
+            _socks5_reply(client, 0x01)
+            return
+
+        upstream = self._connect_upstream(target_host, target_port)
+        if upstream is None:
+            _socks5_reply(client, 0x05)
+            return
+        _socks5_reply(client, 0x00)
+        with upstream:
+            self._splice(client, upstream)
+
+    def _handle_http_connect(self, client: socket.socket, first_byte: bytes) -> None:
+        try:
+            target_host, target_port = _read_http_connect_target(client, first_byte)
+        except (ValueError, EOFError, OSError):
+            _http_connect_reply(client, 400, "Bad Request")
+            return
+        upstream = self._connect_upstream(target_host, target_port)
+        if upstream is None:
+            _http_connect_reply(client, 502, "Bad Gateway")
+            return
+        _http_connect_reply(client, 200, "Connection Established")
+        with upstream:
+            self._splice(client, upstream)
+
+    def _connect_upstream(self, host: str, port: int) -> socket.socket | None:
+        try:
+            return socket.create_connection((host, port), timeout=self._connect_timeout)
+        except OSError:
+            return None
+
+    @staticmethod
+    def _splice(a: socket.socket, b: socket.socket) -> None:
+        done = threading.Event()
+
+        def pump(src: socket.socket, dst: socket.socket) -> None:
+            try:
+                while not done.is_set():
+                    data = src.recv(8192)
+                    if not data:
+                        break
+                    dst.sendall(data)
+            except OSError:
+                pass
+            finally:
+                done.set()
+                try:
+                    dst.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        t1 = threading.Thread(target=pump, args=(a, b), daemon=True)
+        t2 = threading.Thread(target=pump, args=(b, a), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+
 class TunnelTcpRelay:
     """Remote TCP relay that serves the other end of the tunnel."""
 

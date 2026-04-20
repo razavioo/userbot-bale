@@ -16,7 +16,7 @@ def default_vpn_backend() -> str:
     if os.environ.get("BALEOBALA_VPN_BACKEND"):
         return os.environ["BALEOBALA_VPN_BACKEND"]
     if os.sys.platform == "darwin":
-        return "packet-tunnel"
+        return "direct"
     return "proxy"
 
 
