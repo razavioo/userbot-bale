@@ -1,0 +1,121 @@
+"""Tests for the VPN supervisor: reconnect loop + checkpoint persistence."""
+
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+
+from baleobala.vpn.supervisor import (
+    SessionCheckpoint,
+    SupervisedRunner,
+    SupervisorConfig,
+    load_checkpoint,
+)
+
+
+class _FakeTun:
+    def __init__(self) -> None:
+        self.name = "tun-test"
+        self._closed = False
+
+    def read_packet(self, bufsize: int = 2048):  # noqa: ARG002
+        while not self._closed:
+            time.sleep(0.05)
+        return None
+
+    def write_packet(self, pkt: bytes) -> int:  # noqa: ARG002
+        return 0
+
+    def close(self) -> None:
+        self._closed = True
+
+
+class _FakeTransport:
+    """Transport that 'dies' after a short time, so the supervisor reconnects."""
+
+    MTU_BYTES = 1024
+
+    def __init__(self, lifetime: float = 0.05) -> None:
+        self._lifetime = lifetime
+        self._started = time.time()
+        self._on_frame = None
+        self._closed = threading.Event()
+
+    def start(self, on_frame) -> None:  # pragma: no cover — not exercised
+        self._on_frame = on_frame
+
+    def send(self, frame: bytes) -> None:  # pragma: no cover
+        pass
+
+    def close(self) -> None:
+        self._closed.set()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed.is_set() or (time.time() - self._started) > self._lifetime
+
+
+def test_checkpoint_roundtrip(tmp_path: Path) -> None:
+    cp = SessionCheckpoint(peer="bob", sess_id=42, backend="linux-tun", tun_name="vpn0")
+    data = cp.to_dict()
+    restored = SessionCheckpoint.from_dict(data)
+    assert restored.peer == "bob"
+    assert restored.sess_id == 42
+    assert restored.backend == "linux-tun"
+
+
+def test_load_checkpoint_missing(tmp_path: Path) -> None:
+    assert load_checkpoint(tmp_path / "absent.json") is None
+
+
+def test_supervisor_retries_transport_factory_failures(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def factory():
+        calls["n"] += 1
+        raise RuntimeError("boom")
+
+    sup = SupervisedRunner(
+        _FakeTun(),
+        factory,
+        supervisor_config=SupervisorConfig(
+            initial_backoff=0.02, max_backoff=0.02, backoff_factor=1.0, max_retries=None
+        ),
+        checkpoint_path=tmp_path / "ck.json",
+    )
+    sup.start()
+    time.sleep(0.15)
+    sup.stop()
+    assert calls["n"] >= 2
+
+    ck = load_checkpoint(tmp_path / "ck.json")
+    # stop() unlinks the checkpoint on clean shutdown
+    assert ck is None
+
+
+def test_supervisor_persists_checkpoint_while_running(tmp_path: Path) -> None:
+    path = tmp_path / "ck.json"
+
+    factory_event = threading.Event()
+
+    def factory():
+        factory_event.set()
+        raise RuntimeError("blocked")
+
+    sup = SupervisedRunner(
+        _FakeTun(),
+        factory,
+        supervisor_config=SupervisorConfig(
+            initial_backoff=1.0, max_backoff=1.0, max_retries=None
+        ),
+        checkpoint_path=path,
+    )
+    sup.start()
+    assert factory_event.wait(1.0)
+    # give the supervisor a moment to persist after the first factory failure
+    time.sleep(0.05)
+    ck = load_checkpoint(path)
+    assert ck is not None
+    assert ck.last_error == "blocked"
+    sup.stop()

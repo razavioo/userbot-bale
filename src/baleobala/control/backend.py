@@ -332,4 +332,7 @@ def backend_for_profile(profile: VpnProfile) -> VpnBackend:
         )
     if backend == "proxy":
         return ProxyFallbackBackend(listen_host=profile.listen_host, listen_port=profile.listen_port)
+    if backend == "linux-tun":
+        from baleobala.control.linux import LinuxTunBackend
+        return LinuxTunBackend()
     return MacOSPacketTunnelBackend()
