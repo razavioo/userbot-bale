@@ -77,7 +77,7 @@ If these pass, the codec and tunnel core are healthy and the local machine has t
 - If `baleobala doctor` is green but the proxy still fails, test `baleobala tunnel-loopback` first so we know the byte-tunnel core is healthy.
 - If `baleobala vpn up` complains about auth or your stored JWT has expired, run `baleobala auth login` first and then retry with the saved session.
 - If `baleobala relay enable` says there is no pairing record, create one with `baleobala pair start` and `baleobala pair accept` first.
-- If a paired relay already exists locally, `baleobala vpn up` will use it automatically.
+- If a paired relay already exists locally, `baleobala vpn up` will use the most recently used paired relay automatically.
 - If you want the app to come back on login on macOS, run `baleobala vpn agent install` once after pairing.
 - On macOS, `vpn up` now prefers the packet-tunnel backend recorded in the saved profile. If you explicitly choose the proxy fallback, `vpn down` restores the stored system proxy settings.
 
