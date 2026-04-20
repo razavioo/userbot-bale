@@ -378,7 +378,63 @@ def build_parser() -> argparse.ArgumentParser:
                     help="send: single message; omit to read lines from stdin")
     bc.set_defaults(func=cmd_bale_call)
 
+    ba = sub.add_parser(
+        "bale-auth",
+        help="phone/SMS login flow → prints a JWT. app_id+api_key must "
+             "be captured from web.bale.ai (see docs/BALE_HEADLESS.md).",
+    )
+    ba.add_argument("--phone", required=True, help="phone in E.164, with or without '+'")
+    ba.add_argument("--app-id", type=int, required=True)
+    ba.add_argument("--api-key", required=True)
+    ba.add_argument("--device-title", default="baleobala")
+    ba.add_argument("--device-hash-hex", default=None,
+                    help="hex-encoded device hash (default: random 16B)")
+    ba.set_defaults(func=cmd_bale_auth)
+
+    from baleobala.vpn.cli import add_vpn_subparser
+    add_vpn_subparser(sub)
+
     return p
+
+
+def cmd_bale_auth(args: argparse.Namespace) -> int:
+    import os, secrets
+    from baleobala.bale import BaleApiClient
+
+    phone = str(args.phone).lstrip("+")
+    if not phone.isdigit():
+        raise SystemExit("invalid phone number (digits only, optional +)")
+    device_hash = (
+        bytes.fromhex(args.device_hash_hex)
+        if args.device_hash_hex else secrets.token_bytes(16)
+    )
+
+    # Start WS without JWT — it will fail unless the transport
+    # supports unauthenticated RPCs. Bale's auth endpoint does; others
+    # don't. See BaleApiClient source.
+    client = BaleApiClient(jwt="")  # type: ignore[arg-type]
+    try:
+        client.start()
+    except Exception as e:
+        raise SystemExit(
+            f"could not establish unauthenticated WS: {e}. Bale may "
+            f"require a bootstrap token; capture web.bale.ai's own."
+        )
+    try:
+        tx = client.start_phone_auth(
+            phone_number=int(phone),
+            app_id=args.app_id,
+            api_key=args.api_key,
+            device_hash=device_hash,
+            device_title=args.device_title,
+        )
+        print(f"SMS sent. transaction_hash = {tx}", file=sys.stderr)
+        code = input("SMS code: ").strip()
+        resp = client.validate_code(tx, code)
+        print(resp.jwt)
+    finally:
+        client.stop()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

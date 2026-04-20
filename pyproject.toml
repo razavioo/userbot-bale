@@ -36,6 +36,11 @@ bale = [
   "livekit>=0.17",
   "livekit-api>=0.7",
 ]
+vpn-video = [
+  "opencv-python-headless>=4.8",
+  "qrcode>=7",
+  "pillow>=10",
+]
 
 [project.scripts]
 baleobala = "baleobala.cli:main"
