@@ -22,13 +22,21 @@ class StartSmsWorker(QObject):
         self._phone = phone.lstrip("+").strip()
 
     def run(self) -> None:
-        from baleobala.bale.auth import BaleAuth
         from baleobala.bale.grpc_web import GrpcWebError
 
         if not self._phone.isdigit():
             self.failed.emit("Phone must be digits (with or without +).")
             return
-        self._auth = BaleAuth()
+        # Prefer browser-based auth (real Chrome TLS fingerprint → server
+        # sets JWT cookie). Fall back to direct httpx if Playwright is absent.
+        try:
+            from baleobala.bale.auth_browser import BaleAuthBrowser
+            self._auth = BaleAuthBrowser()
+            log.info("Using browser auth (Playwright)")
+        except ImportError:
+            from baleobala.bale.auth import BaleAuth
+            self._auth = BaleAuth()
+            log.info("Using direct gRPC-Web auth")
         try:
             tx = self._auth.start_phone_auth(int(self._phone))
         except GrpcWebError as e:
