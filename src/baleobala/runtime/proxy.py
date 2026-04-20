@@ -26,11 +26,13 @@ HEADER_SIZE = struct.calcsize(HEADER_FMT)
 
 
 class ProxyPacketType(IntEnum):
+    HELLO = 0
     OPEN = 1
     OPEN_OK = 2
     DATA = 3
     CLOSE = 4
     ERROR = 5
+    HELLO_ACK = 6
 
 
 @dataclass(frozen=True)
@@ -298,6 +300,7 @@ class ProxyHub:
         self._queues: dict[int, "queue.Queue[ProxyPacket | object]"] = {}
         self._general: "queue.Queue[ProxyPacket | object]" = queue.Queue()
         self._stop = threading.Event()
+        self._ready = threading.Event()
         self._sentinel = object()
         self._reader = threading.Thread(target=self._pump, daemon=True)
         self._reader.start()
@@ -311,6 +314,12 @@ class ProxyHub:
                 continue
             packet = ProxyPacket.decode(raw, self._secret)
             if packet is None:
+                continue
+            if packet.packet_type == ProxyPacketType.HELLO:
+                self.send(ProxyPacket(packet_type=ProxyPacketType.HELLO_ACK, conn_id=0, payload=packet.payload))
+                continue
+            if packet.packet_type == ProxyPacketType.HELLO_ACK:
+                self._ready.set()
                 continue
             with self._send_lock:
                 queue_for_conn = self._queues.get(packet.conn_id)
@@ -331,6 +340,19 @@ class ProxyHub:
             raise RuntimeError("proxy hub closed")
         with self._send_lock:
             self._transport.send(packet.encode(self._secret))
+
+    def negotiate(self, timeout: float = 3.0) -> bool:
+        if self.closed:
+            return False
+        self._ready.clear()
+        self.send(
+            ProxyPacket(
+                packet_type=ProxyPacketType.HELLO,
+                conn_id=0,
+                payload=b"proxy-v1",
+            )
+        )
+        return self._ready.wait(timeout=timeout)
 
     def register(self, conn_id: int) -> "queue.Queue[ProxyPacket | object]":
         with self._send_lock:
@@ -407,6 +429,8 @@ class Socks5ProxyServer:
         self._hub.close()
 
     def serve_once(self) -> None:
+        if not self._hub.negotiate():
+            raise TimeoutError("proxy handshake failed")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._listen_host, self._listen_port))
@@ -423,6 +447,8 @@ class Socks5ProxyServer:
                 return
 
     def serve_forever(self) -> None:
+        if not self._hub.negotiate():
+            raise TimeoutError("proxy handshake failed")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._listen_host, self._listen_port))
@@ -610,6 +636,8 @@ class TunnelTcpRelay:
         self._hub.close()
 
     def serve_once(self) -> None:
+        if not self._hub.negotiate():
+            raise TimeoutError("proxy handshake failed")
         while not self._stop.is_set():
             packet = self._hub.accept_open(timeout=0.25)
             if packet is None:
@@ -622,6 +650,8 @@ class TunnelTcpRelay:
             return
 
     def serve_forever(self) -> None:
+        if not self._hub.negotiate():
+            raise TimeoutError("proxy handshake failed")
         while not self._stop.is_set():
             if self._transport_closed():
                 return

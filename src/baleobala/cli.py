@@ -7,11 +7,17 @@ Subcommands:
     devices  list audio devices sounddevice can see
     virtmic  create a virtual microphone and wait (Ctrl-C to tear down)
     loopback self-test: send → decode → compare, no virtual mic needed
+    doctor   print a local readiness report
+    auth     manage local auth/session state
+    pair     manage relay pairing records
+    relay    manage relay runtime settings
+    vpn      run or inspect the product control plane
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import os
 import shutil
@@ -143,6 +149,426 @@ def cmd_virtmic(args: argparse.Namespace) -> int:
         except KeyboardInterrupt:
             print("\nTearing down virtual mic.")
     return 0
+
+
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Print a readiness report for the current machine."""
+    checks: list[tuple[str, bool, str]] = []
+    checks.append(("python", sys.version_info >= (3, 9), f"{sys.version_info.major}.{sys.version_info.minor}"))
+    checks.append(("pactl", shutil.which("pactl") is not None, shutil.which("pactl") or "missing"))
+    checks.append(("sounddevice", _module_available("sounddevice"), "available" if _module_available("sounddevice") else "missing"))
+    checks.append(("numpy", _module_available("numpy"), "available" if _module_available("numpy") else "missing"))
+    checks.append(("ggwave", _module_available("ggwave"), "available" if _module_available("ggwave") else "missing"))
+    checks.append(("PySide6", _module_available("PySide6"), "available" if _module_available("PySide6") else "missing"))
+
+    print("baleobala doctor")
+    print(f"platform: {sys.platform}")
+    print("")
+    missing_critical = []
+    for name, ok, detail in checks:
+        status = "OK" if ok else "MISSING"
+        print(f"{name:10} {status:8} {detail}")
+        if not ok and name in {"python", "pactl", "sounddevice"}:
+            missing_critical.append(name)
+
+    if sys.platform == "darwin":
+        print("")
+        print("macOS note: the current virtmic helper is Linux-only; use the desktop/VPN release path for the final product.")
+    else:
+        print("")
+        print("Linux note: the current virtual mic helper is available now; the full VPN path is tracked in docs/VPN_PLAN.md.")
+
+    if args.strict and missing_critical:
+        return 1
+    return 0
+
+
+def _read_secret_text(value: str | None, fallback_env: str, fallback_file: str | None = None) -> str | None:
+    if value:
+        return value
+    env_value = os.environ.get(fallback_env)
+    if env_value:
+        return env_value
+    if fallback_file is not None:
+        from pathlib import Path
+
+        path = Path(fallback_file)
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip()
+    return None
+
+
+def cmd_auth(args: argparse.Namespace) -> int:
+    from baleobala.control import AuthStore
+
+    store = AuthStore()
+    if args.auth_cmd == "login":
+        jwt = _read_secret_text(args.jwt, "BALE_JWT", args.jwt_file)
+        if not jwt:
+            raise SystemExit("Need --jwt, BALE_JWT, or --jwt-file for auth login.")
+        record = store.save_jwt(jwt, user_id=args.user_id, phone=args.phone)
+        print(f"saved auth for provider={record.provider} user_id={record.user_id or 'unknown'}")
+        return 0
+    if args.auth_cmd == "logout":
+        store.clear()
+        print("cleared auth store")
+        return 0
+    status = store.status()
+    for key, value in status.items():
+        print(f"{key}: {value}")
+    return 0
+
+
+def cmd_pair(args: argparse.Namespace) -> int:
+    from baleobala.control import PairingStore
+
+    store = PairingStore()
+    if args.pair_cmd == "start":
+        record = store.begin(
+            args.name,
+            role=args.role,
+            peer_id=args.peer_id,
+            peer_name=args.peer_name,
+            relay_mode=args.relay_mode,
+        )
+        print(f"profile_id: {record.profile_id}")
+        print(f"name: {record.name}")
+        print(f"role: {record.role}")
+        print(f"status: {record.status}")
+        print(f"pair_code: {record.pair_code}")
+        return 0
+    if args.pair_cmd == "accept":
+        record = store.accept(args.code, name=args.name)
+        print(f"profile_id: {record.profile_id}")
+        print(f"name: {record.name}")
+        print(f"role: {record.role}")
+        print(f"status: {record.status}")
+        print(f"pair_code: {record.pair_code}")
+        return 0
+    if args.pair_cmd == "remove":
+        store.remove(args.profile_id)
+        print(f"removed {args.profile_id}")
+        return 0
+
+    records = store.list()
+    if not records:
+        print("no pairings saved")
+        return 0
+    for record in records:
+        print(
+            f"{record.profile_id}\t{record.status}\t{record.role}\t{record.name}\t{record.pair_code}"
+        )
+    return 0
+
+
+def cmd_relay(args: argparse.Namespace) -> int:
+    from baleobala.control import PairingStore, VpnProfile, VpnStore
+    from baleobala.control.vpn import default_vpn_backend
+
+    pairing_store = PairingStore()
+    vpn_store = VpnStore()
+    if args.relay_cmd == "enable":
+        profile = None
+        if args.profile_id:
+            profile = pairing_store.get(args.profile_id)
+        if profile is None:
+            profile = pairing_store.active()
+        if profile is None:
+            raise SystemExit("Need a pairing profile before enabling relay.")
+        vpn_profile = VpnProfile(
+            profile_id=profile.profile_id,
+            name=args.name or profile.name,
+            role="relay",
+            pairing_id=profile.profile_id,
+            peer_id=profile.peer_id,
+            peer_name=profile.peer_name,
+            answer=True,
+            backend=args.backend or default_vpn_backend(),
+            auto_start=args.auto_start,
+            listen_host=args.listen_host,
+            listen_port=args.listen_port,
+            protocol=args.protocol,
+            volume=args.volume,
+            proxy_secret=args.proxy_secret,
+        )
+        vpn_store.save(vpn_profile)
+        print(f"enabled relay profile {vpn_profile.profile_id}")
+        return 0
+    if args.relay_cmd == "disable":
+        vpn_store.save(VpnProfile(profile_id="disabled", name="disabled", backend="proxy", role="relay"))
+        print("relay disabled")
+        return 0
+    status = vpn_store.status()
+    for key, value in status.items():
+        print(f"{key}: {value}")
+    return 0
+
+
+def _vpn_namespace_from_profile(profile, auth_record):
+    import argparse as _argparse
+
+    ns = _argparse.Namespace()
+    ns.listen_host = profile.listen_host
+    ns.listen_port = profile.listen_port
+    ns.livekit_url = None
+    ns.livekit_token = None
+    ns.livekit_room = None
+    ns.bale_jwt = auth_record.jwt if auth_record is not None else None
+    ns.bale_jwt_file = None
+    ns.peer_id = profile.peer_id
+    ns.peer = None
+    ns.peer_name = profile.peer_name
+    ns.answer = profile.answer
+    ns.answer_timeout = 120.0
+    ns.identity = profile.name
+    ns.protocol = profile.protocol
+    ns.volume = profile.volume
+    ns.proxy_secret = profile.proxy_secret
+    return ns
+
+
+def _hold_backend(endpoint: str, *, label: str) -> int:
+    print(f"{label}: {endpoint}", file=sys.stderr)
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        return 0
+
+
+def _start_packet_tunnel_runtime(profile, auth_record):
+    from baleobala.control import CarrierTunnelService
+    from baleobala.control.paths import config_dir
+    from baleobala.runtime.frame import TunnelRole
+
+    args = _vpn_namespace_from_profile(profile, auth_record)
+    role = TunnelRole.SERVER if profile.role == "relay" else TunnelRole.CLIENT
+    bridge = _open_audio_tunnel(args, role)
+    socket_path = config_dir() / "runtime" / f"{profile.profile_id}.sock"
+    runtime = CarrierTunnelService(
+        bridge,
+        socket_path=socket_path,
+        manage_bridge=False,
+    )
+    return runtime, bridge
+
+
+def cmd_vpn(args: argparse.Namespace) -> int:
+    from baleobala.control import AuthStore, PairingStore, VpnProfile, VpnStore
+    from baleobala.control.backend import backend_for_profile, default_backend_name
+    from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+
+    vpn_store = VpnStore()
+    auth_store = AuthStore()
+    pairing_store = PairingStore()
+
+    if args.vpn_cmd == "plan":
+        print("baleobala vpn plan")
+        if sys.platform == "darwin":
+            print("target: macOS packet-tunnel backend by default")
+            print("fallback: macOS system proxy bridge for debugging and recovery")
+            print("next: wire the native packet-tunnel extension and signed desktop app")
+        else:
+            print("target: Linux TUN + route/DNS helper")
+            print("next: wire a privileged helper for route and DNS changes")
+        print("carrier: Bale LiveKit credentials + tunnel runtime underneath")
+        return 0
+
+    if args.vpn_cmd == "agent":
+        if sys.platform != "darwin":
+            raise SystemExit("vpn agent is only available on macOS.")
+        manager = MacOSLaunchAgentManager()
+        if args.agent_cmd == "install":
+            path = manager.install(profile_id=args.profile_id)
+            print(f"installed launch agent: {path}")
+            return 0
+        if args.agent_cmd == "remove":
+            manager.remove()
+            print("removed launch agent")
+            return 0
+        if args.agent_cmd == "start":
+            manager.start()
+            print("started launch agent")
+            return 0
+        if args.agent_cmd == "stop":
+            manager.stop()
+            print("stopped launch agent")
+            return 0
+        status = manager.status()
+        for key, value in status.items():
+            print(f"{key}: {value}")
+        return 0
+
+    if args.vpn_cmd == "status":
+        auth_status = auth_store.status()
+        vpn_status = vpn_store.status()
+        pairing = pairing_store.active()
+        profile = vpn_store.load() or vpn_store.ensure_default()
+        backend = backend_for_profile(profile)
+        print("auth:")
+        for key, value in auth_status.items():
+            print(f"  {key}: {value}")
+        print("vpn:")
+        for key, value in vpn_status.items():
+            print(f"  {key}: {value}")
+        print("backend:")
+        for key, value in backend.status().items():
+            print(f"  {key}: {value}")
+        if sys.platform == "darwin" and profile.backend == "proxy":
+            from baleobala.control.macos import MacOSSystemProxySession
+            system_proxy = MacOSSystemProxySession(state_path=None)
+            print("system_proxy:")
+            for key, value in system_proxy.status().items():
+                print(f"  {key}: {value}")
+        print("pairing:")
+        if pairing is None:
+            print("  state: empty")
+        else:
+            print(f"  profile_id: {pairing.profile_id}")
+            print(f"  name: {pairing.name}")
+            print(f"  role: {pairing.role}")
+            print(f"  status: {pairing.status}")
+        return 0
+
+    if args.vpn_cmd == "down":
+        profile = vpn_store.load() or vpn_store.ensure_default()
+        backend = backend_for_profile(profile)
+        backend.down()
+        if sys.platform == "darwin" and profile.backend == "proxy":
+            from baleobala.control.macos import MacOSSystemProxySession
+            restored = MacOSSystemProxySession.restore_saved_state()
+            if restored:
+                print("restored macOS proxy settings")
+            else:
+                print("no saved macOS proxy state found")
+            return 0
+        if sys.platform == "darwin":
+            print("stopped macOS packet-tunnel backend")
+            return 0
+        print("vpn down: stop the foreground session with Ctrl-C if it is running, and clear saved runtime state.")
+        return 0
+
+    profile = vpn_store.load()
+    if profile is None:
+        profile = vpn_store.ensure_default()
+    if getattr(args, "backend", None):
+        profile = VpnProfile(
+            profile_id=profile.profile_id,
+            name=profile.name,
+            backend=args.backend,
+            role=profile.role,
+            pairing_id=profile.pairing_id,
+            peer_id=profile.peer_id,
+            peer_name=profile.peer_name,
+            answer=profile.answer,
+            auto_start=profile.auto_start,
+            listen_host=profile.listen_host,
+            listen_port=profile.listen_port,
+            protocol=profile.protocol,
+            volume=profile.volume,
+            proxy_secret=profile.proxy_secret,
+        )
+        vpn_store.save(profile)
+    if profile.pairing_id is None:
+        active_pairing = pairing_store.active()
+        if active_pairing is not None:
+            profile = VpnProfile(
+                profile_id=active_pairing.name,
+                name=active_pairing.name,
+                backend=profile.backend or default_backend_name(),
+                role=active_pairing.role,
+                pairing_id=active_pairing.profile_id,
+                peer_id=active_pairing.peer_id,
+                peer_name=active_pairing.peer_name,
+                answer=active_pairing.role == "relay",
+                proxy_secret=profile.proxy_secret,
+                listen_host=profile.listen_host,
+                listen_port=profile.listen_port,
+                protocol=profile.protocol,
+                volume=profile.volume,
+            )
+            vpn_store.save(profile)
+    if args.profile_id:
+        pairing = pairing_store.get(args.profile_id)
+        if pairing is None:
+            raise SystemExit(f"no pairing profile {args.profile_id!r} found")
+        profile = VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend=profile.backend or default_backend_name(),
+            role=pairing.role,
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+            answer=pairing.role == "relay",
+            proxy_secret=profile.proxy_secret,
+            listen_host=profile.listen_host,
+            listen_port=profile.listen_port,
+            protocol=profile.protocol,
+            volume=profile.volume,
+        )
+        vpn_store.save(profile)
+
+    auth_record = auth_store.load()
+    if auth_record is None and profile.backend == "proxy":
+        print("warning: no stored auth session; the current proxy path may still require explicit Bale credentials.", file=sys.stderr)
+
+    if profile.role == "relay":
+        relay_args = _vpn_namespace_from_profile(profile, auth_record)
+        backend = backend_for_profile(profile)
+        backend_state = backend.up(profile)
+        try:
+            if profile.backend == "proxy":
+                return cmd_bale_proxy_relay(relay_args)
+            runtime, bridge = _start_packet_tunnel_runtime(profile, auth_record)
+            try:
+                runtime_state = runtime.start(
+                    profile_id=profile.profile_id,
+                    backend=profile.backend,
+                    pairing_id=profile.pairing_id,
+                )
+                return _hold_backend(
+                    runtime_state.endpoint or "local service",
+                    label="macOS packet-tunnel backend active",
+                )
+            finally:
+                runtime.stop()
+                bridge.close()
+        finally:
+            backend.down()
+
+    client_args = _vpn_namespace_from_profile(profile, auth_record)
+    backend = backend_for_profile(profile)
+    backend_state = backend.up(profile)
+    try:
+        if profile.backend == "proxy":
+            print(
+                "macOS system proxy active:",
+                backend_state.get("proxy", f"{profile.listen_host}:{profile.listen_port}"),
+                file=sys.stderr,
+            )
+            return cmd_bale_proxy_client(client_args)
+        else:
+            runtime, bridge = _start_packet_tunnel_runtime(profile, auth_record)
+            try:
+                runtime_state = runtime.start(
+                    profile_id=profile.profile_id,
+                    backend=profile.backend,
+                    pairing_id=profile.pairing_id,
+                )
+                return _hold_backend(
+                    runtime_state.endpoint or "local service",
+                    label="macOS packet-tunnel backend active",
+                )
+            finally:
+                runtime.stop()
+                bridge.close()
+    finally:
+        backend.down()
 
 
 def cmd_loopback(args: argparse.Namespace) -> int:
@@ -450,6 +876,106 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("devices", help="list audio devices")
     d.set_defaults(func=cmd_devices)
+
+    doc = sub.add_parser("doctor", help="check local readiness for baleobala")
+    doc.add_argument("--strict", action="store_true", help="return nonzero when critical deps are missing")
+    doc.set_defaults(func=cmd_doctor)
+
+    auth = sub.add_parser("auth", help="manage local auth/session state")
+    auth_sub = auth.add_subparsers(dest="auth_cmd", required=True)
+
+    auth_login = auth_sub.add_parser("login", help="store a Bale JWT for later use")
+    auth_login.add_argument("--jwt", default=None)
+    auth_login.add_argument("--jwt-file", default=None)
+    auth_login.add_argument("--user-id", type=int, default=None)
+    auth_login.add_argument("--phone", default=None)
+    auth_login.set_defaults(func=cmd_auth)
+
+    auth_logout = auth_sub.add_parser("logout", help="clear stored auth state")
+    auth_logout.set_defaults(func=cmd_auth)
+
+    auth_status = auth_sub.add_parser("status", help="show stored auth state")
+    auth_status.set_defaults(func=cmd_auth)
+
+    pair = sub.add_parser("pair", help="manage relay pairing records")
+    pair_sub = pair.add_subparsers(dest="pair_cmd", required=True)
+
+    pair_start = pair_sub.add_parser("start", help="create a pending pairing record")
+    pair_start.add_argument("--name", default="relay")
+    pair_start.add_argument("--role", choices=["client", "relay"], default="client")
+    pair_start.add_argument("--peer-id", type=int, default=None)
+    pair_start.add_argument("--peer-name", default=None)
+    pair_start.add_argument("--relay-mode", choices=["proxy"], default="proxy")
+    pair_start.set_defaults(func=cmd_pair)
+
+    pair_accept = pair_sub.add_parser("accept", help="accept a pairing code")
+    pair_accept.add_argument("--code", required=True)
+    pair_accept.add_argument("--name", default=None)
+    pair_accept.set_defaults(func=cmd_pair)
+
+    pair_list = pair_sub.add_parser("list", help="list pairing records")
+    pair_list.set_defaults(func=cmd_pair)
+
+    pair_remove = pair_sub.add_parser("remove", help="remove a pairing record")
+    pair_remove.add_argument("--profile-id", required=True)
+    pair_remove.set_defaults(func=cmd_pair)
+
+    relay = sub.add_parser("relay", help="manage relay runtime settings")
+    relay_sub = relay.add_subparsers(dest="relay_cmd", required=True)
+
+    relay_enable = relay_sub.add_parser("enable", help="save relay settings")
+    relay_enable.add_argument("--profile-id", default=None)
+    relay_enable.add_argument("--name", default=None)
+    relay_enable.add_argument("--backend", choices=["packet-tunnel", "proxy"], default=None)
+    relay_enable.add_argument("--auto-start", action="store_true")
+    relay_enable.add_argument("--listen-host", default="127.0.0.1")
+    relay_enable.add_argument("--listen-port", type=int, default=1080)
+    relay_enable.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
+    relay_enable.add_argument("--volume", type=int, default=50)
+    relay_enable.add_argument("--proxy-secret", default=None)
+    relay_enable.set_defaults(func=cmd_relay)
+
+    relay_disable = relay_sub.add_parser("disable", help="clear relay settings")
+    relay_disable.set_defaults(func=cmd_relay)
+
+    relay_status = relay_sub.add_parser("status", help="show relay settings")
+    relay_status.set_defaults(func=cmd_relay)
+
+    vpn = sub.add_parser("vpn", help="run or inspect the VPN control plane")
+    vpn_sub = vpn.add_subparsers(dest="vpn_cmd", required=True)
+
+    vpn_up = vpn_sub.add_parser("up", help="start the current VPN backend")
+    vpn_up.add_argument("--profile-id", default=None)
+    vpn_up.add_argument("--backend", choices=["packet-tunnel", "proxy"], default=None)
+    vpn_up.set_defaults(func=cmd_vpn)
+
+    vpn_down = vpn_sub.add_parser("down", help="stop the current VPN backend")
+    vpn_down.set_defaults(func=cmd_vpn)
+
+    vpn_status = vpn_sub.add_parser("status", help="show VPN control-plane state")
+    vpn_status.set_defaults(func=cmd_vpn)
+
+    vpn_plan = vpn_sub.add_parser("plan", help="print the system VPN delivery plan")
+    vpn_plan.set_defaults(func=cmd_vpn)
+
+    vpn_agent = vpn_sub.add_parser("agent", help="manage the macOS LaunchAgent")
+    vpn_agent_sub = vpn_agent.add_subparsers(dest="agent_cmd", required=True)
+
+    vpn_agent_install = vpn_agent_sub.add_parser("install", help="install the LaunchAgent")
+    vpn_agent_install.add_argument("--profile-id", default=None)
+    vpn_agent_install.set_defaults(func=cmd_vpn)
+
+    vpn_agent_remove = vpn_agent_sub.add_parser("remove", help="remove the LaunchAgent")
+    vpn_agent_remove.set_defaults(func=cmd_vpn)
+
+    vpn_agent_start = vpn_agent_sub.add_parser("start", help="start the LaunchAgent")
+    vpn_agent_start.set_defaults(func=cmd_vpn)
+
+    vpn_agent_stop = vpn_agent_sub.add_parser("stop", help="stop the LaunchAgent")
+    vpn_agent_stop.set_defaults(func=cmd_vpn)
+
+    vpn_agent_status = vpn_agent_sub.add_parser("status", help="show LaunchAgent state")
+    vpn_agent_status.set_defaults(func=cmd_vpn)
 
     v = sub.add_parser("virtmic", help="create a virtual microphone and hold it open")
     v.add_argument("--name", default="baleobala")
