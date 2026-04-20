@@ -36,7 +36,7 @@ sudo ./scripts/vpn-setup-tun.sh vpn0 10.77.0.1/24 1400 "$USER"
 sudo ./scripts/vpn-exit-node.sh vpn0 eth0
 ```
 
-The `vpn exit-node` subcommand runs this second script automatically on
+The `tunnel exit-node` subcommand runs this second script automatically on
 startup (use `--skip-nat-setup` to disable).
 
 ## Bringing the tunnel up
@@ -44,7 +44,7 @@ startup (use `--skip-nat-setup` to disable).
 ### Exit node side (start first — it needs to answer the call)
 
 ```bash
-baleobala vpn exit-node \
+baleobala tunnel exit-node \
   --bale-jwt-file /etc/baleobala/jwt.txt \
   --tun vpn0 \
   --wan eth0 \
@@ -54,13 +54,13 @@ baleobala vpn exit-node \
 ### Client side
 
 ```bash
-baleobala vpn up \
+baleobala tunnel up \
   --bale-jwt-file ~/.bale_jwt \
   --peer-id 123456789 \
   --tun vpn0
 ```
 
-Once both sides print `[vpn] up`, test:
+Once both sides print `[tunnel] up`, test:
 
 ```bash
 ping -c 3 10.77.0.1                # exit node over tunnel
@@ -99,7 +99,7 @@ call becomes its own per-client tunnel mapped to a unique `/30` inside
 the pool:
 
 ```bash
-baleobala vpn exit-node-mesh \
+baleobala tunnel exit-node-mesh \
   --bale-jwt-file /etc/baleobala/jwt.txt \
   --tun vpn0 --wan eth0 \
   --pool-cidr 10.77.0.0/16 \
@@ -119,8 +119,8 @@ above the Bale transport — otherwise the Bale SFU sees plaintext
 VPN frames:
 
 ```bash
-baleobala vpn up --bale-jwt-file … --peer-id <id> --psk-file ~/.baleo-psk
-baleobala vpn exit-node --bale-jwt-file … --psk-file /etc/baleobala/vpn.psk
+baleobala tunnel up --bale-jwt-file … --peer-id <id> --psk-file ~/.baleo-psk
+baleobala tunnel exit-node --bale-jwt-file … --psk-file /etc/baleobala/vpn.psk
 ```
 
 ## Authentication
@@ -147,6 +147,6 @@ chmod 0600 ~/.bale_jwt
 ## Self-test (no network)
 
 ```bash
-baleobala vpn loopback --packets 100 --size 1400
-baleobala vpn loopback --packets 50  --size 1400 --loss 0.2   # ARQ test
+baleobala tunnel loopback --packets 100 --size 1400
+baleobala tunnel loopback --packets 50  --size 1400 --loss 0.2   # ARQ test
 ```

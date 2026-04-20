@@ -12,7 +12,7 @@ The first release should feel like a normal VPN:
 - connect,
 - and route all device traffic through the tunnel.
 
-The current repo already has the tunnel, proxy, and carrier split. The remaining work is to finish the auth/pairing layer, keep the macOS packet-tunnel path as the default system-VPN backend, preserve the proxy bridge as fallback/debug mode, and package the result for easy install.
+The current repo already has the tunnel, proxy, and carrier split. The Linux TUN backend is now wired into the control plane. The remaining work is to finish the auth/pairing layer, keep the macOS packet-tunnel path as the default system-VPN backend, preserve the proxy bridge as fallback/debug mode, and package the result for easy install.
 
 The repo now also has a first-pass product control plane:
 
@@ -55,8 +55,7 @@ If a paired relay already exists locally, `vpn up --backend proxy` will select i
 - Keep a CLI for `auth`, `pair`, `relay`, `vpn`, `proxy`, and `doctor`.
 
 ### Phase 3
-- Add Linux TUN plumbing and route/DNS management.
-- Add macOS packet-tunnel plumbing and route/DNS management.
+- Finish macOS packet-tunnel plumbing and route/DNS management.
 - Wire the desktop app to the same service layer as the CLI.
 
 ### Phase 4

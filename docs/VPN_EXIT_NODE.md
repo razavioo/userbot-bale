@@ -48,7 +48,7 @@ Wants=network-online.target
 Type=simple
 User=baleobala
 WorkingDirectory=/opt/baleobala
-ExecStart=/opt/baleobala/.venv/bin/baleobala vpn exit-node \
+ExecStart=/opt/baleobala/.venv/bin/baleobala tunnel exit-node \
     --bale-jwt-file /etc/baleobala/jwt.txt \
     --tun vpn0 --wan eth0 --answer --skip-nat-setup
 Restart=on-failure

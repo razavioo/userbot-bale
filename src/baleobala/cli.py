@@ -331,6 +331,22 @@ def _vpn_namespace_from_profile(profile, auth_record):
     return ns
 
 
+def _tunnel_namespace_from_profile(profile, auth_record):
+    import argparse as _argparse
+
+    ns = _vpn_namespace_from_profile(profile, auth_record)
+    ns.tun = "vpn0"
+    ns.tun_addr = "10.77.0.1/24" if profile.role == "relay" else "10.77.0.2/24"
+    ns.tun_mtu = 1400
+    ns.transport = "auto"
+    ns.sess_id = 0x1111
+    ns.psk = None
+    ns.psk_file = None
+    ns.wan = "eth0"
+    ns.skip_nat_setup = False
+    return ns
+
+
 def _hold_backend(endpoint: str, *, label: str) -> int:
     print(f"{label}: {endpoint}", file=sys.stderr)
     try:
@@ -516,6 +532,22 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     auth_record = auth_store.load()
     if auth_record is None and profile.backend == "proxy":
         print("warning: no stored auth session; the current proxy path may still require explicit Bale credentials.", file=sys.stderr)
+
+    if profile.backend == "linux-tun":
+        from baleobala.vpn.cli import _run_nat_setup, _run_tunnel_session
+
+        tunnel_args = _tunnel_namespace_from_profile(profile, auth_record)
+        backend = backend_for_profile(profile)
+        backend.up(profile)
+        try:
+            if profile.role == "relay":
+                _run_nat_setup(tunnel_args.tun, tunnel_args.wan)
+            return _run_tunnel_session(
+                tunnel_args,
+                is_exit_node=profile.role == "relay",
+            )
+        finally:
+            backend.down()
 
     if profile.role == "relay":
         relay_args = _vpn_namespace_from_profile(profile, auth_record)
@@ -943,7 +975,7 @@ def build_parser() -> argparse.ArgumentParser:
     relay_enable = relay_sub.add_parser("enable", help="save relay settings")
     relay_enable.add_argument("--profile-id", default=None)
     relay_enable.add_argument("--name", default=None)
-    relay_enable.add_argument("--backend", choices=["packet-tunnel", "proxy"], default=None)
+    relay_enable.add_argument("--backend", choices=["packet-tunnel", "proxy", "linux-tun"], default=None)
     relay_enable.add_argument("--auto-start", action="store_true")
     relay_enable.add_argument("--listen-host", default="127.0.0.1")
     relay_enable.add_argument("--listen-port", type=int, default=1080)
@@ -963,7 +995,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     vpn_up = vpn_sub.add_parser("up", help="start the current VPN backend")
     vpn_up.add_argument("--profile-id", default=None)
-    vpn_up.add_argument("--backend", choices=["packet-tunnel", "proxy"], default=None)
+    vpn_up.add_argument("--backend", choices=["packet-tunnel", "proxy", "linux-tun"], default=None)
     vpn_up.set_defaults(func=cmd_vpn)
 
     vpn_down = vpn_sub.add_parser("down", help="stop the current VPN backend")
@@ -1123,8 +1155,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="hex-encoded device hash (default: random 16B)")
     ba.set_defaults(func=cmd_bale_auth)
 
-    from baleobala.vpn.cli import add_vpn_subparser
-    add_vpn_subparser(sub)
+    g = sub.add_parser("gui", help="launch the Qt GUI (login + connect)")
+    g.set_defaults(func=cmd_gui)
+
+    from baleobala.vpn.cli import add_tunnel_subparser
+    add_tunnel_subparser(sub)
 
     return p
 
@@ -1175,6 +1210,17 @@ def cmd_bale_auth(args: argparse.Namespace) -> int:
 
     print(session.jwt)
     return 0
+
+
+def cmd_gui(args: argparse.Namespace) -> int:
+    try:
+        from baleobala.gui import run
+    except ImportError as e:
+        raise SystemExit(
+            "GUI requires PySide6. Install with: pip install -e \".[desktop]\" "
+            f"(import failed: {e})"
+        )
+    return run()
 
 
 def main(argv: list[str] | None = None) -> int:

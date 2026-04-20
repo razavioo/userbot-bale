@@ -28,6 +28,23 @@ def _socket_path(candidate: Path, *, prefix: str) -> Path:
     return short_dir / f"{prefix}-{digest}.sock"
 
 
+def _bind_unix_socket(server: socket.socket, socket_path: Path) -> None:
+    """Bind a UNIX socket, removing stale files first if needed."""
+    for attempt in range(2):
+        try:
+            if socket_path.exists() or socket_path.is_socket():
+                socket_path.unlink()
+        except OSError:
+            pass
+        try:
+            server.bind(str(socket_path))
+            return
+        except FileExistsError:
+            if attempt == 0:
+                continue
+            raise
+
+
 @runtime_checkable
 class TunnelBridge(Protocol):
     def start(self) -> None:
@@ -106,13 +123,8 @@ class LocalTunnelService(TunnelService):
         if self._server is not None:
             self.stop()
         self._stop.clear()
-        try:
-            if self._socket_path.exists():
-                self._socket_path.unlink()
-        except OSError:
-            pass
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(self._socket_path))
+        _bind_unix_socket(server, self._socket_path)
         server.listen(1)
         server.settimeout(0.25)
         self._server = server
@@ -236,13 +248,8 @@ class CarrierTunnelService(TunnelService):
         self._stop.clear()
         if self._manage_bridge:
             self._bridge.start()
-        try:
-            if self._socket_path.exists():
-                self._socket_path.unlink()
-        except OSError:
-            pass
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(self._socket_path))
+        _bind_unix_socket(server, self._socket_path)
         server.listen(1)
         server.settimeout(0.25)
         self._server = server

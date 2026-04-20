@@ -1,5 +1,5 @@
 """
-`baleobala vpn …` subcommands.
+`baleobala tunnel …` subcommands.
 
 Subcommands:
     up          Client side: bring up a TUN, place a Bale call, tunnel IP.
@@ -24,9 +24,9 @@ log = logging.getLogger(__name__)
 
 # --- argparse wiring (called by baleobala.cli.build_parser) --------------
 
-def add_vpn_subparser(sub: "argparse._SubParsersAction") -> None:
-    vpn = sub.add_parser("vpn", help="IP tunnel over a Bale call")
-    vpn_sub = vpn.add_subparsers(dest="vpn_cmd", required=True)
+def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
+    tunnel = sub.add_parser("tunnel", help="IP tunnel over a Bale call")
+    vpn_sub = tunnel.add_subparsers(dest="vpn_cmd", required=True)
 
     up = vpn_sub.add_parser("up", help="client: place a call and tunnel IP")
     _add_bale_creds_opts(up)
@@ -83,6 +83,10 @@ def add_vpn_subparser(sub: "argparse._SubParsersAction") -> None:
     lb.add_argument("--loss", type=float, default=0.0,
                     help="simulated per-frame drop probability 0..1")
     lb.set_defaults(func=cmd_vpn_loopback)
+
+
+# Backwards compatibility for older imports.
+add_vpn_subparser = add_tunnel_subparser
 
 
 def _add_bale_creds_opts(sp: argparse.ArgumentParser, *, answer_default: bool = False) -> None:
@@ -253,7 +257,7 @@ def cmd_vpn_loopback(args: argparse.Namespace) -> int:
 
         assert all(g == payload for g in got), "payload mismatch"
         mb = args.packets * args.size / (1024 * 1024)
-        print(f"[vpn loopback] OK: {args.packets} pkts × {args.size} B "
+        print(f"[tunnel loopback] OK: {args.packets} pkts × {args.size} B "
               f"= {mb:.2f} MiB in {dt*1000:.1f} ms "
               f"({mb/dt:.2f} MiB/s, loss={args.loss})")
         return 0
@@ -269,11 +273,11 @@ def cmd_vpn_loopback(args: argparse.Namespace) -> int:
 def _run_nat_setup(tun: str, wan: str) -> None:
     script = _repo_root() / "scripts" / "vpn-exit-node.sh"
     if not script.exists():
-        print(f"[vpn] missing {script}; skipping NAT setup", file=sys.stderr)
+        print(f"[tunnel] missing {script}; skipping NAT setup", file=sys.stderr)
         return
     sudo = shutil.which("sudo")
     cmd = [sudo, str(script), tun, wan] if (sudo and os.geteuid() != 0) else [str(script), tun, wan]
-    print(f"[vpn] running NAT setup: {' '.join(cmd)}", file=sys.stderr)
+    print(f"[tunnel] running NAT setup: {' '.join(cmd)}", file=sys.stderr)
     subprocess.check_call(cmd)
 
 
@@ -287,7 +291,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
     try:
         tun = TunDevice.open(args.tun)
     except (PermissionError, RuntimeError, OSError) as e:
-        print(f"[vpn] cannot open TUN {args.tun}: {e}", file=sys.stderr)
+        print(f"[tunnel] cannot open TUN {args.tun}: {e}", file=sys.stderr)
         prompt_tun_setup_hint(args.tun, args.tun_addr, args.tun_mtu)
         return 3
 
@@ -347,7 +351,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
         _install_swap_handler(runner, chain)
 
         role = "exit-node" if is_exit_node else "client"
-        print(f"[vpn] up ({role}, transport={transport_name}, "
+        print(f"[tunnel] up ({role}, transport={transport_name}, "
               f"tun={args.tun}, sess=0x{args.sess_id:x}, "
               f"mtu_floor={mtu_floor}). "
               f"Ctrl-C to stop; kill -USR1 {os.getpid()} to swap transport.",
@@ -403,14 +407,14 @@ def _install_swap_handler(runner, chain) -> None:  # type: ignore[no-untyped-def
         try:
             name, new_tx = chain.advance()
         except RuntimeError as e:
-            print(f"[vpn] swap failed: {e}", file=sys.stderr)
+            print(f"[tunnel] swap failed: {e}", file=sys.stderr)
             return
         old = runner._tunnel.swap_transport(new_tx)  # type: ignore[attr-defined]
         try:
             old.close()
         except Exception:  # noqa: BLE001
             pass
-        print(f"[vpn] swapped to transport {name}", file=sys.stderr)
+        print(f"[tunnel] swapped to transport {name}", file=sys.stderr)
 
     try:
         signal.signal(signal.SIGUSR1, handler)
