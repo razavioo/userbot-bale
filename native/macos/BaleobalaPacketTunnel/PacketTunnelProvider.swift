@@ -8,16 +8,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         do {
-            try configureNetwork()
             try connectCarrierSocket()
-            startPacketPump()
-            completionHandler(nil)
+            configureNetwork { [weak self] error in
+                guard let self = self else { return }
+                if let error = error {
+                    self.socketClient = nil
+                    completionHandler(error)
+                    return
+                }
+                self.startPacketPump()
+                completionHandler(nil)
+            }
         } catch {
             completionHandler(error)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        readLoopRunning = false
         socketClient = nil
         completionHandler()
     }
@@ -26,7 +34,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler?(messageData)
     }
 
-    private func configureNetwork() throws {
+    private func configureNetwork(completionHandler: @escaping (Error?) -> Void) {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: BaleAppGroup.identifier)
         let ipv4 = NEIPv4Settings(addresses: ["10.7.0.2"], subnetMasks: ["255.255.255.0"])
         ipv4.includedRoutes = [NEIPv4Route.default()]
@@ -47,14 +55,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let error = error {
                 print("Failed to set tunnel settings: \(error)")
             }
+            completionHandler(error)
         }
     }
 
     private func connectCarrierSocket() throws {
-        guard let socketURL = BaleAppGroup.carrierSocketURL() else {
+        guard let socketURL = carrierSocketURL() else {
             throw NSError(domain: "PacketTunnelProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "missing app group container"])
         }
         socketClient = try BaleCarrierSocketClient(socketURL: socketURL)
+    }
+
+    private func carrierSocketURL() -> URL? {
+        if let configuration = protocolConfiguration?.providerConfiguration,
+           let rawPath = configuration["carrierSocketPath"] as? String,
+           !rawPath.isEmpty {
+            if rawPath.hasPrefix("/") {
+                return URL(fileURLWithPath: rawPath)
+            }
+            return BaleAppGroup.sharedContainerURL()?.appendingPathComponent(rawPath, isDirectory: false)
+        }
+        return BaleAppGroup.carrierSocketURL()
     }
 
     private func startPacketPump() {

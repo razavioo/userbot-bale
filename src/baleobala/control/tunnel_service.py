@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from typing import Protocol, runtime_checkable
 
-from baleobala.control.paths import config_dir
+from baleobala.control.paths import config_dir, shared_container_dir
 from baleobala.control.store import JsonStore
 
 
@@ -94,7 +94,7 @@ class LocalTunnelService(TunnelService):
 
     def __init__(self, *, state_path: Path | None = None, socket_path: Path | None = None) -> None:
         self._state_store = JsonStore(state_path or (config_dir() / "tunnel_service.json"))
-        self._socket_path = _socket_path(socket_path or (config_dir() / "tunnel_service.sock"), prefix="tunnel")
+        self._socket_path = _socket_path(socket_path or (shared_container_dir() / "tunnel_service.sock"), prefix="tunnel")
         self._active = False
         self._state = TunnelServiceState(state="stopped")
         self._server: socket.socket | None = None
@@ -222,7 +222,7 @@ class CarrierTunnelService(TunnelService):
         self._bridge = bridge
         self._manage_bridge = manage_bridge
         self._state_store = JsonStore(state_path or (config_dir() / "carrier_tunnel_service.json"))
-        self._socket_path = _socket_path(socket_path or (config_dir() / "carrier_tunnel.sock"), prefix="carrier")
+        self._socket_path = _socket_path(socket_path or (shared_container_dir() / "carrier_tunnel.sock"), prefix="carrier")
         self._state = TunnelServiceState(state="stopped")
         self._server: socket.socket | None = None
         self._thread: threading.Thread | None = None

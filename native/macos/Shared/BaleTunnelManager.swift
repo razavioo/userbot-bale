@@ -38,8 +38,12 @@ final class BaleTunnelManager {
     }
 
     func start(manager: NETunnelProviderManager, completion: @escaping (Error?) -> Void) {
-        manager.connection.startVPNTunnel()
-        completion(nil)
+        do {
+            try manager.connection.startVPNTunnel()
+            completion(nil)
+        } catch {
+            completion(error)
+        }
     }
 
     func stop(manager: NETunnelProviderManager) {
