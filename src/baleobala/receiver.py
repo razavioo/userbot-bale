@@ -133,6 +133,14 @@ class Receiver:
                 except Exception:  # noqa: BLE001
                     log.exception("on_message callback failed")
 
+    def get_message(self, timeout: float | None = None) -> Message | None:
+        """Pull a single completed message, or None on timeout. Useful for
+        transports that need a bounded-wait recv call (e.g. VPN audio)."""
+        try:
+            return self._msg_q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
     def iter_messages(self, timeout: float | None = None) -> Iterator[Message]:
         """Yield messages as they complete. Returns when stop() is called and the queue drains."""
         while True:

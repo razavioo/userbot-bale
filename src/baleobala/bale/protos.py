@@ -310,3 +310,281 @@ def parse_call_credentials(buf: bytes) -> CallCredentials | None:
         room=room_m.group(0).decode("ascii") if room_m else "",
         raw=buf,
     )
+
+
+# ============================================================
+# Messaging (text send/receive for RPC transport)
+# ============================================================
+# Field numbers read from the APK decompile at
+#   re/jadx-out/sources/ai/bale/proto/MessagingOuterClass$RequestSendMessage.java
+#   re/jadx-out/sources/ai/bale/proto/MessagingStruct$Message.java
+#   re/jadx-out/sources/ai/bale/proto/MessagingStruct$TextMessage.java
+#   re/jadx-out/sources/ai/bale/proto/MessagingOuterClass$UpdateMessage.java
+# Service/method from ir/nasim/HR5.java:
+#   /bale.messaging.v2.Messaging/SendMessage
+# Live-verified 2026-04-20 against a mitmproxy capture of web.bale.ai
+# sending a text message. The raw bytes of the outbound RPC show:
+#   Request.payload = { peer(1) | rid(2) | message(3) | ex_peer(6) }
+#   message         = { text_message(15) = { text(1) | mentions(2,empty) } }
+# No outer tag-6 wrapper (unlike StartCall). The web client sets ex_peer
+# to the same peer as field 1; the server appears to also accept the
+# request without it (unit tests exercise both). See
+# tests/fixtures/sendmessage_frames.json for the exact captured bytes.
+
+MESSAGING_SERVICE = "bale.messaging.v2.Messaging"
+_TEXT_MESSAGE_FIELD = 15  # Message.text_message
+
+def _encode_text_message(text: str) -> bytes:
+    """MessagingStruct.TextMessage { field 1 = text }."""
+    return _enc_len_delim(1, text.encode("utf-8"))
+
+
+def _encode_message_with_text(text: str) -> bytes:
+    """MessagingStruct.Message containing only TextMessage at tag 15."""
+    return _enc_len_delim(_TEXT_MESSAGE_FIELD, _encode_text_message(text))
+
+
+@dataclass(frozen=True)
+class RequestSendMessage:
+    """ai.bale.proto.MessagingOuterClass.RequestSendMessage
+
+    Wire (from decompile):
+        field 1 (len-delim) = peer (OutPeer)
+        field 2 (varint)    = rid (int64)
+        field 3 (len-delim) = message (Message with text_message at tag 15)
+    Optional fields (is_only_for_user=4, quoted=5, ex_peer=6, is_silent=7,
+    thread_id=8) are omitted — text-only send to a single peer.
+    """
+    peer: OutPeer
+    text: str
+    rid: int | None = None
+    # When True, also emit ex_peer at tag 6 = same peer as tag 1, which
+    # matches what web.bale.ai sends on the wire (2026-04-20). The
+    # server accepts the message without ex_peer too; keep this on for
+    # maximum parity.
+    include_ex_peer: bool = True
+
+    def encode(self) -> bytes:
+        rid = self.rid if self.rid is not None else secrets.randbits(55)
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(2, 0) + _enc_varint(rid)
+        out += _enc_len_delim(3, _encode_message_with_text(self.text))
+        if self.include_ex_peer:
+            out += _enc_len_delim(6, self.peer.encode())
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class InboundMessage:
+    peer_user_id: int
+    sender_uid: int
+    rid: int
+    text: str
+
+
+def _walk_len_delim(buf: bytes):
+    """Iterate (field_number, bytes_or_int, wire_type) across `buf`.
+    Skips malformed tails rather than raising."""
+    pos = 0
+    n = len(buf)
+    while pos < n:
+        try:
+            fn, wt, pos = _dec_tag(buf, pos)
+            if wt == 0:
+                v, pos = _dec_varint(buf, pos)
+                yield fn, v, wt
+            elif wt == 2:
+                ln, pos = _dec_varint(buf, pos)
+                chunk = buf[pos:pos + ln]
+                pos += ln
+                yield fn, chunk, wt
+            elif wt == 5:
+                pos += 4
+            elif wt == 1:
+                pos += 8
+            else:
+                return
+        except (IndexError, ValueError):
+            return
+
+
+def _parse_out_peer(buf: bytes) -> tuple[int, int]:
+    """Returns (peer_type, user_id). Zeros if fields absent."""
+    peer_type = user_id = 0
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 0:
+            if fn == 1:
+                peer_type = val
+            elif fn == 2:
+                user_id = val
+    return peer_type, user_id
+
+
+def _parse_text_from_message(buf: bytes) -> str | None:
+    """Message → text, by descending into TextMessage at tag 15.
+    Returns None if no text_message present."""
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 2 and fn == _TEXT_MESSAGE_FIELD:
+            # TextMessage: text at field 1 (string/bytes)
+            for ifn, ival, iwt in _walk_len_delim(val):
+                if iwt == 2 and ifn == 1:
+                    try:
+                        return ival.decode("utf-8")
+                    except UnicodeDecodeError:
+                        return None
+    return None
+
+
+def _parse_update_message(buf: bytes) -> InboundMessage | None:
+    """Parse one UpdateMessage body.
+    Fields: peer=1, sender_uid=2, date=3, rid=4, message=5."""
+    peer_user_id = 0
+    sender_uid = 0
+    rid = 0
+    text: str | None = None
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 2 and fn == 1:
+            _, peer_user_id = _parse_out_peer(val)
+        elif wt == 0 and fn == 2:
+            sender_uid = val
+        elif wt == 0 and fn == 4:
+            rid = val
+        elif wt == 2 and fn == 5:
+            text = _parse_text_from_message(val)
+    if text is None:
+        return None
+    return InboundMessage(
+        peer_user_id=peer_user_id,
+        sender_uid=sender_uid,
+        rid=rid,
+        text=text,
+    )
+
+
+# ============================================================
+# Phone auth (Phase 12 — /bale.auth.v1.Auth/StartPhoneAuth + ValidateCode)
+# ============================================================
+# Field numbers read from AuthOuterClass$RequestStartPhoneAuth.java,
+# RequestValidateCode.java, ResponseAuth.java in the APK decompile.
+# Wire format is NOT yet live-verified — Bale's `app_id` + `api_key`
+# are the device-attestation credentials the server uses to throttle
+# account creation; they're not present in the decompile and must be
+# captured from web.bale.ai's bundled JS (or passed in by the user).
+#
+# Once captured, the flow is:
+#   1. StartPhoneAuth → returns transaction_hash, server sends SMS.
+#   2. ValidateCode(transaction_hash, code) → returns jwt on success.
+#      If the account doesn't exist, returns a flag requiring SignUp.
+#
+# Service paths (confirmed in ir/nasim/*.java):
+#   /bale.auth.v1.Auth/StartPhoneAuth
+#   /bale.auth.v1.Auth/ValidateCode
+#   /bale.auth.v1.Auth/SignUp
+
+AUTH_SERVICE = "bale.auth.v1.Auth"
+
+
+@dataclass(frozen=True)
+class RequestStartPhoneAuth:
+    phone_number: int                   # int64 (no '+', digits only)
+    app_id: int                         # int32 — Bale-specific, see docstring
+    api_key: str                        # string — Bale-specific
+    device_hash: bytes                  # opaque per-install ID
+    device_title: str                   # human label e.g. "baleobala"
+    time_zone: str = "UTC"
+    preferred_languages: tuple = ("en",)
+    send_code_type: int = 0             # 0=SMS (default)
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_tag(1, 0) + _enc_varint(self.phone_number)
+        out += _enc_tag(2, 0) + _enc_varint(self.app_id)
+        out += _enc_len_delim(3, self.api_key.encode("utf-8"))
+        out += _enc_len_delim(4, self.device_hash)
+        out += _enc_len_delim(5, self.device_title.encode("utf-8"))
+        out += _enc_len_delim(6, self.time_zone.encode("utf-8"))
+        for lang in self.preferred_languages:
+            out += _enc_len_delim(7, lang.encode("utf-8"))
+        if self.send_code_type:
+            out += _enc_tag(9, 0) + _enc_varint(self.send_code_type)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestValidateCode:
+    transaction_hash: str              # from StartPhoneAuth response
+    code: str                          # 6-digit SMS OTP
+    is_jwt: bool = True                # web flow uses JWT
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.transaction_hash.encode("utf-8"))
+        out += _enc_len_delim(2, self.code.encode("utf-8"))
+        if self.is_jwt:
+            out += _enc_tag(3, 0) + _enc_varint(1)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class ResponseAuth:
+    """ResponseAuth { user(2) | config(3) | jwt(4) }.
+    We only need jwt for downstream use; other fields kept raw."""
+    jwt: str
+    user_blob: bytes = b""
+    raw: bytes = b""
+
+
+def parse_response_auth(buf: bytes) -> ResponseAuth | None:
+    """Find the JWT inside a ResponseAuth payload. Returns None if no
+    JWT-looking string present (e.g. when SignUp is required)."""
+    import re
+    # JWT shape: base64url "eyJ..." + . + payload + . + sig.
+    m = re.search(rb"(eyJ[A-Za-z0-9_\-.]{50,})", buf)
+    if m is None:
+        return None
+    return ResponseAuth(jwt=m.group(1).decode("ascii"), raw=buf)
+
+
+def parse_transaction_hash(buf: bytes) -> str | None:
+    """ResponseStartPhoneAuth: the only field is a transaction_hash
+    string at some tag. Scan for a long hex/base64-ish token."""
+    import re
+    m = re.search(rb"([A-Za-z0-9_\-]{20,})", buf)
+    if m is None:
+        return None
+    return m.group(1).decode("ascii")
+
+
+def find_inbound_messages(buf: bytes, *, max_depth: int = 6) -> list[InboundMessage]:
+    """Recursively scan an update payload for UpdateMessage-shaped sub-trees.
+
+    Bale wraps pushed updates in one or more outer envelopes (SeqUpdate
+    or similar). Without a verified wire capture of the exact shape, we
+    descend into every len-delim sub-field and try to parse each as an
+    UpdateMessage; anything that yields a TextMessage is kept.
+    """
+    found: list[InboundMessage] = []
+
+    def visit(b: bytes, depth: int) -> None:
+        if depth > max_depth or not b:
+            return
+        m = _parse_update_message(b)
+        if m is not None:
+            found.append(m)
+        for fn, val, wt in _walk_len_delim(b):
+            if wt == 2 and isinstance(val, (bytes, bytearray)) and val:
+                visit(val, depth + 1)
+
+    visit(buf, 0)
+    # Deduplicate on (rid, peer, text) — the recursive walk can visit
+    # the same sub-tree via multiple paths.
+    seen: set[tuple[int, int, str]] = set()
+    out: list[InboundMessage] = []
+    for m in found:
+        key = (m.rid, m.peer_user_id, m.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(m)
+    return out
