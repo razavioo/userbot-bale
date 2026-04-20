@@ -39,10 +39,13 @@ from typing import Callable, List, Optional
 
 from baleobala.bale.endpoints import Endpoint, fetch_endpoints
 from baleobala.bale.protos import (
-    CallCredentials, OutPeer, PhoneToImport, RequestImportContacts,
-    RequestSearchContacts, RequestStartLiveKitCall, ResolvedContact,
-    parse_call_credentials, parse_import_contacts_response,
-    parse_search_contacts_response,
+    AUTH_SERVICE, CallCredentials, InboundMessage, MESSAGING_SERVICE,
+    OutPeer, PhoneToImport, RequestImportContacts, RequestSearchContacts,
+    RequestSendMessage, RequestStartLiveKitCall, RequestStartPhoneAuth,
+    RequestValidateCode, ResolvedContact, ResponseAuth,
+    find_inbound_messages, parse_call_credentials,
+    parse_import_contacts_response, parse_response_auth,
+    parse_search_contacts_response, parse_transaction_hash,
 )
 from baleobala.bale.rpc_envelope import Response
 from baleobala.bale.ws_client import WsClient
@@ -85,6 +88,11 @@ class BaleApiClient:
         self._endpoints: List[Endpoint] | None = None
         self._last_creds: CallCredentials | None = None
         self._creds_event = threading.Event()
+        # peer_id → callback(body: bytes). Registered via listen_messages;
+        # fires on any UpdateMessage push whose peer/sender matches.
+        self._message_subs: dict[int, Callable[[bytes], None]] = {}
+        self._seen_rids: set[int] = set()
+        self._seen_rids_order: list[int] = []
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -95,11 +103,12 @@ class BaleApiClient:
             self._endpoints = fetch_endpoints()
         return self._endpoints
 
-    def start(self, timeout: float = 15.0) -> None:
-        if not self._jwt:
+    def start(self, timeout: float = 15.0, *, allow_unauth: bool = False) -> None:
+        if not self._jwt and not allow_unauth:
             raise RuntimeError(
                 "BaleApiClient requires a JWT access_token. Pass it to "
-                "__init__ or implement auth.start_phone_auth first."
+                "__init__ or pass allow_unauth=True if you're about to "
+                "run the phone-auth flow (StartPhoneAuth / ValidateCode)."
             )
         kwargs = {}
         if self._ws_url:
@@ -257,6 +266,93 @@ class BaleApiClient:
             return imported[0].user_id
         raise LookupError(f"no Bale user found for phone {phone!r}")
 
+    # ------------------------------------------------------------------ phone auth
+
+    def start_phone_auth(
+        self,
+        *,
+        phone_number: int,
+        app_id: int,
+        api_key: str,
+        device_hash: bytes,
+        device_title: str = "baleobala",
+    ) -> str:
+        """Send SMS OTP to `phone_number`. Returns `transaction_hash`
+        to hand to validate_code(). Wire format unverified — Bale's
+        app_id + api_key must be captured from a real client."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        req = RequestStartPhoneAuth(
+            phone_number=phone_number,
+            app_id=app_id,
+            api_key=api_key,
+            device_hash=device_hash,
+            device_title=device_title,
+        )
+        resp = self._ws.rpc(
+            AUTH_SERVICE, "StartPhoneAuth", req.encode(), timeout=15.0,
+        )
+        tx_hash = parse_transaction_hash(resp.payload or resp.raw)
+        if not tx_hash:
+            raise RuntimeError(
+                "StartPhoneAuth response lacks transaction_hash; "
+                f"raw={resp.raw[:80]!r}..."
+            )
+        return tx_hash
+
+    def validate_code(self, transaction_hash: str, code: str) -> ResponseAuth:
+        """Submit the SMS code. Returns ResponseAuth with the JWT on
+        success. Raises on failure or when SignUp is required (new
+        account — use sign_up() after this raises)."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        req = RequestValidateCode(transaction_hash=transaction_hash, code=code)
+        resp = self._ws.rpc(
+            AUTH_SERVICE, "ValidateCode", req.encode(), timeout=15.0,
+        )
+        auth = parse_response_auth(resp.payload or resp.raw)
+        if auth is None:
+            raise RuntimeError(
+                "ValidateCode response lacks a JWT — account may not "
+                "exist yet (SignUp required)."
+            )
+        return auth
+
+    def send_message(self, peer_id: int, body: bytes, *,
+                     peer_type: int = 1) -> None:
+        """Send a text message to `peer_id` via
+        `/bale.messaging.v2.Messaging/SendMessage`.
+
+        `body` is sent as UTF-8 text; the RPC transport base64-encodes
+        binary VPN frames before handing them here. If Bale's server
+        applies any Unicode canonicalization that would corrupt
+        base64, consider switching the RPC transport to hex.
+        """
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValueError("send_message body must be valid UTF-8") from e
+
+        req = RequestSendMessage(
+            peer=OutPeer(user_id=peer_id, type=peer_type),
+            text=text,
+        )
+        payload = req.encode()
+        log.info("SendMessage peer=%d bytes=%d", peer_id, len(body))
+        self._ws.rpc(MESSAGING_SERVICE, "SendMessage", payload, timeout=15.0)
+
+    def listen_messages(
+        self,
+        peer_id: int,
+        callback: Callable[[bytes], None],
+    ) -> None:
+        """Subscribe to UpdateMessage pushes from `peer_id`. The
+        callback fires with the message body (UTF-8 bytes) for every
+        unique inbound rid."""
+        self._message_subs[peer_id] = callback
+
     def listen_incoming_calls(
         self,
         callback: Callable[[CallCredentials], None],
@@ -277,13 +373,40 @@ class BaleApiClient:
 
     def _dispatch_update(self, resp: Response) -> None:
         creds = parse_call_credentials(resp.raw)
-        if creds is None:
-            return
-        log.info("received call credentials: room=%s", creds.room)
-        self._last_creds = creds
-        self._creds_event.set()
-        if self._on_incoming_creds is not None:
+        if creds is not None:
+            log.info("received call credentials: room=%s", creds.room)
+            self._last_creds = creds
+            self._creds_event.set()
+            if self._on_incoming_creds is not None:
+                try:
+                    self._on_incoming_creds(creds)
+                except Exception:  # noqa: BLE001
+                    log.exception("on_incoming_creds callback failed")
+
+        if self._message_subs:
+            self._dispatch_inbound_messages(resp.raw)
+
+    def _dispatch_inbound_messages(self, raw: bytes) -> None:
+        messages = find_inbound_messages(raw)
+        for m in messages:
+            if m.rid and m.rid in self._seen_rids:
+                continue
+            if m.rid:
+                self._remember_rid(m.rid)
+            cb = (
+                self._message_subs.get(m.sender_uid)
+                or self._message_subs.get(m.peer_user_id)
+            )
+            if cb is None:
+                continue
             try:
-                self._on_incoming_creds(creds)
+                cb(m.text.encode("utf-8"))
             except Exception:  # noqa: BLE001
-                log.exception("on_incoming_creds callback failed")
+                log.exception("inbound-message callback failed")
+
+    def _remember_rid(self, rid: int) -> None:
+        self._seen_rids.add(rid)
+        self._seen_rids_order.append(rid)
+        while len(self._seen_rids_order) > 1024:
+            old = self._seen_rids_order.pop(0)
+            self._seen_rids.discard(old)

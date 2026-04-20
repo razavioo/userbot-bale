@@ -107,6 +107,17 @@ class LiveKitSession:
         # decoder drained the initial settling period; memory is a safer
         # bet than dropped audio.
         self._incoming: "queue.Queue[np.ndarray | None]" = queue.Queue()
+        # Inbound LiveKit DataChannel payloads, filtered by topic. One
+        # queue per topic so the VPN transport and any future control
+        # channel don't interleave.
+        self._data_queues: "dict[str, queue.Queue[bytes | None]]" = {}
+        self._data_lock = threading.Lock()
+        # Video out: a published track backed by a VideoSource we push frames to.
+        self._video_source: "rtc.VideoSource | None" = None  # type: ignore[name-defined]
+        self._video_width = 0
+        self._video_height = 0
+        # Video in: single callback invoked from asyncio with ndarray frames.
+        self._video_frame_cb = None  # type: ignore[var-annotated]
 
     def start(self) -> None:
         if self._thread is not None:
@@ -155,6 +166,26 @@ class LiveKitSession:
                 track, sample_rate=LIVEKIT_SAMPLE_RATE, num_channels=1,
             )
             asyncio.ensure_future(self._consume_audio(stream))
+
+        @room.on("track_subscribed")  # type: ignore[misc]
+        def on_video_subscribed(track, publication, participant):  # type: ignore[no-untyped-def]
+            if track.kind != rtc.TrackKind.KIND_VIDEO:
+                return
+            if self._video_frame_cb is None:
+                return
+            log.debug("subscribed to video track from %s", participant.identity)
+            stream = rtc.VideoStream(track)
+            asyncio.ensure_future(self._consume_video(stream))
+
+        @room.on("data_received")  # type: ignore[misc]
+        def on_data_received(packet):  # type: ignore[no-untyped-def]
+            topic = packet.topic or ""
+            with self._data_lock:
+                q = self._data_queues.get(topic)
+            if q is not None:
+                q.put(bytes(packet.data))
+            else:
+                log.debug("data on unhandled topic=%r (%d bytes)", topic, len(packet.data))
 
         await room.connect(self.url, self.token)
         log.info("LiveKit room connected: %s identity=%s",
@@ -234,6 +265,115 @@ class LiveKitSession:
                 return
             yield block
 
+    # --- Video track (QR transport piggybacks here) ---
+
+    def publish_video(self, width: int, height: int) -> "LiveKitVideoOut":
+        """Create + publish a video track. Call only after start().
+        Returns an object with push_frame(ndarray_rgb24) for the sender."""
+        if self._room is None or self._loop is None:
+            raise RuntimeError("session not started")
+        if self._video_source is not None:
+            raise RuntimeError("video already published")
+        source = rtc.VideoSource(width, height)
+        track = rtc.LocalVideoTrack.create_video_track("baleobala-qr", source)
+        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+        fut = asyncio.run_coroutine_threadsafe(
+            self._room.local_participant.publish_track(track, options),
+            self._loop,
+        )
+        fut.result(timeout=10)
+        self._video_source = source
+        self._video_width = width
+        self._video_height = height
+        log.info("video track published (%dx%d)", width, height)
+        return LiveKitVideoOut(self)
+
+    def on_video_frame(self, callback) -> None:  # type: ignore[no-untyped-def]
+        """Register a callback(frame_bgr: np.ndarray) invoked from an
+        asyncio task whenever a remote peer publishes a video frame.
+        Only one callback per session; subsequent calls replace it."""
+        self._video_frame_cb = callback
+
+    async def _consume_video(self, stream) -> None:  # type: ignore[no-untyped-def]
+        async for event in stream:
+            frame = event.frame
+            if self._video_frame_cb is None:
+                continue
+            # Convert to BGR24 numpy for OpenCV consumption. frame is
+            # typically I420; convert to RGB24 via the helper.
+            try:
+                rgb = frame.convert(rtc.VideoBufferType.RGB24)
+                arr = np.frombuffer(rgb.data, dtype=np.uint8).reshape(
+                    rgb.height, rgb.width, 3
+                )
+                # cv2 expects BGR; swap channels in-place.
+                bgr = arr[:, :, ::-1].copy()
+                self._video_frame_cb(bgr)
+            except Exception:  # noqa: BLE001
+                log.exception("video frame conversion failed")
+
+    def _submit_video_frame(self, rgb24: np.ndarray) -> None:
+        if self._video_source is None or self._loop is None:
+            raise RuntimeError("video not published")
+        if rgb24.shape != (self._video_height, self._video_width, 3):
+            raise ValueError(
+                f"frame shape {rgb24.shape} != published "
+                f"({self._video_height},{self._video_width},3)"
+            )
+        frame = rtc.VideoFrame(
+            self._video_width,
+            self._video_height,
+            rtc.VideoBufferType.RGB24,
+            rgb24.tobytes(),
+        )
+        # Fire-and-forget: VideoSource.capture_frame is async but fast.
+        # We schedule on the loop and don't wait — video throughput
+        # would collapse if every frame blocked on round-trip.
+        asyncio.run_coroutine_threadsafe(
+            self._video_source.capture_frame(frame), self._loop
+        )
+
+    # --- DataChannel (WebRTC data channel inside the same LiveKit room) ---
+
+    def data_channel(self, topic: str = "vpn", *, reliable: bool = True) -> "LiveKitDataChannel":
+        """Register a DataChannel endpoint for `topic`. Call only after start()."""
+        if self._room is None:
+            raise RuntimeError("session not started")
+        with self._data_lock:
+            if topic not in self._data_queues:
+                self._data_queues[topic] = queue.Queue()
+        return LiveKitDataChannel(self, topic=topic, reliable=reliable)
+
+    def _submit_data(self, payload: bytes, *, topic: str, reliable: bool) -> None:
+        if self._room is None or self._loop is None:
+            raise RuntimeError("session not started")
+        fut = asyncio.run_coroutine_threadsafe(
+            self._room.local_participant.publish_data(
+                payload, reliable=reliable, topic=topic
+            ),
+            self._loop,
+        )
+        try:
+            fut.result(timeout=5)
+        except Exception:  # noqa: BLE001
+            log.exception("publish_data failed (topic=%s, %d bytes)", topic, len(payload))
+
+    def _recv_data(self, topic: str, timeout: float | None) -> bytes | None:
+        with self._data_lock:
+            q = self._data_queues.get(topic)
+        if q is None:
+            return None
+        try:
+            return q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def _close_data(self, topic: str) -> None:
+        with self._data_lock:
+            q = self._data_queues.pop(topic, None)
+        if q is not None:
+            q.put(None)
+
 
 def _resample_linear(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
     """Cheap linear resample. Adequate for data-over-voice; we don't need
@@ -287,3 +427,68 @@ class LiveKitSource:
 
     def close(self) -> None:
         self._closed = True
+
+
+class LiveKitVideoOut:
+    """Thin handle returned by LiveKitSession.publish_video(). The QR
+    transport calls push_frame() at ~fps Hz."""
+
+    def __init__(self, session: "LiveKitSession") -> None:
+        self._session = session
+
+    def push_frame(self, rgb24: np.ndarray) -> None:
+        self._session._submit_video_frame(rgb24)
+
+
+class LiveKitDataChannel:
+    """
+    Bidirectional byte channel over a LiveKit DataChannel, scoped by `topic`.
+
+    With `reliable=True` (default) LiveKit delivers ordered, reliable
+    bytes — so the VPN tunnel above can run with `window` set high and
+    ARQ timeouts loose; the DataChannel itself is not going to reorder
+    or drop. With `reliable=False` delivery is best-effort (lossy) and
+    the tunnel's ARQ does real work.
+
+    LiveKit's single-publish_data limit in the JS/SFU stack has
+    historically been around 15 KiB. We expose a conservative 14 KiB
+    MTU here; the tunnel core splits larger IP packets into frames that
+    fit.
+    """
+
+    MTU = 14 * 1024
+    RATE_HINT = 200_000.0  # bytes/s; realistic over Bale's SFU
+
+    def __init__(
+        self, session: "LiveKitSession", *, topic: str, reliable: bool
+    ) -> None:
+        self._session = session
+        self._topic = topic
+        self._reliable = reliable
+        self._closed = False
+
+    @property
+    def mtu(self) -> int:
+        return self.MTU
+
+    @property
+    def rate_hint(self) -> float:
+        return self.RATE_HINT
+
+    def send_bytes(self, data: bytes) -> None:
+        if self._closed:
+            return
+        if len(data) > self.MTU:
+            raise ValueError(f"frame {len(data)} > datachannel MTU {self.MTU}")
+        self._session._submit_data(data, topic=self._topic, reliable=self._reliable)
+
+    def recv_bytes(self, timeout: float | None = None) -> bytes | None:
+        if self._closed:
+            return None
+        return self._session._recv_data(self._topic, timeout)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._session._close_data(self._topic)
