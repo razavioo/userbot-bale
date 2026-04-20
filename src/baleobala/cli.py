@@ -369,13 +369,13 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     if args.vpn_cmd == "plan":
         print("baleobala vpn plan")
         if sys.platform == "darwin":
-            print("target: macOS packet-tunnel backend by default")
-            print("fallback: macOS system proxy bridge for debugging and recovery")
-            print("next: wire the native packet-tunnel extension and signed desktop app")
+            print("default: macOS direct backend (in-process SOCKS5/HTTP CONNECT + system proxy)")
+            print("alt: --backend proxy bridges to a paired Bale relay over LiveKit")
+            print("parked: --backend packet-tunnel needs Apple Developer Team ID + NE entitlement")
         else:
             print("target: Linux TUN + route/DNS helper")
             print("next: wire a privileged helper for route and DNS changes")
-        print("carrier: Bale LiveKit credentials + tunnel runtime underneath")
+        print("carrier: Bale LiveKit credentials + tunnel runtime underneath (proxy backend only)")
         return 0
 
     if args.vpn_cmd == "agent":
@@ -418,7 +418,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         print("backend:")
         for key, value in backend.status().items():
             print(f"  {key}: {value}")
-        if sys.platform == "darwin" and profile.backend == "proxy":
+        if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
             from baleobala.control.macos import MacOSSystemProxySession
             system_proxy = MacOSSystemProxySession(state_path=None)
             print("system_proxy:")
@@ -438,7 +438,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         profile = vpn_store.load() or vpn_store.ensure_default()
         backend = backend_for_profile(profile)
         backend.down()
-        if sys.platform == "darwin" and profile.backend == "proxy":
+        if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
             from baleobala.control.macos import MacOSSystemProxySession
             restored = MacOSSystemProxySession.restore_saved_state()
             if restored:
@@ -541,10 +541,27 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         finally:
             backend.down()
 
+    if sys.platform == "darwin" and profile.backend == "packet-tunnel":
+        raise SystemExit(
+            "packet-tunnel backend requires an Apple Developer Team ID and the Network Extension "
+            "entitlement, which are not configured in this build. Re-run with --backend direct "
+            "(recommended on macOS) or --backend proxy if you have a paired remote relay."
+        )
+
     client_args = _vpn_namespace_from_profile(profile, auth_record)
     backend = backend_for_profile(profile)
     backend_state = backend.up(profile)
     try:
+        if profile.backend == "direct":
+            endpoint = backend_state.get(
+                "endpoint", f"{profile.listen_host}:{profile.listen_port}"
+            )
+            print(
+                "macOS system proxy active:",
+                backend_state.get("proxy", endpoint),
+                file=sys.stderr,
+            )
+            return _hold_backend(endpoint, label="macOS direct proxy active")
         if profile.backend == "proxy":
             print(
                 "macOS system proxy active:",

@@ -23,9 +23,11 @@ The repo now also has a first-pass product control plane:
 
 That control plane is the bridge between the current proxy tunnel and the future native Linux/macOS VPN backends.
 
-On macOS, the current implementation now treats packet-tunnel as the default backend shape in the control plane, while the system-proxy bridge stays available as fallback/debug mode. The local tunnel runtime now exposes a Unix-domain socket and forwards bytes through the existing carrier tunnel runtime, so the packet-tunnel side has a concrete IPC target instead of just a placeholder. The current `vpn up` path uses saved auth and pairing state, and the native packet-tunnel helper remains the next native app-extension step. The macOS device can already be exercised end-to-end with the current commands.
-If a paired relay already exists locally, `vpn up` will select it automatically so the first-run flow stays simple.
-The macOS release also gets a LaunchAgent install path so the VPN can come back on login without extra steps.
+On macOS, the default backend is now `direct`: an in-process SOCKS5 + HTTP CONNECT listener bound to `127.0.0.1:1080`, combined with `networksetup`-driven system proxy settings. `baleobala vpn up` produces a working system-wide proxy on one machine with no Apple Developer Team ID, no paired remote peer, and no JWT. The listener is bound before the system proxy is flipped, and unwound cleanly on `vpn down` or crash (atexit + signal handlers perform a best-effort restore).
+
+The `proxy` backend remains available for users who have a paired Bale relay reachable over LiveKit: it bridges the same local SOCKS5 endpoint through the audio-carrier tunnel to a remote peer. The `packet-tunnel` backend and the Swift scaffold under `native/macos/` are parked — `NEPacketTunnelProvider` requires a paid Apple Developer Team ID and the Network Extension entitlement, which we do not have and do not plan to acquire. The scaffold remains in the tree as reference for future contributors who do.
+
+If a paired relay already exists locally, `vpn up --backend proxy` will select it automatically so the first-run flow stays simple. The macOS release also gets a LaunchAgent install path so the VPN can come back on login without extra steps.
 
 ## Implementation Goals
 

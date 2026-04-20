@@ -405,21 +405,20 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
 
     captured = {}
 
-    class FakeRuntime:
-        def start(self, *, profile_id, backend, pairing_id):  # noqa: ANN001
-            captured["runtime_start"] = {
-                "profile_id": profile_id,
-                "backend": backend,
-                "pairing_id": pairing_id,
-            }
-            return __import__("types").SimpleNamespace(endpoint="unix:///tmp/runtime.sock")
+    class FakeServer:
+        def __init__(self, **kwargs):
+            captured["server_kwargs"] = kwargs
+            self.bound_host = "127.0.0.1"
+            self.bound_port = 1080
+
+        def start(self):
+            captured["server_start"] = True
+
+        def wait_ready(self, timeout=2.0):
+            return True
 
         def stop(self):
-            captured["runtime_stop"] = True
-
-    class FakeBridge:
-        def close(self):
-            captured["bridge_close"] = True
+            captured["server_stop"] = True
 
     class FakeProxySession:
         def __init__(self, **kwargs):  # noqa: ANN001
@@ -432,7 +431,7 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
             return {"proxy": "127.0.0.1:1080"}
 
     monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
-    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", lambda profile, auth_record: (FakeRuntime(), FakeBridge()))
+    monkeypatch.setattr("baleobala.control.backend.DirectSocks5Server", FakeServer)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     class Args:
@@ -440,14 +439,18 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
         profile_id = None
 
     assert cli.cmd_vpn(Args()) == 0
-    assert captured["runtime_start"]["profile_id"] == "relay-a"
-    assert captured["runtime_start"]["backend"] == "packet-tunnel"
-    assert captured["runtime_start"]["pairing_id"] == active_pairing.profile_id
-    assert captured["runtime_stop"] is True
-    assert captured["bridge_close"] is True
+    assert captured["server_start"] is True
+    assert captured["proxy_start"] is True
+    assert captured["proxy_stop"] is True
+    assert captured["server_stop"] is True
+    # pairing is applied to profile
+    stored = VpnStore().load()
+    assert stored is not None
+    assert stored.pairing_id == active_pairing.profile_id
+    assert stored.backend == "direct"
 
 
-def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -> None:
+def test_vpn_up_prefers_direct_on_darwin(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     monkeypatch.setattr("sys.platform", "darwin")
 
@@ -462,23 +465,32 @@ def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -
 
     captured = {}
 
-    class FakeRuntime:
-        def start(self, *, profile_id, backend, pairing_id):  # noqa: ANN001
-            captured["runtime_start"] = {
-                "profile_id": profile_id,
-                "backend": backend,
-                "pairing_id": pairing_id,
-            }
-            return __import__("types").SimpleNamespace(endpoint="unix:///tmp/runtime.sock")
+    class FakeServer:
+        def __init__(self, **kwargs):
+            self.bound_host = "127.0.0.1"
+            self.bound_port = 1080
+
+        def start(self):
+            captured["server_start"] = True
+
+        def wait_ready(self, timeout=2.0):
+            return True
 
         def stop(self):
-            captured["runtime_stop"] = True
+            captured["server_stop"] = True
 
-    class FakeBridge:
-        def close(self):
-            captured["bridge_close"] = True
+    class FakeProxySession:
+        def __init__(self, **kwargs):
+            pass
+        def start(self):
+            captured["proxy_start"] = True
+        def stop(self):
+            captured["proxy_stop"] = True
+        def status(self):
+            return {"proxy": "127.0.0.1:1080"}
 
-    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", lambda profile, auth_record: (FakeRuntime(), FakeBridge()))
+    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
+    monkeypatch.setattr("baleobala.control.backend.DirectSocks5Server", FakeServer)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     class Args:
@@ -487,8 +499,34 @@ def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -
         backend = None
 
     assert cli.cmd_vpn(Args()) == 0
-    assert "macOS packet-tunnel backend active" in capsys.readouterr().err
-    assert captured["runtime_start"]["profile_id"] == "relay-a"
-    assert captured["runtime_start"]["backend"] == "packet-tunnel"
-    assert captured["runtime_stop"] is True
-    assert captured["bridge_close"] is True
+    err = capsys.readouterr().err
+    assert "macOS direct proxy active" in err or "macOS system proxy active" in err
+    assert captured["server_start"] is True
+    assert captured["proxy_start"] is True
+    assert captured["server_stop"] is True
+    assert captured["proxy_stop"] is True
+
+
+def test_vpn_up_rejects_packet_tunnel_on_darwin(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    from baleobala.control import AuthStore, VpnStore
+    from baleobala.control.vpn import VpnProfile
+    import baleobala.cli as cli
+
+    AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
+    VpnStore().save(
+        VpnProfile(profile_id="default", name="default", backend="packet-tunnel")
+    )
+
+    class Args:
+        vpn_cmd = "up"
+        profile_id = None
+        backend = None
+
+    import pytest
+    with pytest.raises(SystemExit) as excinfo:
+        cli.cmd_vpn(Args())
+    assert "packet-tunnel" in str(excinfo.value).lower()
+    assert "direct" in str(excinfo.value).lower()

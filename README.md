@@ -68,19 +68,45 @@ baleobala doctor
 
 It prints the local readiness check and highlights any missing pieces.
 
-If you want to set up the product control plane now, the current flow is:
+### Running the VPN on macOS (single machine, no Apple Dev, no remote peer)
+
+On macOS the default backend is `direct`: `baleobala vpn up` starts an
+in-process SOCKS5 + HTTP CONNECT listener on `127.0.0.1:1080` and points
+the macOS system proxy at it via `networksetup`. Traffic from every app
+that honors the system proxy flows through the local forwarder and out
+to the real internet. No Apple Developer Team ID, no paired peer, no
+JWT required.
+
+```bash
+baleobala vpn up          # default: --backend direct on macOS
+# ... Ctrl-C to stop; system proxy is restored on exit.
+baleobala vpn down        # explicit restore if a crash skipped cleanup
+baleobala vpn status
+```
+
+The listener is bound *before* the system proxy is flipped, and if
+either step fails the other is unwound — networking is never left
+proxied-to-nowhere. An `atexit` + signal handler performs a best-effort
+restore on crash.
+
+If you have a paired Bale relay on another machine and want to route
+traffic through it over the LiveKit carrier, use the `proxy` backend
+instead:
 
 ```bash
 baleobala auth login --jwt "$BALE_JWT"
 baleobala pair start --name home-relay --role client
 baleobala pair accept --code "<pair-code>"
 baleobala relay enable
-baleobala vpn up
+baleobala vpn up --backend proxy
 ```
 
-`vpn up` currently drives the managed proxy-based tunnel path; it uses the saved pairing/auth state, and on macOS it also applies the system proxy settings so the device can route through the local tunnel immediately.
-If there is an active paired relay saved locally, `vpn up` will use it automatically.
-For an always-on macOS launch agent, install it once with `baleobala vpn agent install`.
+The `packet-tunnel` backend in [native/macos/](native/macos/) is parked —
+it would require a paid Apple Developer Team ID and the Network
+Extension entitlement, which we do not have.
+
+For an always-on macOS launch agent, install it once with
+`baleobala vpn agent install`.
 
 ## What we are delivering
 
