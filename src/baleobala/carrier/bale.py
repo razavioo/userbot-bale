@@ -47,7 +47,7 @@ class BaleCarrierController:
                 url=creds.url,
                 token=creds.token,
                 room=creds.room,
-                identity=creds.identity,
+                identity="baleobala",
             )
         finally:
             self._client.stop()
