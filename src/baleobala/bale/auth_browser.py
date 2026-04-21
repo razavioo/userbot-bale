@@ -69,14 +69,17 @@ class BaleAuthBrowser:
     # ------------------------------------------------------------------
 
     async def _async_start(self) -> None:
+        import os
         from playwright.async_api import async_playwright
+        headless = os.environ.get("BALE_HEADLESS", "1") != "0"
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=True)
+        self._browser = await self._pw.chromium.launch(headless=headless)
         self._ctx = await self._browser.new_context(
             viewport={"width": 1280, "height": 800},
             locale="fa-IR",
         )
         self._page = await self._ctx.new_page()
+        log.warning("Browser: launched (headless=%s)", headless)
 
     async def _dismiss_overlays(self) -> None:
         """Dismiss the PWA InstallGuide / privacy overlays that block clicks
@@ -163,16 +166,38 @@ class BaleAuthBrowser:
         # Prefer clicking the (now-enabled) submit button. If something
         # keeps it disabled (e.g. 2FA prompt we don't know about), fall
         # back to pressing Enter which the form's onSubmit accepts.
-        log.warning("Browser: clicking تایید و ادامه (verify)")
-        verify_btn = page.locator(
-            "button[data-testid='submit-button']:not([disabled])"
-        ).first
+        log.warning("Browser: submitting verify")
+        # Try three ways in order: enabled-submit click → Enter key →
+        # force-click on the (possibly disabled) submit button. Any of
+        # them may have already triggered the submit; the cookie poll
+        # below decides success.
+        submitted = False
         try:
+            verify_btn = page.locator(
+                "button[data-testid='submit-button']:not([disabled])"
+            ).first
             await verify_btn.wait_for(state="visible", timeout=5_000)
-            await verify_btn.click(timeout=_TIMEOUT)
+            await verify_btn.click(timeout=5_000)
+            submitted = True
+            log.warning("Browser: clicked (enabled) submit")
         except Exception:
-            log.warning("Browser: submit still disabled, pressing Enter")
-            await code_input.press("Enter")
+            pass
+        if not submitted:
+            try:
+                await code_input.press("Enter", timeout=3_000)
+                submitted = True
+                log.warning("Browser: submitted via Enter key")
+            except Exception:
+                pass
+        if not submitted:
+            try:
+                await page.locator("button[data-testid='submit-button']").first.click(
+                    force=True, timeout=3_000,
+                )
+                submitted = True
+                log.warning("Browser: force-clicked submit")
+            except Exception:
+                pass
 
         # Poll for up to 20s: JWT cookie arrives OR the URL navigates
         # away from /login. Also bail early if the page shows an error.
