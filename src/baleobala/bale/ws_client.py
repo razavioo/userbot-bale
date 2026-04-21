@@ -79,6 +79,20 @@ class WsClient:
         if self._thread:
             self._thread.join(timeout=timeout)
 
+    def send_oneway(
+        self, service: str, method: str, payload: bytes = b"",
+    ) -> None:
+        """Send an RPC without waiting for its response.
+
+        Useful for subscription-style RPCs (e.g. GetDiff) where we only
+        care about the push updates that follow, not the RPC ack.
+        """
+        if self._loop is None or self._ws is None:
+            raise RuntimeError("WsClient not started")
+        seq = next(self._seq_counter)
+        req = Request(service=service, method=method, payload=payload, seq=seq)
+        asyncio.run_coroutine_threadsafe(self._ws.send(req.encode()), self._loop)
+
     def rpc(
         self, service: str, method: str, payload: bytes = b"",
         timeout: float = 10.0,

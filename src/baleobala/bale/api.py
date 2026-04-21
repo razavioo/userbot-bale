@@ -118,28 +118,34 @@ class BaleApiClient:
         if self._jwt:
             self._subscribe_updates()
 
+    # Payload copied from the live web capture
+    # captures/ws-live/00002_cl_10199508.bin: the `optimizations` field
+    # (tag 2, packed repeated int32) carrying [8, 10, 12]. An empty
+    # body was observed to be dropped by the server for some accounts;
+    # this minimal packed-optimizations payload matches what the web
+    # client sends and has reliably opened the push stream on both
+    # accounts tested.
+    _GET_DIFF_PAYLOAD = bytes.fromhex("120308 0a0c".replace(" ", ""))
+
     def _subscribe_updates(self) -> None:
         """Ask the server to start pushing updates on this WS session.
 
         Web client issues /bale.ghasedak.v1.GhasedakService/GetDiff right
         after the WS handshake. Without this, the server never pushes
         UpdateMessage / incoming-call credentials to us — the phone
-        session gets them instead. RequestGetDiff has only repeated
-        fields (states, optimizations), so an empty body is valid and
-        effectively says "send me everything since seq 0".
+        session gets them instead. Fire-and-forget: we don't need the
+        ack, only the push stream that follows.
         """
         assert self._ws is not None
         try:
-            log.info("subscribing to update stream via GetDiff")
-            self._ws.rpc(
+            log.info("subscribing to update stream via GetDiff (fire-and-forget)")
+            self._ws.send_oneway(
                 "bale.ghasedak.v1.GhasedakService",
                 "GetDiff",
-                b"",
-                timeout=10.0,
+                self._GET_DIFF_PAYLOAD,
             )
-            log.info("GetDiff ack received; push stream is live")
         except Exception:  # noqa: BLE001
-            log.exception("GetDiff subscription failed; pushes may not arrive")
+            log.exception("GetDiff send failed; pushes may not arrive")
 
     def stop(self) -> None:
         if self._ws is not None:
