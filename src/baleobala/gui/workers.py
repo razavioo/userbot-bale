@@ -135,6 +135,15 @@ class ProxyWorker(QObject):
 
     def run(self) -> None:
         try:
+            log.info(
+                "proxy worker starting role=%s peer_id=%s peer_name=%r answer=%s listen=%s:%d",
+                self._role,
+                self._peer_id,
+                self._peer_name,
+                self._answer,
+                self._listen_host,
+                self._listen_port,
+            )
             self._run_inner()
         except Exception as e:
             log.exception("proxy worker crashed")
@@ -169,8 +178,10 @@ class ProxyWorker(QObject):
 
         controller = BaleCarrierController(client=BaleApiClient(jwt=self._jwt))
         try:
+            log.info("resolving call session")
             peer_id = self._peer_id
             if peer_id is None and self._peer_name:
+                log.info("searching contact by name=%r", self._peer_name)
                 matches = controller.search_contacts(self._peer_name)
                 if not matches:
                     raise RuntimeError(
@@ -181,9 +192,11 @@ class ProxyWorker(QObject):
                     f"matched {self._peer_name!r} -> user_id {peer_id}"
                 )
             if peer_id is not None:
+                log.info("dialing peer_id=%d", peer_id)
                 creds = controller.dial(peer_id=peer_id)
             elif self._answer:
                 self.log_line.emit("Waiting for incoming call…")
+                log.info("waiting for incoming call timeout=%ss", self._answer_timeout)
                 creds = controller.answer(timeout=self._answer_timeout)
             else:
                 raise RuntimeError(
@@ -199,6 +212,7 @@ class ProxyWorker(QObject):
             return
 
         self.connecting.emit("Opening LiveKit audio tunnel…")
+        log.info("opening livekit session room=%s identity=%s", creds.room, creds.identity)
         carrier_ctl = BaleCarrierController()
         carrier = carrier_ctl.open_session(creds)
         role = TunnelRole.CLIENT if self._role == "client" else TunnelRole.SERVER
@@ -215,6 +229,10 @@ class ProxyWorker(QObject):
         self._transport = transport
 
         secret = self._proxy_secret.encode("utf-8") if self._proxy_secret else None
+        if secret is not None:
+            log.info("proxy secret configured")
+        else:
+            log.info("proxy secret not configured")
 
         if self._role == "client":
             server = Socks5ProxyServer(
@@ -227,11 +245,13 @@ class ProxyWorker(QObject):
             self.connected.emit(
                 f"SOCKS5 listening on {self._listen_host}:{self._listen_port}"
             )
+            log.info("starting socks5 server")
             server.serve_forever()
         else:
             relay = TunnelTcpRelay(transport, secret=secret)
             self._server = relay
             self.connected.emit("Relay ready — awaiting client packets")
+            log.info("starting tcp relay")
             relay.serve_forever()
 
 
