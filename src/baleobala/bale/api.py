@@ -115,6 +115,31 @@ class BaleApiClient:
             kwargs["url"] = self._ws_url
         self._ws = WsClient(jwt=self._jwt, on_update=self._dispatch_update, **kwargs)
         self._ws.start(timeout=timeout)
+        if self._jwt:
+            self._subscribe_updates()
+
+    def _subscribe_updates(self) -> None:
+        """Ask the server to start pushing updates on this WS session.
+
+        Web client issues /bale.ghasedak.v1.GhasedakService/GetDiff right
+        after the WS handshake. Without this, the server never pushes
+        UpdateMessage / incoming-call credentials to us — the phone
+        session gets them instead. RequestGetDiff has only repeated
+        fields (states, optimizations), so an empty body is valid and
+        effectively says "send me everything since seq 0".
+        """
+        assert self._ws is not None
+        try:
+            log.info("subscribing to update stream via GetDiff")
+            self._ws.rpc(
+                "bale.ghasedak.v1.GhasedakService",
+                "GetDiff",
+                b"",
+                timeout=10.0,
+            )
+            log.info("GetDiff ack received; push stream is live")
+        except Exception:  # noqa: BLE001
+            log.exception("GetDiff subscription failed; pushes may not arrive")
 
     def stop(self) -> None:
         if self._ws is not None:
