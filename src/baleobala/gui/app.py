@@ -258,7 +258,7 @@ class ConnectView(QWidget):
         self.role = QComboBox()
         self.role.addItem("Caller — start the call and run a local SOCKS5 proxy", "client")
         self.role.addItem("Receiver — wait for an incoming call", "relay")
-        self.role.currentIndexChanged.connect(self._refresh_enabled)
+        self.role.setEnabled(False)
 
         self.dial_mode = QComboBox()
         self.dial_mode.addItem("Place a call to a contact", "name")
@@ -338,18 +338,26 @@ class ConnectView(QWidget):
     def _refresh_enabled(self) -> None:
         answering = self.dial_mode.currentData() == "answer"
         self.peer_name.setEnabled(not answering)
-        is_client = self.role.currentData() == "client"
+        target_role = "relay" if answering else "client"
+        current_role = self.role.currentData()
+        if current_role != target_role:
+            idx = self.role.findData(target_role)
+            if idx >= 0:
+                self.role.blockSignals(True)
+                self.role.setCurrentIndex(idx)
+                self.role.blockSignals(False)
+        is_client = target_role == "client"
         self.listen_port.setEnabled(is_client)
         if answering:
             self.connect_btn.setText("Wait for Call")
             self._set_state(
-                "Receiver mode: keep this window open and wait until the other side starts the call.",
+                "Receiver mode: keep this window open. The other side must start the call; this side only waits and joins.",
                 "info",
             )
         else:
             self.connect_btn.setText("Start Call")
             self._set_state(
-                "Caller mode: choose the contact, then start the call to create the session.",
+                "Caller mode: choose the contact and start the call to create the session.",
                 "info",
             )
 
@@ -364,12 +372,14 @@ class ConnectView(QWidget):
     # ---- actions ----
 
     def _on_connect_clicked(self) -> None:
+        if self._proxy_thread is not None and self._proxy_thread.isRunning():
+            self._set_state("A session is already running. Stop it before starting another one.", "err")
+            return
         jwt = self._main.jwt
         if not jwt:
             QMessageBox.warning(self, "Not signed in", "Please sign in first.")
             return
 
-        role = self.role.currentData()
         answering = self.dial_mode.currentData() == "answer"
         peer_name = self.peer_name.text().strip()
         if not answering and not peer_name:
@@ -377,7 +387,7 @@ class ConnectView(QWidget):
             return
 
         worker = ProxyWorker(
-            role=role,
+            role="relay" if answering else "client",
             jwt=jwt,
             peer_name=peer_name if not answering else "",
             answer=answering,
@@ -423,12 +433,16 @@ class ConnectView(QWidget):
         self.connect_btn.setEnabled(True)
         self.disconnect_btn.setEnabled(False)
         self._append_log("stopped")
+        self._proxy_worker = None
+        self._proxy_thread = None
 
     def _on_failed(self, err: str) -> None:
         self._set_state(f"Failed: {err}", "err")
         self.connect_btn.setEnabled(True)
         self.disconnect_btn.setEnabled(False)
         self._append_log("FAIL " + err)
+        self._proxy_worker = None
+        self._proxy_thread = None
 
     def _append_log(self, line: str) -> None:
         self.logs.appendPlainText(line)
