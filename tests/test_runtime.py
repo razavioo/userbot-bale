@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import baleobala
 
 from baleobala.carrier.bale import BaleCarrierController
@@ -86,3 +88,26 @@ def test_build_parser_exposes_bale_tunnel() -> None:
     assert "bale-tunnel" in subcommands
     assert "bale-proxy" in subcommands
     assert "doctor" in subcommands
+
+
+def test_clean_qt_environment_removes_sdk_overrides() -> None:
+    from baleobala.cli import _clean_qt_environment, _qt_environment_is_contaminated
+
+    env = {
+        "PATH": "/usr/bin",
+        "LD_LIBRARY_PATH": os.pathsep.join(
+            ["/home/taheri/Qt/6.8.3/gcc_64/lib", "/usr/lib", "/opt/pyside/lib"]
+        ),
+        "QT_PLUGIN_PATH": "/home/taheri/Qt/6.8.3/gcc_64/plugins",
+        "QT_QPA_PLATFORM_PLUGIN_PATH": "/home/taheri/Qt/6.8.3/gcc_64/plugins/platforms",
+        "QT_DEBUG_PLUGINS": "1",
+    }
+
+    assert _qt_environment_is_contaminated(env)
+    cleaned = _clean_qt_environment(env)
+    assert "QT_PLUGIN_PATH" not in cleaned
+    assert "QT_QPA_PLATFORM_PLUGIN_PATH" not in cleaned
+    assert "QT_DEBUG_PLUGINS" not in cleaned
+    assert "/home/taheri/Qt/6.8.3/gcc_64/lib" not in cleaned.get("LD_LIBRARY_PATH", "")
+    assert "/usr/lib" in cleaned.get("LD_LIBRARY_PATH", "")
+    assert "/opt/pyside/lib" in cleaned.get("LD_LIBRARY_PATH", "")
