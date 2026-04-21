@@ -5,7 +5,7 @@ enum BaleAppGroup {
     static let keychainService = "com.baleobala.vpn"
     static let keychainAccount = "baleobala"
     static let carrierSocketName = "carrier_tunnel.sock"
-    static let providerBundleIdentifier = "com.baleobala.packet-tunnel"
+    static let providerBundleIdentifier = "com.baleobala.app.packet-tunnel"
     static let tunnelDescription = "baleobala packet tunnel"
 
     static func sharedContainerURL() -> URL? {

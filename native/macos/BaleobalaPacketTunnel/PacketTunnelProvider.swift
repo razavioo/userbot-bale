@@ -24,32 +24,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        readLoopRunning = false
-        socketClient = nil
-        completionHandler()
-    }
-
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         completionHandler?(messageData)
     }
 
     private func configureNetwork(completionHandler: @escaping (Error?) -> Void) {
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: BaleAppGroup.identifier)
-        let ipv4 = NEIPv4Settings(addresses: ["10.7.0.2"], subnetMasks: ["255.255.255.0"])
-        ipv4.includedRoutes = [NEIPv4Route.default()]
-        ipv4.excludedRoutes = [
-            NEIPv4Route(destinationAddress: "127.0.0.0", subnetMask: "255.0.0.0"),
-        ]
-
-        let ipv6 = NEIPv6Settings(addresses: ["fd00::2"], networkPrefixLengths: [64])
-        ipv6.includedRoutes = [NEIPv6Route.default()]
-
-        settings.ipv4Settings = ipv4
-        settings.ipv6Settings = ipv6
-        settings.dnsSettings = NEDNSSettings(servers: ["1.1.1.1", "9.9.9.9"])
-        settings.mtu = 1400
-        settings.tunnelOverheadBytes = 80
+        let configuration = tunnelProviderConfiguration()
+        let settings = NEPacketTunnelNetworkSettings(
+            tunnelRemoteAddress: stringValue("serverAddress", default: BaleAppGroup.identifier, configuration: configuration)
+        )
+        let ipv4Settings = makeIPv4Settings(configuration: configuration)
+        let ipv6Settings = makeIPv6Settings(configuration: configuration)
+        if let ipv4Settings = ipv4Settings {
+            settings.ipv4Settings = ipv4Settings
+        }
+        if let ipv6Settings = ipv6Settings {
+            settings.ipv6Settings = ipv6Settings
+        }
+        if let dns = stringArray("dnsServers", configuration: configuration), !dns.isEmpty {
+            let dnsSettings = NEDNSSettings(servers: dns)
+            if let search = stringArray("searchDomains", configuration: configuration), !search.isEmpty {
+                dnsSettings.matchDomains = search
+            }
+            settings.dnsSettings = dnsSettings
+        }
+        if let mtu = intValue("mtu", configuration: configuration) {
+            settings.mtu = NSNumber(value: mtu)
+        }
+        if let overhead = intValue("overheadBytes", configuration: configuration) {
+            settings.tunnelOverheadBytes = NSNumber(value: overhead)
+        }
 
         setTunnelNetworkSettings(settings) { error in
             if let error = error {
@@ -67,8 +71,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func carrierSocketURL() -> URL? {
-        if let configuration = protocolConfiguration?.providerConfiguration,
-           let rawPath = configuration["carrierSocketPath"] as? String,
+        let configuration = tunnelProviderConfiguration()
+        if let rawPath = configuration["carrierSocketPath"] as? String,
            !rawPath.isEmpty {
             if rawPath.hasPrefix("/") {
                 return URL(fileURLWithPath: rawPath)
@@ -76,6 +80,97 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return BaleAppGroup.sharedContainerURL()?.appendingPathComponent(rawPath, isDirectory: false)
         }
         return BaleAppGroup.carrierSocketURL()
+    }
+
+    private func tunnelProviderConfiguration() -> [String: Any] {
+        guard let protocolConfiguration = protocolConfiguration as? NETunnelProviderProtocol,
+              let configuration = protocolConfiguration.providerConfiguration else {
+            return [:]
+        }
+        return configuration
+    }
+
+    private func stringValue(_ key: String, default defaultValue: String, configuration: [String: Any]) -> String {
+        if let value = configuration[key] as? String, !value.isEmpty {
+            return value
+        }
+        return defaultValue
+    }
+
+    private func stringArray(_ key: String, configuration: [String: Any]) -> [String]? {
+        guard let values = configuration[key] as? [String] else {
+            return nil
+        }
+        return values.filter { !$0.isEmpty }
+    }
+
+    private func intValue(_ key: String, configuration: [String: Any]) -> Int? {
+        if let value = configuration[key] as? Int {
+            return value
+        }
+        if let value = configuration[key] as? NSNumber {
+            return value.intValue
+        }
+        return nil
+    }
+
+    private func makeIPv4Settings(configuration: [String: Any]) -> NEIPv4Settings? {
+        guard let routes = stringArray("includedIPv4Routes", configuration: configuration),
+              !routes.isEmpty else {
+            return nil
+        }
+        let settings = NEIPv4Settings(addresses: ["10.7.0.2"], subnetMasks: ["255.255.255.0"])
+        settings.includedRoutes = routes.compactMap { Self.ipv4Route(from: $0) }
+        if let excluded = stringArray("excludedRoutes", configuration: configuration) {
+            settings.excludedRoutes = excluded.compactMap { Self.ipv4Route(from: $0) }
+        }
+        return settings
+    }
+
+    private func makeIPv6Settings(configuration: [String: Any]) -> NEIPv6Settings? {
+        guard let routes = stringArray("includedIPv6Routes", configuration: configuration),
+              !routes.isEmpty else {
+            return nil
+        }
+        let settings = NEIPv6Settings(addresses: ["fd00::2"], networkPrefixLengths: [64])
+        settings.includedRoutes = routes.compactMap { Self.ipv6Route(from: $0) }
+        if let excluded = stringArray("excludedRoutes", configuration: configuration) {
+            settings.excludedRoutes = excluded.compactMap { Self.ipv6Route(from: $0) }
+        }
+        return settings
+    }
+
+    private static func ipv4Route(from cidr: String) -> NEIPv4Route? {
+        let parts = cidr.split(separator: "/")
+        guard parts.count == 2,
+              let prefix = Int(parts[1]), prefix >= 0, prefix <= 32 else {
+            return nil
+        }
+        return NEIPv4Route(
+            destinationAddress: String(parts[0]),
+            subnetMask: subnetMask(from: prefix)
+        )
+    }
+
+    private static func ipv6Route(from cidr: String) -> NEIPv6Route? {
+        let parts = cidr.split(separator: "/")
+        guard parts.count == 2,
+              let prefix = Int(parts[1]), prefix >= 0, prefix <= 128 else {
+            return nil
+        }
+        return NEIPv6Route(
+            destinationAddress: String(parts[0]),
+            networkPrefixLength: NSNumber(value: prefix)
+        )
+    }
+
+    private static func subnetMask(from prefix: Int) -> String {
+        let mask = prefix == 0 ? 0 : UInt32.max << (32 - prefix)
+        let a = (mask >> 24) & 0xff
+        let b = (mask >> 16) & 0xff
+        let c = (mask >> 8) & 0xff
+        let d = mask & 0xff
+        return "\(a).\(b).\(c).\(d)"
     }
 
     private func startPacketPump() {
@@ -87,7 +182,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func pumpPacketsToCarrier(socketClient: BaleCarrierSocketClient) {
-        packetFlow.readPackets { [weak self] packets, protocols in
+        packetFlow.readPackets { [weak self] packets, _protocols in
             guard let self = self else { return }
             for packet in packets {
                 try? socketClient.sendPacket(packet)
@@ -106,13 +201,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard let packet = try? socketClient.readPacket() else {
                     break
                 }
-                guard let packet = packet, !packet.isEmpty else {
+                guard !packet.isEmpty else {
                     continue
                 }
                 let proto = Self.protocolNumber(for: packet)
                 self.packetFlow.writePackets([packet], withProtocols: [proto])
             }
         }
+    }
+
+    override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        readLoopRunning = false
+        socketClient = nil
+        completionHandler()
     }
 
     private static func protocolNumber(for packet: Data) -> NSNumber {

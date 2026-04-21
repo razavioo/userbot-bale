@@ -20,8 +20,8 @@ These notes document the Bale carrier work and how it maps into the desktop VPN/
 - Bale phone/SMS auth and token refresh need to be completed in the transport/auth layer.
 - Relay pairing should become a first-class concept instead of a manual peer-id flow.
 - The desktop app should call the same service layer as the CLI.
-- System VPN plumbing still needs Linux TUN and macOS packet-tunnel implementations.
-- The current `vpn` command is a managed proxy-backed bridge, not the final native packet tunnel.
+- System VPN plumbing now has Linux TUN and a macOS packet-tunnel scaffold; the remaining work is hardening and release packaging.
+- The current `vpn` command now orchestrates the shared service layer, while the packet-tunnel target owns the native macOS route/DNS settings.
 
 ## How the current headless path fits
 

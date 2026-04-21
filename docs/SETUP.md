@@ -53,9 +53,9 @@ For browser or conferencing-app flows, continue to use the existing docs:
 
 ## macOS notes
 
-The repo already treats macOS as a first-class target for the future desktop product, and the current `vpn up` command now applies system proxy settings on macOS so you can test the end-to-end path right now.
+The repo already treats macOS as a first-class target for the desktop product, and the packet-tunnel scaffold now consumes shared route and DNS configuration from the same profile data as the CLI.
 
-For now, macOS users should treat the current audio helper as legacy tooling and focus on the proxy/tunnel path plus the system-proxy bridge in [VPN_PLAN.md](VPN_PLAN.md).
+For now, macOS users should treat the proxy path as fallback/debug mode and the packet-tunnel path as the primary release path in [VPN_PLAN.md](VPN_PLAN.md).
 
 ## Verify the install
 

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from baleobala.control.auth import AuthStore
+from baleobala.control import ControlService
 from baleobala.gui.theme import apply_theme
 from baleobala.gui.workers import (
     ProxyWorker,
@@ -179,7 +179,7 @@ class LoginView(QWidget):
     def _on_verified(self, jwt: str) -> None:
         phone = self.phone.text().strip().lstrip("+")
         try:
-            AuthStore().save_jwt(jwt, provider="bale", phone=phone)
+            self._main.service.save_auth_jwt(jwt, phone=phone)
         except Exception as e:
             log.warning("keychain save failed: %s", e)
         self._set_status("Signed in.", "ok")
@@ -380,6 +380,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("baleobala")
         self.resize(820, 640)
 
+        self._service = ControlService()
         self.jwt: Optional[str] = None
         self.phone: Optional[str] = None
 
@@ -407,7 +408,7 @@ class MainWindow(QMainWindow):
         self._update_status()
 
         try:
-            record = AuthStore().load()
+            record = self._service.load_auth()
         except Exception as e:
             log.warning("auth load failed: %s", e)
             record = None
@@ -439,9 +440,13 @@ class MainWindow(QMainWindow):
         else:
             self._status_label.setText("○ Not signed in")
 
+    @property
+    def service(self) -> ControlService:
+        return self._service
+
     def _on_logout(self) -> None:
         try:
-            AuthStore().clear()
+            self._service.clear_auth()
         except Exception as e:
             log.warning("clear failed: %s", e)
         self.jwt = None

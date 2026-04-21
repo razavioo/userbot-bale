@@ -4,19 +4,24 @@ import NetworkExtension
 final class BaleTunnelManager {
     private let store = BaleKeychainStore()
 
-    func loadOrCreateManager(completion: @escaping (NETunnelProviderManager?) -> Void) {
+    func loadInstalledManager(completion: @escaping (NETunnelProviderManager?) -> Void) {
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
             if let error = error {
                 print("Failed to load tunnel managers: \(error)")
                 completion(nil)
                 return
             }
-            if let manager = managers?.first {
+            completion(managers?.first)
+        }
+    }
+
+    func loadOrCreateManager(completion: @escaping (NETunnelProviderManager?) -> Void) {
+        loadInstalledManager { manager in
+            if let manager = manager {
                 completion(manager)
                 return
             }
-            let manager = NETunnelProviderManager()
-            completion(manager)
+            completion(NETunnelProviderManager())
         }
     }
 

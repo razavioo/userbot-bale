@@ -10,6 +10,14 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.DS_Store
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+*.xccheckout
+native/macos/build/
+native/macos/*.xcworkspace/xcuserdata/
+native/macos/*.xcodeproj/xcuserdata/
 *.wav
 *.log
 
@@ -24,3 +32,20 @@ venv/
 # mitmproxy captures (contain session secrets)
 /captures/
 /.claude/
+
+# Ad-hoc RE artefacts — keep locally, not for the repo
+/jadx.zip
+/real_jadx.zip
+/jadx_out/
+/classes.dex
+/dump.bin
+/all_auth_strings.txt
+/web.html
+/web_bale_html.txt
+/web_js/
+/search_js.py
+
+# macOS Xcode project build + local config
+/native/macos/Baleobala.xcodeproj/
+/native/macos/Config/
+/native/Config/
