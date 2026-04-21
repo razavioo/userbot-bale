@@ -386,13 +386,13 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     if args.vpn_cmd == "plan":
         print("baleobala vpn plan")
         if sys.platform == "darwin":
-            print("default: macOS direct backend (in-process SOCKS5/HTTP CONNECT + system proxy)")
+            print("default: macOS packet-tunnel backend with shared route/DNS profile")
             print("alt: --backend proxy bridges to a paired Bale relay over LiveKit")
-            print("parked: --backend packet-tunnel needs Apple Developer Team ID + NE entitlement")
+            print("fallback: direct/proxy backends remain available for debugging and recovery")
         else:
             print("target: Linux TUN + route/DNS helper")
             print("next: wire a privileged helper for route and DNS changes")
-        print("carrier: Bale LiveKit credentials + tunnel runtime underneath (proxy backend only)")
+        print("carrier: Bale LiveKit credentials + tunnel runtime underneath")
         return 0
 
     if args.vpn_cmd == "agent":

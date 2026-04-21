@@ -13,8 +13,9 @@ The repo now has three layers:
 - Linux-first audio transport works today through `send`, `recv`, `virtmic`, the Bale LiveKit tunnel path, and the `tunnel` CLI family for full IP sessions.
 - On Linux, `baleobala vpn up` now defaults to the native `linux-tun` backend so the control plane can bring up a real TUN session.
 - A tunneled proxy path is already present for SOCKS5 and HTTP CONNECT.
-- On macOS, `vpn up` currently uses the local proxy plus system proxy settings so the machine can be exercised end-to-end now.
+- On macOS, `vpn up` now drives the packet-tunnel scaffold through the shared route/DNS profile model, with the proxy path still available as fallback/debug mode.
 - The native macOS app/packet-tunnel scaffold now lives under `native/macos/` and is wired around the same carrier socket contract as the Python runtime.
+- The native macOS app is the control panel: install the tunnel profile, then start/stop the packet tunnel from the window.
 - The long-term product direction is a signed desktop client with full-device VPN support, saved relay pairing, and no manual JWT workflow.
 
 ## Install
@@ -102,9 +103,15 @@ baleobala relay enable
 baleobala vpn up --backend proxy
 ```
 
-The `packet-tunnel` backend in [native/macos/](native/macos/) is parked —
-it would require a paid Apple Developer Team ID and the Network
-Extension entitlement, which we do not have.
+The `packet-tunnel` backend in [native/macos/](native/macos/) now consumes the
+shared route/DNS profile and is the primary macOS system-VPN path. The proxy
+backend remains available as fallback/debug mode.
+
+For a local macOS developer loop, use:
+
+```bash
+./scripts/run-macos.sh
+```
 
 For an always-on macOS launch agent, install it once with
 `baleobala vpn agent install`.
@@ -148,6 +155,8 @@ For an always-on macOS launch agent, install it once with
 
 - [Getting Started](docs/SETUP.md)
 - [Desktop VPN Plan](docs/VPN_PLAN.md)
+- [Install and Bootstrap](docs/INSTALL.md)
+- [Release Notes and Packaging](docs/RELEASE.md)
 - [Bale Headless Notes](docs/BALE_HEADLESS.md)
 - [Native macOS Scaffold](native/macos/README.md)
 - [Bale Web Path](docs/BALE_WEB.md)

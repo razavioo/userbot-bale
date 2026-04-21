@@ -7,7 +7,7 @@ final class BaleCarrierSocketClient {
     init(socketURL: URL) throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
-            throw POSIXError(.init(rawValue: errno))
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         self.fileDescriptor = fd
 
@@ -37,7 +37,7 @@ final class BaleCarrierSocketClient {
             }
         }
         guard result == 0 else {
-            let error = POSIXError(.init(rawValue: errno))
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             close(fd)
             throw error
         }
@@ -78,7 +78,7 @@ final class BaleCarrierSocketClient {
             while remaining > 0 {
                 let written = Darwin.write(fileDescriptor, base.advanced(by: offset), remaining)
                 if written < 0 {
-                    throw POSIXError(.init(rawValue: errno))
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
                 }
                 remaining -= written
                 offset += written
@@ -98,7 +98,7 @@ final class BaleCarrierSocketClient {
                     return offset
                 }
                 if result < 0 {
-                    throw POSIXError(.init(rawValue: errno))
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
                 }
                 remaining -= result
                 offset += result

@@ -102,6 +102,36 @@ def test_vpn_store_default_and_status(tmp_path, monkeypatch) -> None:
     assert store.status()["auto_start"] == "no"
 
 
+def test_control_service_bootstraps_first_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setattr("sys.platform", "linux")
+
+    from baleobala.control import ControlService
+
+    service = ControlService()
+    snapshot = service.status()
+
+    assert snapshot.auth["state"] == "empty"
+    assert snapshot.vpn["state"] == "configured"
+    assert snapshot.vpn["profile_id"] == "default"
+    assert snapshot.pairing["state"] == "empty"
+    assert snapshot.backend["backend"] == "linux-tun"
+
+
+def test_control_service_auth_roundtrip(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+
+    from baleobala.control import ControlService
+
+    service = ControlService()
+    record = service.save_auth_jwt("jwt-token", phone="+989")
+
+    assert record.phone == "+989"
+    loaded = service.load_auth()
+    assert loaded is not None
+    assert loaded.jwt == "jwt-token"
+
+
 def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import VpnProfile
