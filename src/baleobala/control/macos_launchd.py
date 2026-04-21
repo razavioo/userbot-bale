@@ -97,10 +97,13 @@ class MacOSLaunchAgentManager:
         self._run(["launchctl", "bootout", f"gui/{os.getuid()}", str(self._plist_path)], check=False)
 
     def status(self) -> dict[str, str]:
+        profile = VpnStore().load()
         return {
             "label": self.label,
             "plist": str(self._plist_path),
             "installed": "yes" if self._plist_path.exists() else "no",
+            "profile_id": profile.profile_id if profile is not None else "none",
+            "backend": profile.backend if profile is not None else "none",
         }
 
     def _run(self, cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:

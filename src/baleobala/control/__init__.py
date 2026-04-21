@@ -6,7 +6,28 @@ from baleobala.control.keychain import FileSecretBackend, KeychainSecretBackend,
 from baleobala.control.pairing import PairingRecord, PairingStore
 from baleobala.control.macos import MacOSSystemProxySession
 from baleobala.control.macos_launchd import LaunchAgentSpec, MacOSLaunchAgentManager
+from baleobala.control.analyzer import BundleAnalysis, ProductVerdict, analyze_bundle, build_product_verdict
+from baleobala.control.netns import (
+    NetnsHarness,
+    NetnsProcessManager,
+    NetnsProcessSpec,
+    NetnsProcessStatus,
+    NetnsSessionReport,
+    NetnsSessionRunner,
+    NetnsRunReport,
+    NetnsStepResult,
+    NetnsTopology,
+    render_process_script,
+    render_setup_commands,
+    render_shell_script,
+    render_smoke_commands,
+    render_teardown_commands,
+)
 from baleobala.control.paths import app_dir, config_dir, data_dir
+from baleobala.control.probe import ProbeResult, probe_endpoint
+from baleobala.control.readiness import BackendReadiness
+from baleobala.control.scenario import NetnsScenario, build_proxy_pair_scenario, build_tunnel_pair_scenario
+from baleobala.control.smoke import SmokeReport, smoke_backend_status
 from baleobala.control.service import ControlService, ControlSnapshot
 from baleobala.control.tunnel_service import CarrierTunnelService, LocalTunnelService, TunnelBridge, TunnelService, TunnelServiceState
 from baleobala.control.vpn import VpnProfile, VpnStore
@@ -23,6 +44,32 @@ __all__ = [
     "PairingStore",
     "MacOSSystemProxySession",
     "ProxyFallbackBackend",
+    "NetnsTopology",
+    "NetnsHarness",
+    "NetnsProcessManager",
+    "NetnsProcessSpec",
+    "NetnsProcessStatus",
+    "NetnsSessionReport",
+    "NetnsSessionRunner",
+    "NetnsRunReport",
+    "NetnsStepResult",
+    "render_process_script",
+    "render_setup_commands",
+    "render_smoke_commands",
+    "render_teardown_commands",
+    "render_shell_script",
+    "ProbeResult",
+    "probe_endpoint",
+    "BackendReadiness",
+    "NetnsScenario",
+    "build_proxy_pair_scenario",
+    "build_tunnel_pair_scenario",
+    "SmokeReport",
+    "smoke_backend_status",
+    "BundleAnalysis",
+    "ProductVerdict",
+    "analyze_bundle",
+    "build_product_verdict",
     "LaunchAgentSpec",
     "MacOSLaunchAgentManager",
     "ControlService",

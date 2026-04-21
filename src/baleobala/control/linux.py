@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from baleobala.control.paths import config_dir
+from baleobala.control.readiness import BackendReadiness
 from baleobala.control.resolver import LinuxResolver, RoutePlan, SystemResolver
 from baleobala.control.store import JsonStore
 
@@ -224,13 +225,17 @@ class LinuxTunBackend:
         self._session.start()
         self._profile_id = profile.profile_id
         self._pairing_id = profile.pairing_id
-        payload = {
-            "backend": "linux-tun",
-            "state": "running",
-            "profile_id": profile.profile_id,
-            "pairing_id": profile.pairing_id or "",
-            **self._session.status(),
-        }
+        session = self._session.status()
+        payload = BackendReadiness.for_linux_tun(
+            state="running",
+            session_active=self._session.active,
+            tun=session["tun"],
+            address=session["address"],
+            mtu=session["mtu"],
+        ).to_dict()
+        payload["profile_id"] = profile.profile_id
+        payload["pairing_id"] = profile.pairing_id or ""
+        payload.update(session)
         self._state_store.save(payload)
         return payload
 
@@ -247,4 +252,11 @@ class LinuxTunBackend:
         payload = self._state_store.load(default=None)
         if isinstance(payload, dict):
             return {str(k): str(v) for k, v in payload.items()}
-        return {"backend": "linux-tun", "state": "stopped"}
+        session = self._session.status()
+        return BackendReadiness.for_linux_tun(
+            state="stopped",
+            session_active=False,
+            tun=session["tun"],
+            address=session["address"],
+            mtu=session["mtu"],
+        ).to_dict()

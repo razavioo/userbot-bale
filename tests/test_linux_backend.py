@@ -126,6 +126,8 @@ def test_linux_tun_backend_up_down(tmp_path: Path) -> None:
     profile = VpnProfile(profile_id="p", name="p", backend="linux-tun")
     status = backend.up(profile)
     assert status["state"] == "running"
+    assert status["route_ready"] == "yes"
+    assert status["dns_ready"] == "yes"
     assert backend.status()["state"] == "running"
     backend.down()
     assert backend.status()["state"] == "stopped"

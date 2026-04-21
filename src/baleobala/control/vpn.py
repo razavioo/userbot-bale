@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import asdict, dataclass, field
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,9 @@ from baleobala.control.store import JsonStore
 def default_vpn_backend() -> str:
     if os.environ.get("BALEOBALA_VPN_BACKEND"):
         return os.environ["BALEOBALA_VPN_BACKEND"]
-    if os.sys.platform == "darwin":
-        return "direct"
-    if os.sys.platform.startswith("linux"):
+    if sys.platform == "darwin":
+        return "packet-tunnel"
+    if sys.platform.startswith("linux"):
         return "linux-tun"
     return "proxy"
 

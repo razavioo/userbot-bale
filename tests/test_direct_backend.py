@@ -94,6 +94,7 @@ def test_direct_socks5_server_http_connect_forwards_bytes() -> None:
     server.start()
     try:
         assert server.wait_ready(timeout=2.0)
+        assert server.bound_port is not None
         client = socket.create_connection(("127.0.0.1", server.bound_port), timeout=5.0)
         try:
             client.sendall(
@@ -163,8 +164,10 @@ def test_direct_backend_starts_server_before_system_proxy(tmp_path) -> None:
         session_factory=lambda: _OrderingSession(events),
     )
     profile = VpnProfile(profile_id="default", name="default", backend="direct")
-    backend.up(profile)
+    status = backend.up(profile)
     assert events == ["server_start", "session_start"]
+    assert status["control_ready"] == "yes"
+    assert status["data_path_ready"] == "yes"
     backend.down()
     assert events == ["server_start", "session_start", "session_stop", "server_stop"]
 
@@ -184,11 +187,11 @@ def test_direct_backend_rolls_back_server_if_session_fails(tmp_path) -> None:
     assert events == ["server_start", "session_start_fail", "server_stop"]
 
 
-def test_direct_is_default_backend_on_darwin(monkeypatch) -> None:
+def test_packet_tunnel_is_default_backend_on_darwin(monkeypatch) -> None:
     monkeypatch.delenv("BALEOBALA_VPN_BACKEND", raising=False)
     monkeypatch.setattr("sys.platform", "darwin")
     from baleobala.control.backend import default_backend_name
     from baleobala.control.vpn import default_vpn_backend
 
-    assert default_backend_name() == "direct"
-    assert default_vpn_backend() == "direct"
+    assert default_backend_name() == "packet-tunnel"
+    assert default_vpn_backend() == "packet-tunnel"

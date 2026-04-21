@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import time
-
+from typing import Any
 
 def _mk_jwt(**claims) -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
@@ -143,9 +143,42 @@ def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     status = backend.up(profile)
     assert status["backend"] == "packet-tunnel"
     assert status["state"] == "running"
+    assert status["transport_ready"] == "no"
+    assert status["call_established"] == "yes"
+    assert status["teardown_clean"] == "no"
     assert status["profile_id"] == "p1"
     backend.down()
     assert backend.status()["state"] == "stopped"
+
+
+def test_bundle_analyzer_classifies_missing_bundle(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    analysis = analyze_bundle(tmp_path / "missing")
+    assert analysis.classification == "infra_flake"
+    assert analysis.ok == "no"
+
+
+def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import BundleAnalysis, build_product_verdict
+
+    verdict = build_product_verdict(
+        {
+            "backend": "linux-tun",
+            "state": "running",
+            "call_established": "yes",
+            "transport_selected": "dc",
+            "data_flow_ok": "yes",
+            "teardown_clean": "yes",
+            "failure_class": "",
+            "artifact_bundle": "/tmp/bundle",
+        },
+        BundleAnalysis("product_bug", "payload flow failed", "/tmp/bundle", "no"),
+    )
+    assert verdict.ok == "no"
+    assert verdict.analysis_classification == "product_bug"
 
 
 def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
@@ -158,6 +191,7 @@ def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
     assert state.state == "running"
     assert service.endpoint is not None
 
+    assert service.endpoint is not None
     socket_path = service.endpoint.removeprefix("unix://")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(socket_path)
@@ -254,7 +288,9 @@ def test_carrier_tunnel_service_bridges_bytes(tmp_path, monkeypatch) -> None:
     runtime.start(profile_id="p1", backend="packet-tunnel", pairing_id="pair-1")
     right.open()
 
-    socket_path = runtime.status().endpoint.removeprefix("unix://")
+    endpoint = runtime.status().endpoint
+    assert endpoint is not None
+    socket_path = endpoint.removeprefix("unix://")
 
     def recv_exact(sock, size):  # noqa: ANN001
         buf = bytearray()
@@ -300,6 +336,14 @@ def test_build_parser_exposes_control_plane_commands() -> None:
     vpn_parser = subcommands["vpn"]
     vpn_subcommands = _subparser_choices(vpn_parser)
     assert "agent" in vpn_subcommands
+    assert "probe" in vpn_subcommands
+    assert "smoke" in vpn_subcommands
+    assert "netns-plan" in vpn_subcommands
+    assert "netns-run" in vpn_subcommands
+    assert "netns-process-plan" in vpn_subcommands
+    assert "netns-process-run" in vpn_subcommands
+    assert "netns-session" in vpn_subcommands
+    assert "netns-scenario" in vpn_subcommands
 
     vpn_up_parser = vpn_subcommands["up"]
     assert "linux-tun" in _arg_choices(vpn_up_parser, "backend")
@@ -459,6 +503,7 @@ def test_macos_system_proxy_restore_saved_state(tmp_path, monkeypatch) -> None:
 
 def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
     from baleobala.control import AuthStore, PairingStore, VpnStore
@@ -505,11 +550,8 @@ def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> No
     monkeypatch.setattr(cli, "cmd_bale_proxy_client", fake_client)
     monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
 
-    class Args:
-        vpn_cmd = "up"
-        profile_id = None
-
-    assert cli.cmd_vpn(Args()) == 0
+    import argparse
+    assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None)) == 0
     captured_io = capsys.readouterr()
     assert "macOS system proxy active" in captured_io.err
     assert captured["args"].peer_id == 777
@@ -520,6 +562,7 @@ def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> No
 
 def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
     from baleobala.control import AuthStore, PairingStore, VpnStore
@@ -556,31 +599,48 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
             captured["proxy_start"] = True
         def stop(self):
             captured["proxy_stop"] = True
-        def status(self):
-            return {"proxy": "127.0.0.1:1080"}
+            def status(self):
+                return {"proxy": "127.0.0.1:1080"}
 
     monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
     monkeypatch.setattr("baleobala.control.backend.DirectSocks5Server", FakeServer)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
 
-    class Args:
-        vpn_cmd = "up"
-        profile_id = None
+    def fake_start_packet_tunnel_runtime(profile, auth_record):  # noqa: ANN001,ARG001
+        captured["profile"] = profile
+        class Runtime:
+            def start(self, **kwargs):  # noqa: ANN001
+                captured["runtime_start"] = kwargs
+                return __import__("types").SimpleNamespace(endpoint="unix://carrier.sock")
 
-    assert cli.cmd_vpn(Args()) == 0
-    assert captured["server_start"] is True
-    assert captured["proxy_start"] is True
-    assert captured["proxy_stop"] is True
-    assert captured["server_stop"] is True
+            def stop(self):
+                captured["runtime_stop"] = True
+
+        class Bridge:
+            def close(self):
+                captured["bridge_close"] = True
+
+        return Runtime(), Bridge()
+
+    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", fake_start_packet_tunnel_runtime)
+    monkeypatch.setattr(cli, "_hold_backend", lambda endpoint, *, label: 0)
+
+    import argparse
+    assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None)) == 0
+    assert captured["profile"].backend == "packet-tunnel"
+    assert captured["runtime_stop"] is True
+    assert captured["bridge_close"] is True
     # pairing is applied to profile
     stored = VpnStore().load()
     assert stored is not None
+    assert active_pairing is not None
     assert stored.pairing_id == active_pairing.profile_id
-    assert stored.backend == "direct"
+    assert stored.backend == "packet-tunnel"
 
 
-def test_vpn_up_prefers_direct_on_darwin(tmp_path, monkeypatch, capsys) -> None:
+def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
     from baleobala.control import AuthStore, PairingStore, VpnStore
@@ -590,7 +650,8 @@ def test_vpn_up_prefers_direct_on_darwin(tmp_path, monkeypatch, capsys) -> None:
     pairing_store = PairingStore()
     pairing = pairing_store.begin("relay-a", role="client", peer_id=777, relay_mode="proxy")
     pairing_store.accept(pairing.pair_code)
-    VpnStore().ensure_default()
+    profile = VpnStore().ensure_default()
+    assert profile.backend == "packet-tunnel"
 
     captured = {}
 
@@ -621,23 +682,38 @@ def test_vpn_up_prefers_direct_on_darwin(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
     monkeypatch.setattr("baleobala.control.backend.DirectSocks5Server", FakeServer)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
+    def fake_start_packet_tunnel_runtime(profile, auth_record):  # noqa: ANN001,ARG001
+        class Runtime:
+            def start(self, **kwargs):  # noqa: ANN001
+                captured["runtime_start"] = kwargs
+                return __import__("types").SimpleNamespace(endpoint="unix://carrier.sock")
 
-    class Args:
-        vpn_cmd = "up"
-        profile_id = None
-        backend = None
+            def stop(self):
+                captured["runtime_stop"] = True
 
-    assert cli.cmd_vpn(Args()) == 0
-    err = capsys.readouterr().err
-    assert "macOS direct proxy active" in err or "macOS system proxy active" in err
-    assert captured["server_start"] is True
-    assert captured["proxy_start"] is True
-    assert captured["server_stop"] is True
-    assert captured["proxy_stop"] is True
+        class Bridge:
+            def close(self):
+                captured["bridge_close"] = True
+
+        return Runtime(), Bridge()
+
+    def fake_hold_backend(endpoint, *, label):  # noqa: ANN001
+        captured["held"] = (endpoint, label)
+        return 0
+
+    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", fake_start_packet_tunnel_runtime)
+    monkeypatch.setattr(cli, "_hold_backend", fake_hold_backend)
+
+    import argparse
+    assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
+    assert captured["held"][0] == "unix://carrier.sock"
+    assert captured["runtime_stop"] is True
+    assert captured["bridge_close"] is True
 
 
-def test_vpn_up_rejects_packet_tunnel_on_darwin(tmp_path, monkeypatch) -> None:
+def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
     from baleobala.control import AuthStore, VpnStore
@@ -649,16 +725,32 @@ def test_vpn_up_rejects_packet_tunnel_on_darwin(tmp_path, monkeypatch) -> None:
         VpnProfile(profile_id="default", name="default", backend="packet-tunnel")
     )
 
-    class Args:
-        vpn_cmd = "up"
-        profile_id = None
-        backend = None
+    captured = {}
 
-    import pytest
-    with pytest.raises(SystemExit) as excinfo:
-        cli.cmd_vpn(Args())
-    assert "packet-tunnel" in str(excinfo.value).lower()
-    assert "direct" in str(excinfo.value).lower()
+    def fake_start_packet_tunnel_runtime(profile, auth_record):  # noqa: ANN001,ARG001
+        captured["profile"] = profile
+        class Runtime:
+            def start(self, **kwargs):  # noqa: ANN001
+                captured["runtime_start"] = kwargs
+                return __import__("types").SimpleNamespace(endpoint="unix://carrier.sock")
+
+            def stop(self):
+                captured["runtime_stop"] = True
+
+        class Bridge:
+            def close(self):
+                captured["bridge_close"] = True
+
+        return Runtime(), Bridge()
+
+    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", fake_start_packet_tunnel_runtime)
+    monkeypatch.setattr(cli, "_hold_backend", lambda endpoint, *, label: 0)
+
+    import argparse
+    assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
+    assert captured["profile"].backend == "packet-tunnel"
+    assert captured["runtime_stop"] is True
+    assert captured["bridge_close"] is True
 
 
 def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
@@ -685,7 +777,7 @@ def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
         )
     )
 
-    events: list[tuple[str, object]] = []
+    events: list[Any] = []
 
     class FakeBackend:
         def up(self, profile):  # noqa: ANN001
@@ -715,12 +807,8 @@ def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("baleobala.control.backend.backend_for_profile", fake_backend_for_profile)
     monkeypatch.setattr("baleobala.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
 
-    class Args:
-        vpn_cmd = "up"
-        profile_id = None
-        backend = None
-
-    assert cli.cmd_vpn(Args()) == 0
+    import argparse
+    assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
     assert events[0] == ("factory", "linux-tun")
     assert events[1] == ("up", "linux-tun")
     assert events[2][0] == "session"
@@ -755,7 +843,7 @@ def test_vpn_up_linux_tun_exit_node_runs_nat_setup(tmp_path, monkeypatch) -> Non
         )
     )
 
-    events: list[tuple[str, object]] = []
+    events: list[Any] = []
 
     class FakeBackend:
         def up(self, profile):  # noqa: ANN001
@@ -789,12 +877,8 @@ def test_vpn_up_linux_tun_exit_node_runs_nat_setup(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr("baleobala.vpn.cli._run_nat_setup", fake_nat_setup)
     monkeypatch.setattr("baleobala.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
 
-    class Args:
-        vpn_cmd = "up"
-        profile_id = None
-        backend = None
-
-    assert cli.cmd_vpn(Args()) == 0
+    import argparse
+    assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
     assert events[0] == ("factory", "linux-tun")
     assert events[1] == ("up", "linux-tun")
     assert events[2] == ("nat", ("vpn0", "eth0"))

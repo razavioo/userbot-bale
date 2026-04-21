@@ -843,7 +843,12 @@ class TunnelTcpRelay:
             def pump_socket_to_transport() -> None:
                 try:
                     while not stop.is_set():
-                        data = sock.recv(4096)
+                        try:
+                            data = sock.recv(4096)
+                        except TimeoutError:
+                            continue
+                        except OSError:
+                            break
                         if not data:
                             break
                         for chunk in _chunk_bytes(data, self._max_chunk_size):

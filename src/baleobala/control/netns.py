@@ -1,0 +1,767 @@
+"""Linux network-namespace planning and execution for single-host VPN tests."""
+
+from __future__ import annotations
+
+import subprocess
+import time
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+import shlex
+
+from baleobala.control.paths import config_dir, data_dir
+from baleobala.control.store import JsonStore
+
+
+@dataclass(frozen=True)
+class NetnsTopology:
+    prefix: str = "baleobala"
+    client_ns: str = "bb-client"
+    server_ns: str = "bb-server"
+    client_veth: str = "bb-veth-c"
+    server_veth: str = "bb-veth-s"
+    client_ip_cidr: str = "172.29.0.1/30"
+    server_ip_cidr: str = "172.29.0.2/30"
+    client_ip: str = "172.29.0.1"
+    server_ip: str = "172.29.0.2"
+
+    @classmethod
+    def with_prefix(cls, prefix: str) -> "NetnsTopology":
+        trimmed = prefix[:8] if prefix else "baleo"
+        return cls(
+            prefix=trimmed,
+            client_ns=f"{trimmed}-client",
+            server_ns=f"{trimmed}-server",
+            client_veth=f"{trimmed}-vc",
+            server_veth=f"{trimmed}-vs",
+        )
+
+
+Runner = Callable[..., subprocess.CompletedProcess[str]]
+PopenFactory = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class NetnsStepResult:
+    phase: str
+    command: list[str]
+    ok: bool
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "command": self.command,
+            "ok": self.ok,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "returncode": self.returncode,
+        }
+
+
+@dataclass(frozen=True)
+class NetnsRunReport:
+    ok: bool
+    stage: str
+    topology: dict[str, str]
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    last_error: str = ""
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": "yes" if self.ok else "no",
+            "stage": self.stage,
+            "topology": self.topology,
+            "steps": self.steps,
+            "last_error": self.last_error,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class NetnsProcessSpec:
+    namespace: str
+    name: str
+    command: list[str]
+    log_path: str
+
+    def to_dict(self) -> dict[str, str | list[str]]:
+        return {
+            "namespace": self.namespace,
+            "name": self.name,
+            "command": self.command,
+            "log_path": self.log_path,
+        }
+
+
+@dataclass(frozen=True)
+class NetnsProcessStatus:
+    name: str
+    namespace: str
+    pid: int
+    running: bool
+    command: list[str]
+    log_path: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "namespace": self.namespace,
+            "pid": self.pid,
+            "running": "yes" if self.running else "no",
+            "command": self.command,
+            "log_path": self.log_path,
+        }
+
+
+@dataclass(frozen=True)
+class NetnsSessionReport:
+    ok: bool
+    stage: str
+    readiness: str
+    topology: dict[str, str]
+    call_established: str = "no"
+    transport_selected: str = ""
+    data_flow_ok: str = "no"
+    teardown_clean: str = "no"
+    failure_class: str = ""
+    artifact_bundle: str = ""
+    process_status: list[dict[str, Any]] = field(default_factory=list)
+    harness_steps: list[dict[str, Any]] = field(default_factory=list)
+    log_tails: dict[str, str] = field(default_factory=dict)
+    last_error: str = ""
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": "yes" if self.ok else "no",
+            "stage": self.stage,
+            "readiness": self.readiness,
+            "call_established": self.call_established,
+            "transport_selected": self.transport_selected,
+            "data_flow_ok": self.data_flow_ok,
+            "teardown_clean": self.teardown_clean,
+            "failure_class": self.failure_class,
+            "artifact_bundle": self.artifact_bundle,
+            "topology": self.topology,
+            "process_status": self.process_status,
+            "harness_steps": self.harness_steps,
+            "log_tails": self.log_tails,
+            "last_error": self.last_error,
+            "updated_at": self.updated_at,
+        }
+
+
+class NetnsHarness:
+    def __init__(
+        self,
+        topology: NetnsTopology,
+        *,
+        runner: Runner | None = None,
+        state_path: Path | None = None,
+        logs_dir: Path | None = None,
+    ) -> None:
+        self.topology = topology
+        self._runner = runner or subprocess.run
+        self._store = JsonStore(state_path or (config_dir() / "netns_harness.json"))
+        self._logs_dir = logs_dir or (data_dir() / "netns")
+
+    def setup(self) -> NetnsRunReport:
+        return self._run_phase("setup", render_setup_commands(self.topology))
+
+    def smoke(self) -> NetnsRunReport:
+        return self._run_phase("smoke", render_smoke_commands(self.topology))
+
+    def teardown(self) -> NetnsRunReport:
+        return self._run_phase("teardown", render_teardown_commands(self.topology), best_effort=True)
+
+    def full_cycle(self) -> NetnsRunReport:
+        setup = self.setup()
+        if not setup.ok:
+            return setup
+        smoke = self.smoke()
+        teardown = self.teardown()
+        ok = smoke.ok and teardown.ok
+        report = NetnsRunReport(
+            ok=ok,
+            stage="full-cycle",
+            topology=_topology_dict(self.topology),
+            steps=setup.steps + smoke.steps + teardown.steps,
+            last_error=smoke.last_error or teardown.last_error,
+        )
+        self._store.save(report.to_dict())
+        return report
+
+    def build_process_specs(
+        self,
+        *,
+        server_cmd: list[str],
+        client_cmd: list[str],
+    ) -> list[NetnsProcessSpec]:
+        self._logs_dir.mkdir(parents=True, exist_ok=True)
+        return [
+            NetnsProcessSpec(
+                namespace=self.topology.server_ns,
+                name="server",
+                command=_wrap_netns_exec(self.topology.server_ns, server_cmd),
+                log_path=str(self._logs_dir / f"{self.topology.prefix}-server.log"),
+            ),
+            NetnsProcessSpec(
+                namespace=self.topology.client_ns,
+                name="client",
+                command=_wrap_netns_exec(self.topology.client_ns, client_cmd),
+                log_path=str(self._logs_dir / f"{self.topology.prefix}-client.log"),
+            ),
+        ]
+
+    def status(self) -> NetnsRunReport | None:
+        payload = self._store.load(default=None)
+        if not isinstance(payload, dict):
+            return None
+        return NetnsRunReport(
+            ok=str(payload.get("ok", "no")) == "yes",
+            stage=str(payload.get("stage", "")),
+            topology={str(k): str(v) for k, v in payload.get("topology", {}).items()},
+            steps=list(payload.get("steps", [])),
+            last_error=str(payload.get("last_error", "")),
+            updated_at=float(payload.get("updated_at", time.time())),
+        )
+
+    def _run_phase(
+        self,
+        phase: str,
+        commands: list[list[str]],
+        *,
+        best_effort: bool = False,
+    ) -> NetnsRunReport:
+        steps: list[dict[str, Any]] = []
+        last_error = ""
+        ok = True
+        for cmd in commands:
+            try:
+                result = self._runner(cmd, check=False, capture_output=True, text=True)
+                step = NetnsStepResult(
+                    phase=phase,
+                    command=list(cmd),
+                    ok=result.returncode == 0,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    returncode=result.returncode,
+                )
+            except OSError as exc:
+                step = NetnsStepResult(
+                    phase=phase,
+                    command=list(cmd),
+                    ok=False,
+                    stdout="",
+                    stderr=str(exc),
+                    returncode=127,
+                )
+            steps.append(step.to_dict())
+            if not step.ok and not best_effort:
+                ok = False
+                last_error = step.stderr.strip() or step.stdout.strip() or f"{phase} failed"
+                break
+            if not step.ok and best_effort and not last_error:
+                last_error = step.stderr.strip() or step.stdout.strip() or f"{phase} had errors"
+        report = NetnsRunReport(
+            ok=ok if not best_effort else True,
+            stage=phase,
+            topology=_topology_dict(self.topology),
+            steps=steps,
+            last_error=last_error,
+        )
+        self._store.save(report.to_dict())
+        return report
+
+
+def render_setup_commands(topology: NetnsTopology) -> list[list[str]]:
+    return [
+        ["ip", "netns", "add", topology.client_ns],
+        ["ip", "netns", "add", topology.server_ns],
+        [
+            "ip",
+            "link",
+            "add",
+            topology.client_veth,
+            "type",
+            "veth",
+            "peer",
+            "name",
+            topology.server_veth,
+        ],
+        ["ip", "link", "set", topology.client_veth, "netns", topology.client_ns],
+        ["ip", "link", "set", topology.server_veth, "netns", topology.server_ns],
+        [
+            "ip",
+            "netns",
+            "exec",
+            topology.client_ns,
+            "ip",
+            "addr",
+            "add",
+            topology.client_ip_cidr,
+            "dev",
+            topology.client_veth,
+        ],
+        [
+            "ip",
+            "netns",
+            "exec",
+            topology.server_ns,
+            "ip",
+            "addr",
+            "add",
+            topology.server_ip_cidr,
+            "dev",
+            topology.server_veth,
+        ],
+        ["ip", "netns", "exec", topology.client_ns, "ip", "link", "set", "lo", "up"],
+        ["ip", "netns", "exec", topology.server_ns, "ip", "link", "set", "lo", "up"],
+        ["ip", "netns", "exec", topology.client_ns, "ip", "link", "set", topology.client_veth, "up"],
+        ["ip", "netns", "exec", topology.server_ns, "ip", "link", "set", topology.server_veth, "up"],
+    ]
+
+
+def render_teardown_commands(topology: NetnsTopology) -> list[list[str]]:
+    return [
+        ["ip", "netns", "del", topology.client_ns],
+        ["ip", "netns", "del", topology.server_ns],
+    ]
+
+
+def render_smoke_commands(topology: NetnsTopology) -> list[list[str]]:
+    return [
+        ["ip", "netns", "exec", topology.client_ns, "ping", "-c", "1", topology.server_ip],
+        ["ip", "netns", "exec", topology.server_ns, "ping", "-c", "1", topology.client_ip],
+    ]
+
+
+def render_shell_script(topology: NetnsTopology) -> str:
+    lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
+    lines.append("# setup")
+    for cmd in render_setup_commands(topology):
+        lines.append(" ".join(cmd))
+    lines.append("")
+    lines.append("# smoke")
+    for cmd in render_smoke_commands(topology):
+        lines.append(" ".join(cmd))
+    lines.append("")
+    lines.append("# teardown")
+    for cmd in render_teardown_commands(topology):
+        lines.append(" ".join(cmd))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_process_script(
+    topology: NetnsTopology,
+    *,
+    server_cmd: list[str],
+    client_cmd: list[str],
+    logs_dir: str,
+) -> str:
+    lines = [render_shell_script(topology).rstrip(), ""]
+    lines.append("# process-launch")
+    for spec in _default_process_specs(topology, server_cmd=server_cmd, client_cmd=client_cmd, logs_dir=logs_dir):
+        shell_cmd = shlex.join(spec.command)
+        lines.append(f"{shell_cmd} > {shlex.quote(spec.log_path)} 2>&1 &")
+        lines.append(f'echo "$!" > {shlex.quote(spec.log_path + ".pid")}')
+    lines.append("")
+    lines.append("# cleanup-processes")
+    for spec in _default_process_specs(topology, server_cmd=server_cmd, client_cmd=client_cmd, logs_dir=logs_dir):
+        pid_file = spec.log_path + ".pid"
+        lines.append(f'if [ -f {shlex.quote(pid_file)} ]; then kill "$(cat {shlex.quote(pid_file)})" 2>/dev/null || true; fi')
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _topology_dict(topology: NetnsTopology) -> dict[str, str]:
+    return {
+        "prefix": topology.prefix,
+        "client_ns": topology.client_ns,
+        "server_ns": topology.server_ns,
+        "client_veth": topology.client_veth,
+        "server_veth": topology.server_veth,
+        "client_ip_cidr": topology.client_ip_cidr,
+        "server_ip_cidr": topology.server_ip_cidr,
+        "client_ip": topology.client_ip,
+        "server_ip": topology.server_ip,
+    }
+
+
+def _wrap_netns_exec(namespace: str, command: list[str]) -> list[str]:
+    return ["ip", "netns", "exec", namespace, *command]
+
+
+def _default_process_specs(
+    topology: NetnsTopology,
+    *,
+    server_cmd: list[str],
+    client_cmd: list[str],
+    logs_dir: str,
+) -> list[NetnsProcessSpec]:
+    return [
+        NetnsProcessSpec(
+            namespace=topology.server_ns,
+            name="server",
+            command=_wrap_netns_exec(topology.server_ns, server_cmd),
+            log_path=str(Path(logs_dir) / f"{topology.prefix}-server.log"),
+        ),
+        NetnsProcessSpec(
+            namespace=topology.client_ns,
+            name="client",
+            command=_wrap_netns_exec(topology.client_ns, client_cmd),
+            log_path=str(Path(logs_dir) / f"{topology.prefix}-client.log"),
+        ),
+    ]
+
+
+class NetnsProcessManager:
+    def __init__(
+        self,
+        *,
+        state_path: Path | None = None,
+        popen_factory: PopenFactory | None = None,
+    ) -> None:
+        self._store = JsonStore(state_path or (config_dir() / "netns_processes.json"))
+        self._popen_factory = popen_factory or subprocess.Popen
+        self._children: dict[str, Any] = {}
+
+    def start(self, specs: list[NetnsProcessSpec]) -> list[NetnsProcessStatus]:
+        statuses: list[NetnsProcessStatus] = []
+        payload: dict[str, Any] = {"items": []}
+        for spec in specs:
+            log_path = Path(spec.log_path)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = log_path.open("ab")
+            try:
+                proc = self._popen_factory(
+                    spec.command,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                )
+            finally:
+                handle.close()
+            self._children[spec.name] = proc
+            status = NetnsProcessStatus(
+                name=spec.name,
+                namespace=spec.namespace,
+                pid=int(proc.pid),
+                running=proc.poll() is None,
+                command=spec.command,
+                log_path=spec.log_path,
+            )
+            statuses.append(status)
+            payload["items"].append(status.to_dict())
+        self._store.save(payload)
+        return statuses
+
+    def stop(self) -> list[NetnsProcessStatus]:
+        statuses = self.status()
+        for item in statuses:
+            proc = self._children.get(item.name)
+            if proc is None:
+                continue
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        final_statuses = self.status()
+        self._store.save({"items": [item.to_dict() for item in final_statuses]})
+        return final_statuses
+
+    def status(self) -> list[NetnsProcessStatus]:
+        payload = self._store.load(default={"items": []})
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        statuses: list[NetnsProcessStatus] = []
+        for item in items:
+            name = str(item.get("name", ""))
+            proc = self._children.get(name)
+            if proc is not None:
+                running = proc.poll() is None
+                pid = int(proc.pid)
+            else:
+                running = str(item.get("running", "no")) == "yes"
+                pid = int(item.get("pid", 0))
+            statuses.append(
+                NetnsProcessStatus(
+                    name=name,
+                    namespace=str(item.get("namespace", "")),
+                    pid=pid,
+                    running=running,
+                    command=[str(part) for part in item.get("command", [])],
+                    log_path=str(item.get("log_path", "")),
+                )
+            )
+        return statuses
+
+
+def _log_contains(path: str, needle: str) -> bool:
+    try:
+        return needle in Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def _collect_log_tails(statuses: list[NetnsProcessStatus], *, max_chars: int = 400) -> dict[str, str]:
+    tails: dict[str, str] = {}
+    for item in statuses:
+        try:
+            text = Path(item.log_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            tails[item.name] = ""
+            continue
+        tails[item.name] = text[-max_chars:]
+    return tails
+
+
+def _contains_marker(text: str, marker: str) -> bool:
+    return marker in text
+
+
+def _classify_failure(*, ready: bool, smoke_ok: bool, setup_ok: bool, teardown_ok: bool, last_error: str, bundle_ok: bool) -> str:
+    text = last_error.lower()
+    if not bundle_ok or not setup_ok or "missing" in text or "permission" in text or "timeout" in text and not ready:
+        return "infra_flake"
+    if "expired" in text or "credential" in text or "peer" in text or "negotiation" in text:
+        return "carrier_instability"
+    if ready and not smoke_ok:
+        return "product_bug"
+    if not teardown_ok:
+        return "teardown_leak"
+    return "infra_flake"
+
+
+class NetnsSessionRunner:
+    def __init__(self, harness: NetnsHarness, process_manager: NetnsProcessManager, *, artifact_root: Path | None = None) -> None:
+        self._harness = harness
+        self._process_manager = process_manager
+        self._artifact_root = artifact_root or (data_dir() / "netns-artifacts")
+
+    def run(
+        self,
+        *,
+        server_cmd: list[str],
+        client_cmd: list[str],
+        server_ready_pattern: str = "",
+        client_ready_pattern: str = "",
+        smoke_commands: list[list[str]] | None = None,
+        timeout: float = 5.0,
+        scenario: dict[str, Any] | None = None,
+    ) -> NetnsSessionReport:
+        required_markers = [str(marker) for marker in (scenario or {}).get("expected_markers", []) if marker]
+        setup = self._harness.setup()
+        if not setup.ok:
+            return self._report(
+                ok=False,
+                stage="setup",
+                readiness="failed",
+                harness_steps=setup.steps,
+                last_error=setup.last_error,
+                failure_class=_classify_failure(ready=False, smoke_ok=False, setup_ok=False, teardown_ok=False, last_error=setup.last_error, bundle_ok=False),
+            )
+
+        started = self._process_manager.start(
+            self._harness.build_process_specs(server_cmd=server_cmd, client_cmd=client_cmd)
+        )
+        ready, ready_error, markers = self._wait_for_ready(
+            started,
+            server_ready_pattern=server_ready_pattern,
+            client_ready_pattern=client_ready_pattern,
+            timeout=timeout,
+            required_markers=required_markers,
+        )
+        bundle_dir = self._make_artifact_bundle()
+        if ready and smoke_commands:
+            smoke = self._harness._run_phase("smoke-custom", smoke_commands)
+        elif ready:
+            smoke = self._harness.smoke()
+        else:
+            smoke = NetnsRunReport(
+                ok=False,
+                stage="smoke-skipped",
+                topology=_topology_dict(self._harness.topology),
+                steps=[],
+                last_error=ready_error,
+            )
+        stopped = self._process_manager.stop()
+        teardown = self._harness.teardown()
+        ok = ready and smoke.ok and teardown.ok
+        bundle_ok = self._write_bundle(
+            bundle_dir,
+            scenario=scenario,
+            setup=setup,
+            smoke=smoke,
+            teardown=teardown,
+            started=started,
+            stopped=stopped,
+            markers=markers,
+        )
+        log_tails = _collect_log_tails(stopped)
+        call_established = "yes" if any(_contains_marker(tail, "call_established") for tail in log_tails.values()) or ready else "no"
+        transport_selected = self._extract_first_marker(log_tails, "transport_selected=")
+        data_flow_ok = "yes" if smoke.ok else "no"
+        teardown_clean = "yes" if teardown.ok else "no"
+        return self._report(
+            ok=ok,
+            stage="session",
+            readiness="ready" if ready else "timeout",
+            call_established=call_established,
+            transport_selected=transport_selected,
+            data_flow_ok=data_flow_ok,
+            teardown_clean=teardown_clean,
+            failure_class=_classify_failure(
+                ready=ready,
+                smoke_ok=smoke.ok,
+                setup_ok=setup.ok,
+                teardown_ok=teardown.ok,
+                last_error=ready_error or smoke.last_error or teardown.last_error,
+                bundle_ok=bundle_ok,
+            ),
+            artifact_bundle=str(bundle_dir),
+            process_status=[item.to_dict() for item in stopped],
+            harness_steps=setup.steps + smoke.steps + teardown.steps,
+            log_tails=log_tails,
+            last_error="" if ok else (ready_error or smoke.last_error or teardown.last_error),
+        )
+
+    def _wait_for_ready(
+        self,
+        statuses: list[NetnsProcessStatus],
+        *,
+        server_ready_pattern: str,
+        client_ready_pattern: str,
+        timeout: float,
+        required_markers: list[str],
+    ) -> tuple[bool, str, list[str]]:
+        deadline = time.time() + timeout
+        markers: list[str] = []
+        while time.time() < deadline:
+            markers = self._collect_markers(statuses)
+            if required_markers and not self._required_markers_ready(statuses, required_markers=required_markers):
+                time.sleep(0.05)
+                continue
+            if self._patterns_ready(
+                statuses,
+                server_ready_pattern=server_ready_pattern,
+                client_ready_pattern=client_ready_pattern,
+            ):
+                return True, "", markers
+            time.sleep(0.05)
+        return False, "process readiness timeout", markers
+
+    def _required_markers_ready(self, statuses: list[NetnsProcessStatus], *, required_markers: list[str]) -> bool:
+        if not required_markers:
+            return True
+        log_text = ""
+        for item in statuses:
+            try:
+                log_text += "\n" + Path(item.log_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+        return all(marker in log_text for marker in required_markers)
+
+    def _collect_markers(self, statuses: list[NetnsProcessStatus]) -> list[str]:
+        out: list[str] = []
+        for item in statuses:
+            try:
+                text = Path(item.log_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for marker in ("call_established", "transport_selected=", "proxy_listening=", "tunnel_up=", "teardown_done"):
+                if marker in text:
+                    out.append(marker)
+        return sorted(set(out))
+
+    def _patterns_ready(
+        self,
+        statuses: list[NetnsProcessStatus],
+        *,
+        server_ready_pattern: str,
+        client_ready_pattern: str,
+    ) -> bool:
+        by_name = {item.name: item for item in statuses}
+        server_ok = _log_contains(by_name["server"].log_path, server_ready_pattern) if server_ready_pattern else True
+        client_ok = _log_contains(by_name["client"].log_path, client_ready_pattern) if client_ready_pattern else True
+        return server_ok and client_ok
+
+    def _report(
+        self,
+        *,
+        ok: bool,
+        stage: str,
+        readiness: str,
+        call_established: str = "no",
+        transport_selected: str = "",
+        data_flow_ok: str = "no",
+        teardown_clean: str = "no",
+        failure_class: str = "",
+        artifact_bundle: str = "",
+        process_status: list[dict[str, Any]] | None = None,
+        harness_steps: list[dict[str, Any]] | None = None,
+        log_tails: dict[str, str] | None = None,
+        last_error: str = "",
+    ) -> NetnsSessionReport:
+        return NetnsSessionReport(
+            ok=ok,
+            stage=stage,
+            readiness=readiness,
+            call_established=call_established,
+            transport_selected=transport_selected,
+            data_flow_ok=data_flow_ok,
+            teardown_clean=teardown_clean,
+            failure_class=failure_class,
+            artifact_bundle=artifact_bundle,
+            topology=_topology_dict(self._harness.topology),
+            process_status=process_status or [],
+            harness_steps=harness_steps or [],
+            log_tails=log_tails or {},
+            last_error=last_error,
+        )
+
+    def _extract_first_marker(self, log_tails: dict[str, str], prefix: str) -> str:
+        for text in log_tails.values():
+            for line in text.splitlines():
+                if line.startswith(prefix):
+                    return line[len(prefix) :].strip()
+        return ""
+
+    def _make_artifact_bundle(self) -> Path:
+        self._artifact_root.mkdir(parents=True, exist_ok=True)
+        bundle_dir = self._artifact_root / f"{self._harness.topology.prefix}-{int(time.time() * 1000)}"
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        return bundle_dir
+
+    def _write_bundle(
+        self,
+        bundle_dir: Path,
+        *,
+        scenario: dict[str, Any] | None,
+        setup: NetnsRunReport,
+        smoke: NetnsRunReport,
+        teardown: NetnsRunReport,
+        started: list[NetnsProcessStatus],
+        stopped: list[NetnsProcessStatus],
+        markers: list[str],
+    ) -> bool:
+        try:
+            payload = {
+                "topology": _topology_dict(self._harness.topology),
+                "scenario": scenario or {},
+                "setup": setup.to_dict(),
+                "smoke": smoke.to_dict(),
+                "teardown": teardown.to_dict(),
+                "started": [item.to_dict() for item in started],
+                "stopped": [item.to_dict() for item in stopped],
+                "markers": markers,
+                "log_tails": _collect_log_tails(stopped),
+            }
+            (bundle_dir / "verdict.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            return True
+        except OSError:
+            return False
