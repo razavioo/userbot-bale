@@ -5,14 +5,16 @@ from __future__ import annotations
 import atexit
 import os
 import signal
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 import baleobala.control.macos as macos
 from baleobala.control.paths import config_dir
+from baleobala.control.readiness import BackendReadiness
 from baleobala.control.store import JsonStore
-from baleobala.control.tunnel_service import TunnelService, TunnelServiceState
+from baleobala.control.tunnel_service import TunnelService
 from baleobala.control.vpn import VpnProfile
 from baleobala.runtime.proxy import DirectSocks5Server
 
@@ -78,18 +80,15 @@ class MacOSPacketTunnelBackend(VpnBackend):
                 backend=profile.backend,
                 pairing_id=profile.pairing_id,
             )
-        self._state = BackendState(
-            backend="packet-tunnel",
+        self._state = BackendState(backend="packet-tunnel", state="running", profile_id=profile.profile_id, pairing_id=profile.pairing_id, endpoint=service_state.endpoint if service_state is not None else None)
+        readiness = BackendReadiness.for_packet_tunnel(
             state="running",
+            endpoint=service_state.endpoint if service_state is not None else None,
             profile_id=profile.profile_id,
             pairing_id=profile.pairing_id,
-            endpoint=service_state.endpoint if service_state is not None else None,
-            details={
-                "policy": "full-tunnel",
-                "mode": "native",
-            },
+            runtime_active=service_state is not None and service_state.state == "running",
         )
-        self._state_store.save(self._state.to_dict())
+        self._state_store.save(readiness.to_dict())
         return self.status()
 
     def down(self) -> None:
@@ -107,8 +106,14 @@ class MacOSPacketTunnelBackend(VpnBackend):
             result = {str(key): str(value) for key, value in payload.items()}
             if "backend" not in result:
                 result["backend"] = "packet-tunnel"
-            return result
-        return self._state.to_dict()
+            return BackendReadiness.from_dict(result).to_dict()
+        return BackendReadiness.for_packet_tunnel(
+            state=self._state.state,
+            endpoint=self._state.endpoint,
+            profile_id=self._state.profile_id,
+            pairing_id=self._state.pairing_id,
+            runtime_active=False,
+        ).to_dict()
 
 
 class ProxyFallbackBackend(VpnBackend):
@@ -123,8 +128,8 @@ class ProxyFallbackBackend(VpnBackend):
     """
 
     def __init__(self, *, listen_host: str = "127.0.0.1", listen_port: int = 1080) -> None:
-        if os.sys.platform == "darwin":
-            self._session: _ProxySessionBase = macos.MacOSSystemProxySession(
+        if sys.platform == "darwin":
+            self._session: _ProxySessionBase = macos.MacOSSystemProxySession(  # type: ignore
                 listen_host=listen_host,
                 listen_port=listen_port,
             )
@@ -134,13 +139,7 @@ class ProxyFallbackBackend(VpnBackend):
 
     def up(self, profile: VpnProfile) -> dict[str, str]:
         self._session.start()
-        self._state = BackendState(
-            backend="proxy",
-            state="running",
-            profile_id=profile.profile_id,
-            pairing_id=profile.pairing_id,
-            details={"proxy": self._session.status()["proxy"]},
-        )
+        self._state = BackendState(backend="proxy", state="running", profile_id=profile.profile_id, pairing_id=profile.pairing_id)
         return self.status()
 
     def down(self) -> None:
@@ -148,10 +147,17 @@ class ProxyFallbackBackend(VpnBackend):
         self._state = BackendState(backend="proxy")
 
     def status(self) -> dict[str, str]:
-        return {
-            **self._state.to_dict(),
-            **self._session.status(),
-        }
+        session = self._session.status()
+        readiness = BackendReadiness.for_proxy_fallback(
+            state=self._state.state,
+            session_active=session.get("active") == "yes",
+            proxy=session["proxy"],
+            pairing_id=self._state.pairing_id,
+            profile_id=self._state.profile_id,
+        )
+        payload = readiness.to_dict()
+        payload.update(session)
+        return payload
 
 
 class DirectProxyBackend(VpnBackend):
@@ -189,7 +195,7 @@ class DirectProxyBackend(VpnBackend):
         )
         if session_factory is not None:
             self._session_factory = session_factory
-        elif os.sys.platform == "darwin":
+        elif sys.platform == "darwin":
             self._session_factory = lambda: macos.MacOSSystemProxySession(
                 listen_host=listen_host, listen_port=listen_port
             )
@@ -250,10 +256,21 @@ class DirectProxyBackend(VpnBackend):
             pass
 
     def status(self) -> dict[str, str]:
-        base = self._state.to_dict()
-        if self._session is not None:
-            base.update(self._session.status())
-        return base
+        session = self._session.status() if self._session is not None else {
+            "active": "no",
+            "proxy": f"{self._listen_host}:{self._listen_port}",
+        }
+        session_active = session.get("active", "yes" if self._session is not None else "no") == "yes"
+        readiness = BackendReadiness.for_direct_proxy(
+            state=self._state.state,
+            session_active=session_active,
+            listener_ready=self._server is not None,
+            endpoint=self._state.endpoint,
+            proxy=session["proxy"],
+        )
+        payload = readiness.to_dict()
+        payload.update(session)
+        return payload
 
     def _register_cleanup(self) -> None:
         if self._cleanup_registered:
@@ -319,9 +336,9 @@ class _NullProxySession(_ProxySessionBase):
 def default_backend_name() -> str:
     if os.environ.get("BALEOBALA_VPN_BACKEND"):
         return os.environ["BALEOBALA_VPN_BACKEND"]
-    if os.sys.platform == "darwin":
-        return "direct"
-    if os.sys.platform.startswith("linux"):
+    if sys.platform == "darwin":
+        return "packet-tunnel"
+    if sys.platform.startswith("linux"):
         return "linux-tun"
     return "proxy"
 

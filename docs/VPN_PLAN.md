@@ -23,6 +23,8 @@ The repo now also has a first-pass product control plane:
 
 That control plane is the bridge between the current proxy tunnel and the future native Linux/macOS VPN backends.
 
+This document now serves as the execution plan for the remaining test and development work around the Linux netns harness, the real Bale-backed proxy/tunnel flows, and the final product-level verdicts.
+
 On macOS, the packet-tunnel backend is now the primary system-VPN path. The native extension consumes the shared tunnel profile, including the route and DNS plan, so the app target and packet-tunnel target stay aligned. The fallback proxy path still exists for debugging and for systems where the native path is not available.
 
 If a paired relay already exists locally, `vpn up --backend proxy` will select it automatically so the first-run flow stays simple. The macOS release also gets a LaunchAgent install path so the VPN can come back on login without extra steps.
@@ -37,41 +39,138 @@ If a paired relay already exists locally, `vpn up --backend proxy` will select i
   - `Proxy` as the fallback/debug transport.
 - Make relay setup durable with saved pairing and secure credential storage.
 - Remove manual JWT capture from the end-user flow.
+- Turn the current generic netns harness into a real acceptance runner that can decide pass/fail for a Bale session without human interpretation.
+- Standardize readiness markers, smoke payloads, artifact bundles, and failure classes so CI and release validation use the same truth source.
 
-## Release Phases
+## Execution Phases
 
-### Phase 1
-- Package the current Python core cleanly.
-- Refresh docs and install instructions.
-- Keep proxy and tunnel modes stable and testable.
-- Keep the new control-plane commands (`auth`, `pair`, `relay`, `vpn`, `doctor`) stable and easy to use.
+### Phase 1: Product Acceptance Runner
+- Add a higher-level `vpn netns-session` runner that executes the real `proxy-pair` and `tunnel-pair` flows end-to-end.
+- Accept server/client JWTs, `peer_id`, proxy secret or PSK, transport preference, timeout budget, and artifact path as explicit inputs.
+- Produce a final verdict JSON with at least:
+  - `call_established`
+  - `transport_selected`
+  - `data_flow_ok`
+  - `teardown_clean`
+  - `failure_class`
+  - `artifact_bundle`
+- Keep `vpn netns-scenario` as the scenario-shape command, but ensure it exposes the real readiness markers and smoke definition that the runner uses.
 
-### Phase 2
-- Finish Bale phone/SMS auth and session refresh.
-- Add saved relay pairing.
-- Add secure credential storage per OS.
-- Keep a CLI for `auth`, `pair`, `relay`, `vpn`, `proxy`, and `doctor`.
+### Phase 2: Real Readiness Markers
+- Replace `echo ready` style readiness with stable log/runtime markers.
+- Standardize the minimum set of markers:
+  - `call_established`
+  - `transport_selected=<name>`
+  - `proxy_listening=<host:port>`
+  - `tunnel_up=<tun_name>`
+  - `teardown_done`
+- Make readiness status derivable from the same markers used by the session runner.
+- Add stable failure modes for marker extraction and runtime setup, including `auth_expired`, `call_timeout`, and `transport_timeout`.
 
-### Phase 3
-- Finish macOS packet-tunnel plumbing and route/DNS management.
-- Wire the desktop app to the same service layer as the CLI.
+### Phase 3: Real Payload Flow
+- Upgrade proxy smoke from “listener open” to “TCP CONNECT and echo success through proxy”.
+- Use a real echo service in the server namespace, or a third namespace when that keeps the test deterministic.
+- For tunnel-pair, send real payload through the tunnel after TUN is up.
+- Verify at least one of ICMP or UDP payload traversal for the tunnel path.
+- When full-device mode is enabled, add DNS and TCP probes plus route verification.
+- Include `proxy_port_open`, `packet_flow_ok`, and `dns_failed` style outcomes in the report surface where relevant.
 
-### Phase 4
-- Ship signed macOS builds.
-- Ship packaged Linux builds.
-- Add installer/bootstrap docs and smoke tests for first-run setup.
+### Phase 4: Linux Realistic Path
+- Move the remaining Linux setup from scripts into the session runner where possible.
+- Automate:
+  - TUN create and attach in the correct namespace
+  - route programming
+  - DNS setup
+  - NAT and host-route exemptions
+- Preserve the current manual scripts as references, but make the runner the source of truth for session orchestration.
+- Map infrastructure failures into deterministic classes such as `missing_iproute`, `missing_tun`, `permission_denied`, and `teardown_leak`.
+
+### Phase 5: Artifact Bundling and Triage
+- Bundle every run with:
+  - server log
+  - client log
+  - selected transport
+  - scenario input
+  - netns command transcript
+  - route and DNS snapshot
+  - smoke transcript
+  - final verdict JSON
+- Add a deterministic analyzer that classifies runs into:
+  - `product_bug`
+  - `infra_flake`
+  - `carrier_instability`
+- Keep AI summarization downstream of the bundle, not as part of runtime truth.
+
+### Phase 6: CI and Release Validation
+- Keep daily CI focused on:
+  - in-memory tests
+  - harness unit tests
+  - dry-run and orchestration tests
+- Run Linux nightly or on a suitable runner:
+  - real `proxy-pair`
+  - then real `tunnel-pair`
+- Preserve a small two-device smoke test for release confirmation only.
+
+## Public Interfaces
+
+### CLI
+
+- `vpn netns-session` becomes the product acceptance runner.
+- `vpn netns-session` should return verdict fields for:
+  - `call_established`
+  - `transport_selected`
+  - `data_flow_ok`
+  - `teardown_clean`
+  - `failure_class`
+  - `artifact_bundle`
+- `vpn netns-scenario` should return the readiness markers and smoke definition for the selected scenario, not only command templates.
+
+### Runtime Status Contract
+
+The readiness/status model should include:
+
+- `call_established`
+- `transport_selected`
+- `carrier_latency_ms` or a stable placeholder field
+- `data_flow_ok`
+- `teardown_clean`
+- `failure_class`
+
+These fields must be derivable from the runner and its artifact bundle, not only from backend state.
 
 ## Test Strategy
 
-- Unit tests for auth, pairing, secure storage, and tunnel/proxy session behavior.
-- Integration tests for client/relay pairing and reconnect.
-- OS smoke tests for Linux and macOS route/DNS setup and teardown.
-- End-to-end tests for proxy fallback and full VPN routing.
+- Acceptance path 1: `proxy-pair`
+  - two namespaces
+  - real Bale call
+  - real relay/client processes
+  - transport selection recorded
+  - SOCKS or CONNECT path carries payload successfully
+  - teardown clean
+- Acceptance path 2: `tunnel-pair`
+  - two namespaces with a real TUN
+  - real Bale call
+  - transport selection recorded
+  - tunnel up marker
+  - real ICMP/UDP/TCP payload crosses the tunnel
+  - DNS and route checks when full-device mode is active
+- Failure-path regression
+  - expired JWT
+  - incorrect `peer_id`
+  - answer timeout
+  - datachannel unavailable with fallback
+  - proxy listener up but payload failure
+  - tunnel up marker but packet flow failure
+  - teardown failure or leak
+  - missing `iproute`, missing TUN, insufficient privileges
+- Analyzer tests
+  - incomplete bundle -> `infra_flake`
+  - call ok but payload fail -> `product_bug`
+  - missing call credentials or unstable negotiation -> `carrier_instability`
 
 ## Assumptions
 
-- Linux is the first system-VPN target.
-- macOS is a first-class target for the desktop product, not an afterthought.
-- The user-owned relay-device model is the default release shape.
-- Manual JWT is not part of the public install flow.
-- Full-tunnel routing is the v1 default; split tunnel can come later.
+- The generic harness work is effectively done; the remaining work is product-specific validation, not more framework design.
+- The immediate priority order is `proxy-pair` real flow, real readiness markers, `tunnel-pair` real flow, artifact analyzer, then two-device validation.
+- If the CLI/runtime needs stable readiness log lines, that is part of the remaining missing work and should be implemented rather than deferred.
+- The end state is a Linux run that can produce a product-level pass/fail verdict for both call setup and data transfer without human judgment.

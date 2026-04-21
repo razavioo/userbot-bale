@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Iterator, Literal
 
 from baleobala.virtmic import VirtualMic
@@ -412,7 +414,29 @@ def _start_packet_tunnel_runtime(profile, auth_record):
 
 
 def cmd_vpn(args: argparse.Namespace) -> int:
-    from baleobala.control import AuthStore, PairingStore, VpnProfile, VpnStore
+    from baleobala.control import (
+        AuthStore,
+        NetnsHarness,
+        NetnsProcessManager,
+        NetnsProcessSpec,
+        NetnsTopology,
+        NetnsSessionRunner,
+        PairingStore,
+        NetnsScenario,
+        analyze_bundle,
+        build_product_verdict,
+        VpnProfile,
+        VpnStore,
+        build_proxy_pair_scenario,
+        build_tunnel_pair_scenario,
+        probe_endpoint,
+        render_process_script,
+        render_setup_commands,
+        render_shell_script,
+        render_smoke_commands,
+        render_teardown_commands,
+        smoke_backend_status,
+    )
     from baleobala.control.backend import backend_for_profile, default_backend_name
     from baleobala.control.macos_launchd import MacOSLaunchAgentManager
 
@@ -486,6 +510,218 @@ def cmd_vpn(args: argparse.Namespace) -> int:
             print(f"  name: {pairing.name}")
             print(f"  role: {pairing.role}")
             print(f"  status: {pairing.status}")
+        return 0
+
+    if args.vpn_cmd == "probe":
+        profile = vpn_store.load() or vpn_store.ensure_default()
+        backend = backend_for_profile(profile)
+        backend_status = backend.status()
+        probe = probe_endpoint(backend_status.get("endpoint"))
+        if args.json:
+            print(json.dumps({"backend": backend_status, "probe": probe.to_dict()}, indent=2, sort_keys=True))
+            return 0 if probe.ok else 2
+        for key, value in backend_status.items():
+            print(f"{key}: {value}")
+        print("probe:")
+        for key, value in probe.to_dict().items():
+            print(f"  {key}: {value}")
+        return 0 if probe.ok else 2
+
+    if args.vpn_cmd == "smoke":
+        profile = vpn_store.load() or vpn_store.ensure_default()
+        backend = backend_for_profile(profile)
+        backend_status = backend.status()
+        report = smoke_backend_status(backend_status, timeout=args.timeout)
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        else:
+            for key, value in report.to_dict().items():
+                print(f"{key}: {value}")
+        return 0 if report.ok else 2
+
+    if args.vpn_cmd == "analyze-bundle":
+        analysis = analyze_bundle(args.bundle_path)
+        payload = analysis.to_dict()
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            for key, value in payload.items():
+                print(f"{key}: {value}")
+        return 0 if analysis.ok == "yes" else 2
+
+    if args.vpn_cmd == "verdict":
+        status = backend_for_profile(vpn_store.load() or vpn_store.ensure_default()).status()
+        bundle_analysis = analyze_bundle(args.bundle_path) if args.bundle_path else None
+        verdict = build_product_verdict(status, bundle_analysis)
+        payload = verdict.to_dict()
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            for key, value in payload.items():
+                print(f"{key}: {value}")
+        return 0 if verdict.ok == "yes" else 2
+
+    if args.vpn_cmd == "netns-plan":
+        topology = NetnsTopology.with_prefix(args.prefix)
+        if args.format == "shell":
+            print(render_shell_script(topology))
+            return 0
+        payload = {
+            "topology": {
+                "client_ns": topology.client_ns,
+                "server_ns": topology.server_ns,
+                "client_veth": topology.client_veth,
+                "server_veth": topology.server_veth,
+                "client_ip_cidr": topology.client_ip_cidr,
+                "server_ip_cidr": topology.server_ip_cidr,
+            },
+            "setup": render_setup_commands(topology),
+            "smoke": render_smoke_commands(topology),
+            "teardown": render_teardown_commands(topology),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if args.vpn_cmd == "netns-run":
+        topology = NetnsTopology.with_prefix(args.prefix)
+        harness = NetnsHarness(topology)
+        if args.phase == "setup":
+            report = harness.setup()
+        elif args.phase == "smoke":
+            report = harness.smoke()
+        elif args.phase == "teardown":
+            report = harness.teardown()
+        elif args.phase == "status":
+            report = harness.status()
+            if report is None:
+                print(json.dumps({"ok": "no", "stage": "missing", "topology": {}, "steps": [], "last_error": "no saved harness state"}, indent=2, sort_keys=True))
+                return 2
+        else:
+            report = harness.full_cycle()
+        payload = report.to_dict()
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            for key, value in payload.items():
+                if key == "steps":
+                    print("steps:")
+                    for item in value:
+                        print(f"  - {item['phase']} rc={item['returncode']} ok={item['ok']} cmd={' '.join(item['command'])}")
+                elif key == "topology":
+                    print("topology:")
+                    for name, item in value.items():
+                        print(f"  {name}: {item}")
+                else:
+                    print(f"{key}: {value}")
+        return 0 if payload["ok"] == "yes" else 2
+
+    if args.vpn_cmd == "netns-process-plan":
+        topology = NetnsTopology.with_prefix(args.prefix)
+        server_cmd = ["sh", "-lc", args.server_cmd]
+        client_cmd = ["sh", "-lc", args.client_cmd]
+        harness = NetnsHarness(topology)
+        specs = harness.build_process_specs(server_cmd=server_cmd, client_cmd=client_cmd)
+        if args.format == "shell":
+            print(
+                render_process_script(
+                    topology,
+                    server_cmd=server_cmd,
+                    client_cmd=client_cmd,
+                    logs_dir=str(harness._logs_dir),
+                )
+            )
+            return 0
+        payload = {
+            "topology": {
+                "client_ns": topology.client_ns,
+                "server_ns": topology.server_ns,
+            },
+            "processes": [spec.to_dict() for spec in specs],
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if args.vpn_cmd == "netns-process-run":
+        topology = NetnsTopology.with_prefix(args.prefix)
+        harness = NetnsHarness(topology)
+        manager = NetnsProcessManager()
+        if args.phase == "status":
+            statuses = manager.status()
+        else:
+            specs = harness.build_process_specs(
+                server_cmd=["sh", "-lc", args.server_cmd],
+                client_cmd=["sh", "-lc", args.client_cmd],
+            )
+            if args.phase == "start":
+                statuses = manager.start(specs)
+            else:
+                statuses = manager.stop()
+        payload = {"items": [item.to_dict() for item in statuses]}
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if args.vpn_cmd == "netns-session":
+        if args.kind == "proxy-pair":
+            scenario = build_proxy_pair_scenario(
+                server_jwt_file=args.server_jwt_file,
+                client_jwt_file=args.client_jwt_file,
+                peer_id=args.peer_id,
+                proxy_secret=args.proxy_secret,
+                listen_port=args.listen_port,
+            )
+        else:
+            scenario = build_tunnel_pair_scenario(
+                server_jwt_file=args.server_jwt_file,
+                client_jwt_file=args.client_jwt_file,
+                peer_id=args.peer_id,
+                server_tun=args.server_tun,
+                client_tun=args.client_tun,
+                server_wan=args.server_wan,
+                transport=args.transport,
+                psk_file=args.psk_file,
+            )
+        topology = NetnsTopology.with_prefix(args.prefix)
+        harness = NetnsHarness(topology)
+        manager = NetnsProcessManager()
+        artifact_root = Path(args.artifact_dir).expanduser() if getattr(args, "artifact_dir", "") else None
+        session = NetnsSessionRunner(harness, manager, artifact_root=artifact_root)
+        report = session.run(
+            server_cmd=scenario.server_cmd,
+            client_cmd=scenario.client_cmd,
+            server_ready_pattern=scenario.server_ready,
+            client_ready_pattern=scenario.client_ready,
+            smoke_commands=[
+                ["ip", "netns", "exec", topology.client_ns, "sh", "-lc", scenario.smoke_client_cmd]
+            ] if scenario.smoke_client_cmd else None,
+            timeout=args.timeout,
+            scenario=scenario.to_dict(),
+        )
+        payload = report.to_dict()
+        payload["scenario"] = scenario.to_dict()
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if report.ok else 2
+
+    if args.vpn_cmd == "netns-scenario":
+        if args.kind == "proxy-pair":
+            scenario = build_proxy_pair_scenario(
+                server_jwt_file=args.server_jwt_file,
+                client_jwt_file=args.client_jwt_file,
+                peer_id=args.peer_id,
+                proxy_secret=args.proxy_secret,
+                listen_port=args.listen_port,
+            )
+        else:
+            scenario = build_tunnel_pair_scenario(
+                server_jwt_file=args.server_jwt_file,
+                client_jwt_file=args.client_jwt_file,
+                peer_id=args.peer_id,
+                server_tun=args.server_tun,
+                client_tun=args.client_tun,
+                server_wan=args.server_wan,
+                transport=args.transport,
+                psk_file=args.psk_file,
+            )
+        print(json.dumps(scenario.to_dict(), indent=2, sort_keys=True))
         return 0
 
     if args.vpn_cmd == "down":
@@ -612,13 +848,6 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 bridge.close()
         finally:
             backend.down()
-
-    if sys.platform == "darwin" and profile.backend == "packet-tunnel":
-        raise SystemExit(
-            "packet-tunnel backend requires an Apple Developer Team ID and the Network Extension "
-            "entitlement, which are not configured in this build. Re-run with --backend direct "
-            "(recommended on macOS) or --backend proxy if you have a paired remote relay."
-        )
 
     client_args = _vpn_namespace_from_profile(profile, auth_record)
     backend = backend_for_profile(profile)
@@ -1043,6 +1272,81 @@ def build_parser() -> argparse.ArgumentParser:
 
     vpn_status = vpn_sub.add_parser("status", help="show VPN control-plane state")
     vpn_status.set_defaults(func=cmd_vpn)
+
+    vpn_probe = vpn_sub.add_parser("probe", help="probe the active backend endpoint for automation")
+    vpn_probe.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    vpn_probe.set_defaults(func=cmd_vpn)
+
+    vpn_smoke = vpn_sub.add_parser("smoke", help="run a deterministic backend smoke verdict")
+    vpn_smoke.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    vpn_smoke.add_argument("--timeout", type=float, default=1.0, help="probe timeout in seconds")
+    vpn_smoke.set_defaults(func=cmd_vpn)
+
+    vpn_bundle = vpn_sub.add_parser("analyze-bundle", help="deterministically classify a netns session bundle")
+    vpn_bundle.add_argument("bundle_path", help="path to a verdict bundle directory")
+    vpn_bundle.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    vpn_bundle.set_defaults(func=cmd_vpn)
+
+    vpn_verdict = vpn_sub.add_parser("verdict", help="emit a canonical product verdict from backend status and bundle analysis")
+    vpn_verdict.add_argument("--bundle-path", default="", help="optional verdict bundle directory")
+    vpn_verdict.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    vpn_verdict.set_defaults(func=cmd_vpn)
+
+    vpn_netns = vpn_sub.add_parser("netns-plan", help="print a single-host Linux netns topology plan")
+    vpn_netns.add_argument("--prefix", default="baleobala", help="resource name prefix")
+    vpn_netns.add_argument("--format", choices=["json", "shell"], default="json")
+    vpn_netns.set_defaults(func=cmd_vpn)
+
+    vpn_netns_run = vpn_sub.add_parser("netns-run", help="run or inspect the single-host Linux netns harness")
+    vpn_netns_run.add_argument("--prefix", default="baleobala", help="resource name prefix")
+    vpn_netns_run.add_argument("--phase", choices=["full-cycle", "setup", "smoke", "teardown", "status"], default="full-cycle")
+    vpn_netns_run.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    vpn_netns_run.set_defaults(func=cmd_vpn)
+
+    vpn_netns_process = vpn_sub.add_parser("netns-process-plan", help="print wrapped client/server process commands for Linux netns")
+    vpn_netns_process.add_argument("--prefix", default="baleobala", help="resource name prefix")
+    vpn_netns_process.add_argument("--server-cmd", required=True, help="server command to run inside server namespace")
+    vpn_netns_process.add_argument("--client-cmd", required=True, help="client command to run inside client namespace")
+    vpn_netns_process.add_argument("--format", choices=["json", "shell"], default="json")
+    vpn_netns_process.set_defaults(func=cmd_vpn)
+
+    vpn_netns_process_run = vpn_sub.add_parser("netns-process-run", help="start, stop, or inspect wrapped Linux netns processes")
+    vpn_netns_process_run.add_argument("--prefix", default="baleobala", help="resource name prefix")
+    vpn_netns_process_run.add_argument("--phase", choices=["start", "stop", "status"], default="status")
+    vpn_netns_process_run.add_argument("--server-cmd", default="echo server", help="server command for start")
+    vpn_netns_process_run.add_argument("--client-cmd", default="echo client", help="client command for start")
+    vpn_netns_process_run.set_defaults(func=cmd_vpn)
+
+    vpn_netns_session = vpn_sub.add_parser("netns-session", help="run a full single-host Linux netns session with real baleobala scenario templates")
+    vpn_netns_session.add_argument("--prefix", default="baleobala", help="resource name prefix")
+    vpn_netns_session.add_argument("--kind", choices=["proxy-pair", "tunnel-pair"], required=True)
+    vpn_netns_session.add_argument("--server-jwt-file", required=True)
+    vpn_netns_session.add_argument("--client-jwt-file", required=True)
+    vpn_netns_session.add_argument("--peer-id", type=int, required=True)
+    vpn_netns_session.add_argument("--proxy-secret", default="baleobala-secret")
+    vpn_netns_session.add_argument("--listen-port", type=int, default=1080)
+    vpn_netns_session.add_argument("--server-tun", default="vpn0")
+    vpn_netns_session.add_argument("--client-tun", default="vpn0")
+    vpn_netns_session.add_argument("--server-wan", default="eth0")
+    vpn_netns_session.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc"], default="auto")
+    vpn_netns_session.add_argument("--psk-file", default="")
+    vpn_netns_session.add_argument("--timeout", type=float, default=5.0, help="readiness timeout in seconds")
+    vpn_netns_session.add_argument("--artifact-dir", default="", help="directory for verdict artifacts")
+    vpn_netns_session.set_defaults(func=cmd_vpn)
+
+    vpn_netns_scenario = vpn_sub.add_parser("netns-scenario", help="print a real baleobala netns scenario template")
+    vpn_netns_scenario.add_argument("--kind", choices=["proxy-pair", "tunnel-pair"], required=True)
+    vpn_netns_scenario.add_argument("--server-jwt-file", required=True)
+    vpn_netns_scenario.add_argument("--client-jwt-file", required=True)
+    vpn_netns_scenario.add_argument("--peer-id", type=int, required=True)
+    vpn_netns_scenario.add_argument("--proxy-secret", default="baleobala-secret")
+    vpn_netns_scenario.add_argument("--listen-port", type=int, default=1080)
+    vpn_netns_scenario.add_argument("--server-tun", default="vpn0")
+    vpn_netns_scenario.add_argument("--client-tun", default="vpn0")
+    vpn_netns_scenario.add_argument("--server-wan", default="eth0")
+    vpn_netns_scenario.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc"], default="auto")
+    vpn_netns_scenario.add_argument("--psk-file", default="")
+    vpn_netns_scenario.set_defaults(func=cmd_vpn)
 
     vpn_plan = vpn_sub.add_parser("plan", help="print the system VPN delivery plan")
     vpn_plan.set_defaults(func=cmd_vpn)

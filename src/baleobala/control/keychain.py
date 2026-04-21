@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,6 +128,6 @@ def default_secret_backend() -> SecretBackend:
         return FileSecretBackend()
     if os.environ.get("BALEOBALA_SECRET_BACKEND") == "keychain":
         return KeychainSecretBackend()
-    if os.sys.platform == "darwin":
+    if sys.platform == "darwin":
         return KeychainSecretBackend()
     return FileSecretBackend()
