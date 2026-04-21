@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
+from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from baleobala.control import ControlService
+from baleobala.control.paths import data_dir
 from baleobala.gui.theme import apply_theme
 from baleobala.gui.workers import (
     ProxyWorker,
@@ -39,6 +42,46 @@ from baleobala.gui.workers import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _configure_gui_logging() -> None:
+    root = logging.getLogger()
+    if getattr(root, "_baleobala_gui_logging", False):
+        return
+
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+
+    stream = logging.StreamHandler(sys.stderr)
+    stream.setLevel(logging.INFO)
+    stream.setFormatter(fmt)
+    root.addHandler(stream)
+
+    log_path = data_dir() / "gui.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(log_path, maxBytes=512_000, backupCount=3)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
+        root.info("gui logging to %s", log_path)
+    except Exception as e:
+        root.warning("failed to open gui log file %s: %s", log_path, e)
+
+    def _excepthook(exc_type, exc, tb) -> None:
+        root.critical("unhandled exception", exc_info=(exc_type, exc, tb))
+        sys.__excepthook__(exc_type, exc, tb)
+
+    def _thread_excepthook(args) -> None:  # noqa: ANN001
+        root.critical(
+            "unhandled thread exception in %s",
+            args.thread.name if args.thread else "unknown",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _thread_excepthook  # type: ignore[attr-defined]
+    root._baleobala_gui_logging = True
 
 
 def _hline() -> QFrame:
@@ -456,10 +499,7 @@ class MainWindow(QMainWindow):
 
 
 def run(argv: Optional[list[str]] = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
+    _configure_gui_logging()
     app = QApplication(argv or sys.argv)
     app.setApplicationName("baleobala")
     apply_theme(app, mode="auto")
