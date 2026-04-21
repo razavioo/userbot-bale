@@ -33,6 +33,7 @@ class BaleCarrierController:
         video: bool = False,
         invite_enable: bool = True,
         creds_timeout: float = 120.0,
+        cancel_event=None,
     ) -> CarrierCredentials:
         self._client.start()
         try:
@@ -42,6 +43,7 @@ class BaleCarrierController:
                 video=video,
                 invite_enable=invite_enable,
                 creds_timeout=creds_timeout,
+                cancel_event=cancel_event,
             )
             return CarrierCredentials(
                 url=creds.url,
@@ -70,10 +72,12 @@ class BaleCarrierController:
         self,
         *,
         timeout: float = 120.0,
+        cancel_event=None,
     ) -> CarrierCredentials:
         self._client.start()
         try:
             import threading
+            import time
 
             got = threading.Event()
             holder: list[CarrierCredentials] = []
@@ -91,8 +95,14 @@ class BaleCarrierController:
                     got.set()
 
             self._client.listen_incoming_calls(on_creds)
-            if not got.wait(timeout=timeout):
-                raise TimeoutError(f"no incoming call within {timeout}s")
+            deadline = time.monotonic() + timeout
+            while not got.is_set():
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("listening cancelled by user")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"no incoming call within {timeout}s")
+                got.wait(timeout=min(0.25, remaining))
             return holder[0]
         finally:
             self._client.stop()

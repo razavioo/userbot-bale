@@ -195,11 +195,18 @@ class ProxyWorker(QObject):
                 )
             if peer_id is not None:
                 log.info("dialing peer_id=%d", peer_id)
-                creds = controller.dial(peer_id=peer_id, creds_timeout=self._dial_timeout)
+                creds = controller.dial(
+                    peer_id=peer_id,
+                    creds_timeout=self._dial_timeout,
+                    cancel_event=self._stop_event,
+                )
             elif self._answer:
                 self.log_line.emit("Waiting for incoming call…")
                 log.info("waiting for incoming call timeout=%ss", self._answer_timeout)
-                creds = controller.answer(timeout=self._answer_timeout)
+                creds = controller.answer(
+                    timeout=self._answer_timeout,
+                    cancel_event=self._stop_event,
+                )
             else:
                 raise RuntimeError(
                     "Either peer_name/peer_id or 'answer' mode required."

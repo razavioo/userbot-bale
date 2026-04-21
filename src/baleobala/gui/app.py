@@ -248,25 +248,9 @@ class ConnectView(QWidget):
 
         header = QLabel("Connect")
         header.setObjectName("title")
-        subtitle = QLabel(
-            "Two people are needed — one to receive, one to call. The receiver must press their button first."
-        )
+        subtitle = QLabel("The receiver must Start Listening before the caller can Place Call.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
-
-        how_it_works = QLabel(
-            "<b>How it works</b><br>"
-            "<b>1.</b> The <b>receiver</b> selects <i>Wait for an incoming call</i> and presses "
-            "<b>Start Listening</b>. The app then registers with the server and starts waiting.<br>"
-            "<b>2.</b> Once the receiver shows <i>Listening for calls…</i>, the <b>caller</b> selects "
-            "<i>Place a call to a contact</i>, enters the receiver's handle, and presses <b>Place Call</b>.<br>"
-            "<b>3.</b> The call connects and the tunnel opens on both sides.<br>"
-            "<i>Note:</i> if the caller dials before the receiver has pressed Start Listening, the call "
-            "rings only on the receiver's phone and the app on this computer will not see it."
-        )
-        how_it_works.setObjectName("hint")
-        how_it_works.setWordWrap(True)
-        how_it_works.setTextFormat(Qt.TextFormat.RichText)
 
         # ---- Session section ----
         self.role = QComboBox()
@@ -305,19 +289,17 @@ class ConnectView(QWidget):
         proxy_form.addRow("Local SOCKS5 port", self.listen_port)
 
         # ---- Buttons ----
+        # Primary action is a toggle: text + style change based on whether
+        # a session is running. Keeps the cancel affordance in the same
+        # place the user just clicked.
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.setObjectName("primary")
         self.connect_btn.setDefault(True)
-        self.connect_btn.clicked.connect(self._on_connect_clicked)
-
-        self.disconnect_btn = QPushButton("Disconnect")
-        self.disconnect_btn.setObjectName("danger")
-        self.disconnect_btn.setEnabled(False)
-        self.disconnect_btn.clicked.connect(self._on_disconnect_clicked)
+        self.connect_btn.clicked.connect(self._on_primary_clicked)
+        self._running = False
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.connect_btn)
-        btn_row.addWidget(self.disconnect_btn)
         btn_row.addStretch(1)
 
         # ---- Status + Logs ----
@@ -335,8 +317,6 @@ class ConnectView(QWidget):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addWidget(subtitle)
-        layout.addSpacing(4)
-        layout.addWidget(how_it_works)
         layout.addSpacing(6)
         layout.addWidget(_section("Session"))
         layout.addLayout(session_form)
@@ -366,18 +346,10 @@ class ConnectView(QWidget):
         self.listen_port.setEnabled(is_client)
         if answering:
             self.connect_btn.setText("Start Listening")
-            self._set_state(
-                "Receiver: press Start Listening now. Nothing happens until you do — "
-                "the caller cannot reach this app until you are listening.",
-                "info",
-            )
+            self._set_state("Idle. Press Start Listening to wait for calls.", "info")
         else:
             self.connect_btn.setText("Place Call")
-            self._set_state(
-                "Caller: before pressing Place Call, make sure the other side has "
-                "already pressed Start Listening on their app.",
-                "info",
-            )
+            self._set_state("Idle. Enter a contact and press Place Call.", "info")
 
     def _set_state(self, text: str, kind: str = "info") -> None:
         self.state_label.setText(text)
@@ -389,10 +361,13 @@ class ConnectView(QWidget):
 
     # ---- actions ----
 
-    def _on_connect_clicked(self) -> None:
-        if self._proxy_thread is not None and self._proxy_thread.isRunning():
-            self._set_state("A session is already running. Stop it before starting another one.", "err")
-            return
+    def _on_primary_clicked(self) -> None:
+        if self._running:
+            self._stop_session()
+        else:
+            self._start_session()
+
+    def _start_session(self) -> None:
         jwt = self._main.jwt
         if not jwt:
             QMessageBox.warning(self, "Not signed in", "Please sign in first.")
@@ -401,7 +376,7 @@ class ConnectView(QWidget):
         answering = self.dial_mode.currentData() == "answer"
         peer_name = self.peer_name.text().strip()
         if not answering and not peer_name:
-            self._set_state("Enter the contact to call, or switch to Wait for an incoming call.", "err")
+            self._set_state("Enter the contact to call first.", "err")
             return
 
         worker = ProxyWorker(
@@ -421,23 +396,39 @@ class ConnectView(QWidget):
 
         self._proxy_worker = worker
         self._proxy_thread = run_in_thread(worker)
-
-        self.connect_btn.setEnabled(False)
-        self.disconnect_btn.setEnabled(True)
-        if answering:
-            self._set_state(
-                "Listening for calls — tell the caller they can dial now.",
-                "info",
-            )
-        else:
-            self._set_state("Placing the call…", "info")
+        self._running = True
+        self._set_running_ui(answering)
+        self._set_state(
+            "Listening for calls — tell the caller they can dial now." if answering
+            else "Placing the call…",
+            "info",
+        )
         self.logs.clear()
 
-    def _on_disconnect_clicked(self) -> None:
+    def _stop_session(self) -> None:
         if self._proxy_worker:
             self._proxy_worker.stop()
-        self.disconnect_btn.setEnabled(False)
+        self.connect_btn.setEnabled(False)
         self._set_state("Stopping…", "info")
+
+    def _set_running_ui(self, answering: bool) -> None:
+        self.dial_mode.setEnabled(False)
+        self.peer_name.setEnabled(False)
+        self.listen_port.setEnabled(False)
+        self.connect_btn.setObjectName("danger")
+        self.connect_btn.setText("Stop Listening" if answering else "Cancel Call")
+        self.connect_btn.style().unpolish(self.connect_btn)
+        self.connect_btn.style().polish(self.connect_btn)
+        self.connect_btn.setEnabled(True)
+
+    def _reset_idle_ui(self) -> None:
+        self._running = False
+        self.dial_mode.setEnabled(True)
+        self.connect_btn.setObjectName("primary")
+        self.connect_btn.style().unpolish(self.connect_btn)
+        self.connect_btn.style().polish(self.connect_btn)
+        self.connect_btn.setEnabled(True)
+        self._refresh_enabled()
 
     # ---- signals from worker ----
 
@@ -450,20 +441,18 @@ class ConnectView(QWidget):
         self._append_log(msg)
 
     def _on_stopped(self) -> None:
-        self._set_state("Disconnected.", "info")
-        self.connect_btn.setEnabled(True)
-        self.disconnect_btn.setEnabled(False)
+        self._set_state("Stopped.", "info")
         self._append_log("stopped")
         self._proxy_worker = None
+        self._reset_idle_ui()
         self._proxy_thread = None
 
     def _on_failed(self, err: str) -> None:
         self._set_state(f"Failed: {err}", "err")
-        self.connect_btn.setEnabled(True)
-        self.disconnect_btn.setEnabled(False)
         self._append_log("FAIL " + err)
         self._proxy_worker = None
         self._proxy_thread = None
+        self._reset_idle_ui()
 
     def _append_log(self, line: str) -> None:
         self.logs.appendPlainText(line)

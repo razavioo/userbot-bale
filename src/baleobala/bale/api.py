@@ -173,6 +173,7 @@ class BaleApiClient:
         video: bool = False,
         invite_enable: bool = True,
         creds_timeout: float = 120.0,
+        cancel_event=None,
     ) -> CallCredentials:
         """Place a call. Returns CallCredentials once the server
         pushes them (usually within ~1 s of the RPC completing)."""
@@ -210,13 +211,20 @@ class BaleApiClient:
 
         # Fallback: wait for a push update (inbound-call style).
         log.info("StartCall ack had no inline credentials; waiting for push update")
-        if self._creds_event.wait(timeout=creds_timeout):
-            assert self._last_creds is not None
-            return self._last_creds
-        raise TimeoutError(
-            "StartCall ACKed but no credentials in response or push "
-            f"within {creds_timeout}s"
-        )
+        import time
+        deadline = time.monotonic() + creds_timeout
+        while not self._creds_event.is_set():
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("call cancelled by user")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "StartCall ACKed but no credentials in response or push "
+                    f"within {creds_timeout}s"
+                )
+            self._creds_event.wait(timeout=min(0.25, remaining))
+        assert self._last_creds is not None
+        return self._last_creds
 
     def import_contacts(
         self, phones: list[str | int], name_prefix: str = "baleobala",
