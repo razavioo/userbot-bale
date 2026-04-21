@@ -249,10 +249,24 @@ class ConnectView(QWidget):
         header = QLabel("Connect")
         header.setObjectName("title")
         subtitle = QLabel(
-            "Choose the role first. The caller starts the call; the receiver waits and joins when the call arrives."
+            "Two people are needed — one to receive, one to call. The receiver must press their button first."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
+
+        how_it_works = QLabel(
+            "<b>How it works</b><br>"
+            "<b>1.</b> The <b>receiver</b> selects <i>Wait for an incoming call</i> and presses "
+            "<b>Start Listening</b>. The app then registers with the server and starts waiting.<br>"
+            "<b>2.</b> Once the receiver shows <i>Listening for calls…</i>, the <b>caller</b> selects "
+            "<i>Place a call to a contact</i>, enters the receiver's handle, and presses <b>Place Call</b>.<br>"
+            "<b>3.</b> The call connects and the tunnel opens on both sides.<br>"
+            "<i>Note:</i> if the caller dials before the receiver has pressed Start Listening, the call "
+            "rings only on the receiver's phone and the app on this computer will not see it."
+        )
+        how_it_works.setObjectName("hint")
+        how_it_works.setWordWrap(True)
+        how_it_works.setTextFormat(Qt.TextFormat.RichText)
 
         # ---- Session section ----
         self.role = QComboBox()
@@ -321,6 +335,8 @@ class ConnectView(QWidget):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addWidget(subtitle)
+        layout.addSpacing(4)
+        layout.addWidget(how_it_works)
         layout.addSpacing(6)
         layout.addWidget(_section("Session"))
         layout.addLayout(session_form)
@@ -349,15 +365,17 @@ class ConnectView(QWidget):
         is_client = target_role == "client"
         self.listen_port.setEnabled(is_client)
         if answering:
-            self.connect_btn.setText("Wait for Call")
+            self.connect_btn.setText("Start Listening")
             self._set_state(
-                "Receiver mode: keep this window open. The other side must start the call; this side only waits and joins.",
+                "Receiver: press Start Listening now. Nothing happens until you do — "
+                "the caller cannot reach this app until you are listening.",
                 "info",
             )
         else:
-            self.connect_btn.setText("Start Call")
+            self.connect_btn.setText("Place Call")
             self._set_state(
-                "Caller mode: choose the contact and start the call to create the session.",
+                "Caller: before pressing Place Call, make sure the other side has "
+                "already pressed Start Listening on their app.",
                 "info",
             )
 
@@ -407,9 +425,12 @@ class ConnectView(QWidget):
         self.connect_btn.setEnabled(False)
         self.disconnect_btn.setEnabled(True)
         if answering:
-            self._set_state("Waiting for an incoming call…", "info")
+            self._set_state(
+                "Listening for calls — tell the caller they can dial now.",
+                "info",
+            )
         else:
-            self._set_state("Starting the call…", "info")
+            self._set_state("Placing the call…", "info")
         self.logs.clear()
 
     def _on_disconnect_clicked(self) -> None:
