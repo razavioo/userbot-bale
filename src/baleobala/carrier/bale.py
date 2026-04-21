@@ -32,7 +32,7 @@ class BaleCarrierController:
         peer_type: int = 1,
         video: bool = False,
         invite_enable: bool = True,
-        creds_timeout: float = 20.0,
+        creds_timeout: float = 120.0,
     ) -> CarrierCredentials:
         self._client.start()
         try:

@@ -99,6 +99,7 @@ class ProxyWorker(QObject):
         peer_id: Optional[int] = None,
         answer: bool = False,
         answer_timeout: float = 120.0,
+        dial_timeout: float = 120.0,
         listen_host: str = "127.0.0.1",
         listen_port: int = 1080,
         proxy_secret: Optional[str] = None,
@@ -113,6 +114,7 @@ class ProxyWorker(QObject):
         self._peer_id = peer_id
         self._answer = answer
         self._answer_timeout = answer_timeout
+        self._dial_timeout = dial_timeout
         self._listen_host = listen_host
         self._listen_port = listen_port
         self._proxy_secret = proxy_secret
@@ -193,7 +195,7 @@ class ProxyWorker(QObject):
                 )
             if peer_id is not None:
                 log.info("dialing peer_id=%d", peer_id)
-                creds = controller.dial(peer_id=peer_id)
+                creds = controller.dial(peer_id=peer_id, creds_timeout=self._dial_timeout)
             elif self._answer:
                 self.log_line.emit("Waiting for incoming call…")
                 log.info("waiting for incoming call timeout=%ss", self._answer_timeout)

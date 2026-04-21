@@ -363,6 +363,7 @@ class ConnectView(QWidget):
             jwt=jwt,
             peer_name=peer_name if not answering else "",
             answer=answering,
+            dial_timeout=120.0,
             listen_port=self.listen_port.value(),
             proxy_secret=self.proxy_secret.text().strip() or None,
         )

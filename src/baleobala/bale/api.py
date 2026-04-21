@@ -147,7 +147,7 @@ class BaleApiClient:
         peer_type: int = 1,
         video: bool = False,
         invite_enable: bool = True,
-        creds_timeout: float = 20.0,
+        creds_timeout: float = 120.0,
     ) -> CallCredentials:
         """Place a call. Returns CallCredentials once the server
         pushes them (usually within ~1 s of the RPC completing)."""
@@ -162,27 +162,34 @@ class BaleApiClient:
             invite_enable=invite_enable,
         )
         payload = req.encode_as_rpc_payload()
-        log.info("sending StartCall peer=%d video=%s", peer_id, video)
+        log.info(
+            "sending StartCall peer=%d video=%s creds_timeout=%.1fs",
+            peer_id,
+            video,
+            creds_timeout,
+        )
         resp = self._ws.rpc(
             "bale.meet.v1.Meet", "StartCall", payload, timeout=10.0,
         )
-        log.debug("StartCall ack: seq=%s payload=%dB", resp.seq, len(resp.payload))
+        log.info("StartCall ack: seq=%s payload=%dB", resp.seq, len(resp.payload))
 
         # For outbound calls, Bale returns the LiveKit credentials in
         # the RPC response payload itself (verified live 2026-04-19).
         # For inbound calls, creds arrive via a push update instead.
         creds = parse_call_credentials(resp.raw)
         if creds is not None:
+            log.info("StartCall returned credentials inline: room=%s", creds.room)
             self._last_creds = creds
             self._creds_event.set()
             return creds
 
         # Fallback: wait for a push update (inbound-call style).
+        log.info("StartCall ack had no inline credentials; waiting for push update")
         if self._creds_event.wait(timeout=creds_timeout):
             assert self._last_creds is not None
             return self._last_creds
         raise TimeoutError(
-            f"StartCall ACKed but no credentials in response or push "
+            "StartCall ACKed but no credentials in response or push "
             f"within {creds_timeout}s"
         )
 
