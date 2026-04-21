@@ -31,6 +31,43 @@ from baleobala.virtmic import VirtualMic
 log = logging.getLogger("baleobala")
 
 
+def _clean_qt_environment(env: dict[str, str]) -> dict[str, str]:
+    """Return an environment that prefers the bundled Qt runtime."""
+
+    cleaned = dict(env)
+    for key in (
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        "QT_QPA_PLATFORMTHEME",
+        "QT_STYLE_OVERRIDE",
+        "QT_DEBUG_PLUGINS",
+    ):
+        cleaned.pop(key, None)
+
+    ld_library_path = cleaned.get("LD_LIBRARY_PATH")
+    if ld_library_path:
+        parts = []
+        for item in ld_library_path.split(os.pathsep):
+            if not item:
+                continue
+            lowered = item.lower()
+            if "qt" in lowered and "pyside" not in lowered:
+                continue
+            parts.append(item)
+        if parts:
+            cleaned["LD_LIBRARY_PATH"] = os.pathsep.join(parts)
+        else:
+            cleaned.pop("LD_LIBRARY_PATH", None)
+    return cleaned
+
+
+def _qt_environment_is_contaminated(env: dict[str, str]) -> bool:
+    if any(env.get(key) for key in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH")):
+        return True
+    ld_library_path = env.get("LD_LIBRARY_PATH", "")
+    return any("qt" in item.lower() for item in ld_library_path.split(os.pathsep) if item)
+
+
 def _pactl_has(kind: Literal["sinks", "sources"], name: str) -> bool:
     """Check if a PulseAudio sink/source with this exact name exists."""
     if shutil.which("pactl") is None:
@@ -1216,6 +1253,12 @@ def cmd_bale_auth(args: argparse.Namespace) -> int:
 
 
 def cmd_gui(args: argparse.Namespace) -> int:
+    if _qt_environment_is_contaminated(os.environ) and not os.environ.get(
+        "BALEOBALA_QT_ENV_CLEANED"
+    ):
+        env = _clean_qt_environment(os.environ)
+        env["BALEOBALA_QT_ENV_CLEANED"] = "1"
+        os.execvpe(sys.executable, [sys.executable, "-m", "baleobala.cli", "gui"], env)
     try:
         from baleobala.gui import run
     except ImportError as e:
