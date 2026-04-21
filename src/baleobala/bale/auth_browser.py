@@ -148,6 +148,7 @@ class BaleAuthBrowser:
         return "browser"
 
     async def _async_validate_code(self, code: str) -> str:
+        import os
         page = self._page
 
         log.warning("Browser: filling code %s", code)
@@ -165,25 +166,59 @@ class BaleAuthBrowser:
         ).first
         await verify_btn.click(timeout=_TIMEOUT)
 
-        # Wait for auth to complete: either the URL changes away from
-        # /login, or the access_token cookie gets set.
-        for _ in range(30):  # ~30s total
+        # Poll for up to 20s: JWT cookie arrives OR the URL navigates
+        # away from /login. Also bail early if the page shows an error.
+        for i in range(20):
             await page.wait_for_timeout(1000)
             jwt = await self._async_get_jwt()
             if jwt:
                 return jwt
             if "login" not in page.url:
-                # On dashboard; JWT cookie is there
+                # Page navigated away — cookie should be there now.
+                await page.wait_for_timeout(1000)
                 jwt = await self._async_get_jwt()
                 if jwt:
                     return jwt
+                break
 
-        cookies = [c["name"] for c in await self._ctx.cookies()]
-        log.warning("Browser: page URL=%s cookies=%s", page.url, cookies)
+            # Look for an error toast/text on the page (e.g. wrong code)
+            err_txt = await self._check_error_text()
+            if err_txt:
+                raise RuntimeError(f"Bale rejected: {err_txt}")
+
+        # Diagnostic dump
+        shot = f"/tmp/bale-verify-{int(__import__('time').time())}.png"
+        try:
+            await page.screenshot(path=shot)
+        except Exception:
+            pass
+        cookies = [(c["name"], c.get("domain"), c.get("path")) for c in await self._ctx.cookies()]
+        log.warning("Browser: no JWT yet. url=%s cookies=%s screenshot=%s",
+                    page.url, cookies, shot)
         raise RuntimeError(
-            "Browser auth: no access_token cookie after verification. "
-            "Code may be wrong, or the page hasn't navigated yet."
+            f"Browser auth: no access_token cookie after verification. "
+            f"Screenshot: {shot}"
         )
+
+    async def _check_error_text(self) -> str | None:
+        """Return any visible error message on the login page, or None."""
+        page = self._page
+        # Common error containers on the Bale login page
+        selectors = [
+            "[role='alert']",
+            ".error, .errorMessage, .text-error",
+            "span[class*='error' i], div[class*='error' i]",
+        ]
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    txt = (await loc.inner_text()).strip()
+                    if txt:
+                        return txt
+            except Exception:
+                pass
+        return None
 
     async def _async_get_jwt(self) -> str | None:
         for c in await self._ctx.cookies():
