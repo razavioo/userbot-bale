@@ -130,40 +130,36 @@ class BaleAuthBrowser:
 
         # Click "تایید و ادامه" (Confirm and continue)
         log.warning("Browser: clicking تایید و ادامه (send SMS)")
-        continue_btn = page.locator("button:has-text('تایید و ادامه')").first
+        continue_btn = page.locator(
+            "button[data-testid='submit-button']:not([disabled])"
+        ).first
+        await continue_btn.wait_for(state="visible", timeout=_TIMEOUT)
         await continue_btn.click(timeout=_TIMEOUT)
 
-        # Wait for the SMS-code input to appear. The phone input disappears;
-        # a shorter input (maxlength 5-6) takes its place.
+        # Wait for the SMS-code input to appear. Its id is "کد ورود"
+        # (login code); placeholder is the 6-digit template "۱۲۳۴۵۶".
         log.warning("Browser: waiting for SMS-code input")
-        await page.wait_for_timeout(2000)
-        # The code input is the first visible text/number input that isn't
-        # the country or phone field we already saw.
         await page.wait_for_selector(
-            "input[maxlength='5'], input[maxlength='6'], "
-            "input[type='number'], input[inputmode='numeric']",
-            timeout=_TIMEOUT,
+            "input[id='کد ورود']", timeout=_TIMEOUT,
         )
         log.warning("Browser: SMS-code input visible")
         return "browser"
 
     async def _async_validate_code(self, code: str) -> str:
-        import os
         page = self._page
 
         log.warning("Browser: filling code %s", code)
-        code_input = page.locator(
-            "input[maxlength='5'], input[maxlength='6'], "
-            "input[type='number'], input[inputmode='numeric']"
-        ).first
+        code_input = page.locator("input[id='کد ورود']").first
         await code_input.fill(code.strip(), timeout=_TIMEOUT)
         await page.wait_for_timeout(500)
 
+        # The submit button is shared between steps; it becomes enabled
+        # once the code meets the expected length. Wait for :enabled.
         log.warning("Browser: clicking تایید و ادامه (verify)")
         verify_btn = page.locator(
-            "button:has-text('تایید و ادامه'), button:has-text('تایید'), "
-            "button:has-text('ادامه')"
+            "button[data-testid='submit-button']:not([disabled])"
         ).first
+        await verify_btn.wait_for(state="visible", timeout=_TIMEOUT)
         await verify_btn.click(timeout=_TIMEOUT)
 
         # Poll for up to 20s: JWT cookie arrives OR the URL navigates
