@@ -39,13 +39,15 @@ from typing import Callable, List, Optional
 
 from baleobala.bale.endpoints import Endpoint, fetch_endpoints
 from baleobala.bale.protos import (
-    AUTH_SERVICE, CallCredentials, InboundMessage, MESSAGING_SERVICE,
-    OutPeer, PhoneToImport, RequestImportContacts, RequestSearchContacts,
-    RequestSendMessage, RequestStartLiveKitCall, RequestStartPhoneAuth,
-    RequestValidateCode, ResolvedContact, ResponseAuth,
+    ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials, InboundMessage,
+    MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PhoneToImport,
+    RequestImportContacts, RequestSearchContacts, RequestSendMessage,
+    RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
+    ResolvedContact, ResponseAuth, encode_accept_call,
     find_inbound_messages, parse_call_credentials,
     parse_import_contacts_response, parse_response_auth,
     parse_search_contacts_response, parse_transaction_hash,
+    parse_update_call_received,
 )
 from baleobala.bale.rpc_envelope import Response
 from baleobala.bale.ws_client import WsClient
@@ -93,6 +95,10 @@ class BaleApiClient:
         self._message_subs: dict[int, Callable[[bytes], None]] = {}
         self._seen_rids: set[int] = set()
         self._seen_rids_order: list[int] = []
+        # Tracks the callId of the last UpdateCallReceived we auto-
+        # accepted so we don't fire AcceptCall twice for the same call
+        # (the server often re-sends the same update several times).
+        self._accepted_call_id: int | None = None
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -421,16 +427,50 @@ class BaleApiClient:
         creds = parse_call_credentials(resp.raw)
         if creds is not None:
             log.info("received call credentials: room=%s", creds.room)
-            self._last_creds = creds
-            self._creds_event.set()
-            if self._on_incoming_creds is not None:
-                try:
-                    self._on_incoming_creds(creds)
-                except Exception:  # noqa: BLE001
-                    log.exception("on_incoming_creds callback failed")
+            self._deliver_creds(creds)
+        else:
+            call_id = parse_update_call_received(resp.raw)
+            if call_id is not None and call_id != self._accepted_call_id:
+                log.info("incoming call received: callId=%d; auto-accepting", call_id)
+                self._accepted_call_id = call_id
+                # Cannot block the WS recv loop on an RPC. Spawn a short
+                # thread that issues AcceptCall and feeds the resulting
+                # credentials back into the same delivery path.
+                threading.Thread(
+                    target=self._accept_and_deliver,
+                    args=(call_id,),
+                    daemon=True,
+                    name="baleobala-accept-call",
+                ).start()
 
         if self._message_subs:
             self._dispatch_inbound_messages(resp.raw)
+
+    def _deliver_creds(self, creds: CallCredentials) -> None:
+        self._last_creds = creds
+        self._creds_event.set()
+        if self._on_incoming_creds is not None:
+            try:
+                self._on_incoming_creds(creds)
+            except Exception:  # noqa: BLE001
+                log.exception("on_incoming_creds callback failed")
+
+    def _accept_and_deliver(self, call_id: int) -> None:
+        if self._ws is None:
+            return
+        try:
+            log.info("sending AcceptCall callId=%d", call_id)
+            payload = encode_accept_call(call_id, invite_enable=True)
+            resp = self._ws.rpc(MEET_SERVICE, ACCEPT_CALL_METHOD, payload, timeout=15.0)
+            log.info("AcceptCall ack: seq=%s payload=%dB", resp.seq, len(resp.payload))
+            creds = parse_call_credentials(resp.raw)
+            if creds is None:
+                log.error("AcceptCall response had no LiveKit credentials")
+                return
+            log.info("AcceptCall returned credentials: room=%s", creds.room)
+            self._deliver_creds(creds)
+        except Exception:  # noqa: BLE001
+            log.exception("AcceptCall failed for callId=%d", call_id)
 
     def _dispatch_inbound_messages(self, raw: bytes) -> None:
         messages = find_inbound_messages(raw)

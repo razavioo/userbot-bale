@@ -289,6 +289,98 @@ def parse_import_contacts_response(buf: bytes) -> list:
     return out
 
 
+def _find_fields(buf: bytes, field_num: int) -> list[bytes]:
+    """Return every length-delimited value of `field_num` anywhere in
+    `buf` (including nested length-delim submessages).
+
+    We don't know the exact nesting of Bale's push envelope, so we
+    walk depth-first and collect every matching len-delim field. Safe
+    on malformed input: parse errors are swallowed.
+    """
+    out: list[bytes] = []
+    pos = 0
+    n = len(buf)
+    while pos < n:
+        try:
+            tag, pos = _dec_varint(buf, pos)
+            fn, wt = tag >> 3, tag & 7
+            if wt == 2:
+                length, pos = _dec_varint(buf, pos)
+                if length < 0 or pos + length > n:
+                    return out
+                inner = buf[pos:pos + length]
+                pos += length
+                if fn == field_num:
+                    out.append(inner)
+                else:
+                    out.extend(_find_fields(inner, field_num))
+            elif wt == 0:
+                _, pos = _dec_varint(buf, pos)
+            elif wt == 1:
+                pos += 8
+            elif wt == 5:
+                pos += 4
+            else:
+                return out
+        except (IndexError, ValueError):
+            return out
+    return out
+
+
+# MeetOuterClass.UpdateCallReceived is wrapped at tag 52810 inside the
+# SetUpdatesStruct.ComposedUpdates union (seen in
+# re/jadx-out/sources/ai/bale/proto/SetUpdatesStruct$ComposedUpdates.java).
+# The inner message has field 1 = callId (int64).
+_UPDATE_CALL_RECEIVED_TAG = 52810
+
+
+def parse_update_call_received(buf: bytes) -> int | None:
+    """Return the callId from an UpdateCallReceived push, or None if
+    the push doesn't contain one."""
+    for inner in _find_fields(buf, _UPDATE_CALL_RECEIVED_TAG):
+        # UpdateCallReceived { 1: callId (varint) }
+        pos = 0
+        while pos < len(inner):
+            try:
+                tag, pos = _dec_varint(inner, pos)
+                fn, wt = tag >> 3, tag & 7
+                if fn == 1 and wt == 0:
+                    call_id, _ = _dec_varint(inner, pos)
+                    return call_id
+                if wt == 0:
+                    _, pos = _dec_varint(inner, pos)
+                elif wt == 2:
+                    ln, pos = _dec_varint(inner, pos)
+                    pos += ln
+                elif wt == 1:
+                    pos += 8
+                elif wt == 5:
+                    pos += 4
+                else:
+                    break
+            except (IndexError, ValueError):
+                break
+    return None
+
+
+# MeetOuterClass.RequestAcceptCall
+#   field 1 (varint)    = callId (int64)
+#   field 2 (len-delim) = inviteEnable (BooleanValue { field 1 = 1 })
+# Service/method:       /bale.meet.v1.Meet/AcceptCall
+MEET_SERVICE = "bale.meet.v1.Meet"
+ACCEPT_CALL_METHOD = "AcceptCall"
+
+
+def encode_accept_call(call_id: int, invite_enable: bool = True) -> bytes:
+    body = bytearray()
+    body += _enc_tag(1, 0) + _enc_varint(call_id)
+    if invite_enable:
+        body += _enc_len_delim(2, _enc_bool_value(True))
+    # StartCall wraps its payload at outer tag 6. Android RequestAcceptCall
+    # uses the same envelope pattern for bale.meet.v1.Meet RPCs.
+    return _enc_len_delim(6, bytes(body))
+
+
 def parse_call_credentials(buf: bytes) -> CallCredentials | None:
     """Extract LiveKit url + JWT + room out of an opaque server update.
 
