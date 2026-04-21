@@ -79,15 +79,22 @@ class BaleAuthBrowser:
         self._page = await self._ctx.new_page()
 
     async def _dismiss_overlays(self) -> None:
-        """Dismiss any privacy/terms dialogs that may block the form."""
-        for label in ("متوجه شدم", "باشه", "OK", "Accept"):
-            try:
-                btn = self._page.locator(f"button:has-text('{label}')").first
-                if await btn.is_visible(timeout=1_000):
-                    await btn.click()
-                    await self._page.wait_for_timeout(500)
-            except Exception:
-                pass
+        """Dismiss the PWA InstallGuide / privacy overlays that block clicks
+        on 'ورود'. Target by aria-label for stability across RTL/LTR renders."""
+        page = self._page
+        for _ in range(20):
+            for label in ("متوجه شدم", "باشه", "OK", "Accept"):
+                try:
+                    btn = page.locator(f"button[aria-label='{label}']").first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click()
+                        log.warning("Browser: dismissed overlay '%s'", label)
+                        await page.wait_for_timeout(800)
+                        return
+                except Exception:
+                    pass
+            await page.wait_for_timeout(500)
+        log.warning("Browser: no dismiss-overlay button appeared")
 
     async def _async_start_phone_auth(self, phone_number: int) -> str:
         page = self._page
@@ -97,15 +104,20 @@ class BaleAuthBrowser:
         try:
             await page.goto(_ORIGIN, wait_until="domcontentloaded", timeout=_TIMEOUT)
         except Exception:
-            # Slow network — still try to continue; page might be partial
             pass
-        await page.wait_for_timeout(2000)
+        # The PWA InstallGuide overlay appears a few seconds after load.
+        await page.wait_for_timeout(3000)
 
         await self._dismiss_overlays()
 
-        # Click "ورود" (Login) to reveal the phone form
+        # Click "ورود" (Login) to reveal the phone form. Match by
+        # data-testid/aria-label so we don't hit any other element that
+        # happens to contain the word.
         log.warning("Browser: clicking ورود")
-        login_btn = page.locator("button:has-text('ورود')").first
+        login_btn = page.locator(
+            "button[data-testid='submit-button'][aria-label='ورود']"
+        ).first
+        await login_btn.wait_for(state="visible", timeout=_TIMEOUT)
         await login_btn.click(timeout=_TIMEOUT)
         await page.wait_for_timeout(1500)
 
