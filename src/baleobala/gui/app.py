@@ -248,31 +248,36 @@ class ConnectView(QWidget):
 
         header = QLabel("Connect")
         header.setObjectName("title")
+        subtitle = QLabel(
+            "Choose the role first. The caller starts the call; the receiver waits and joins when the call arrives."
+        )
+        subtitle.setObjectName("subtitle")
+        subtitle.setWordWrap(True)
 
         # ---- Session section ----
         self.role = QComboBox()
-        self.role.addItem("Client — run a local SOCKS5 proxy", "client")
-        self.role.addItem("Relay — exit node for a client", "relay")
+        self.role.addItem("Caller — start the call and run a local SOCKS5 proxy", "client")
+        self.role.addItem("Receiver — wait for an incoming call", "relay")
         self.role.currentIndexChanged.connect(self._refresh_enabled)
 
         self.dial_mode = QComboBox()
-        self.dial_mode.addItem("Dial a contact by name", "name")
-        self.dial_mode.addItem("Answer incoming call", "answer")
+        self.dial_mode.addItem("Place a call to a contact", "name")
+        self.dial_mode.addItem("Wait for an incoming call", "answer")
         self.dial_mode.currentIndexChanged.connect(self._refresh_enabled)
 
         self.peer_name = QLineEdit()
-        self.peer_name.setPlaceholderText("Bale contact display name")
+        self.peer_name.setPlaceholderText("Contact display name or handle")
 
         session_form = QFormLayout()
         session_form.setHorizontalSpacing(14)
         session_form.setVerticalSpacing(8)
         session_form.addRow("Role", self.role)
-        session_form.addRow("How to connect", self.dial_mode)
-        session_form.addRow("Peer name", self.peer_name)
+        session_form.addRow("Call mode", self.dial_mode)
+        session_form.addRow("Contact to call", self.peer_name)
 
         # ---- Proxy section ----
         self.proxy_secret = QLineEdit()
-        self.proxy_secret.setPlaceholderText("shared secret (both sides match)")
+        self.proxy_secret.setPlaceholderText("Optional shared secret for both sides")
         self.proxy_secret.setEchoMode(QLineEdit.EchoMode.Password)
 
         self.listen_port = QSpinBox()
@@ -283,7 +288,7 @@ class ConnectView(QWidget):
         proxy_form.setHorizontalSpacing(14)
         proxy_form.setVerticalSpacing(8)
         proxy_form.addRow("Shared secret", self.proxy_secret)
-        proxy_form.addRow("SOCKS5 port", self.listen_port)
+        proxy_form.addRow("Local SOCKS5 port", self.listen_port)
 
         # ---- Buttons ----
         self.connect_btn = QPushButton("Connect")
@@ -308,13 +313,14 @@ class ConnectView(QWidget):
         self.logs = QPlainTextEdit()
         self.logs.setReadOnly(True)
         self.logs.setMaximumBlockCount(1500)
-        self.logs.setPlaceholderText("Logs will appear here once connected.")
+        self.logs.setPlaceholderText("Logs and connection details appear here.")
 
         # ---- Assemble ----
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 24, 32, 24)
         layout.setSpacing(10)
         layout.addWidget(header)
+        layout.addWidget(subtitle)
         layout.addSpacing(6)
         layout.addWidget(_section("Session"))
         layout.addLayout(session_form)
@@ -334,6 +340,18 @@ class ConnectView(QWidget):
         self.peer_name.setEnabled(not answering)
         is_client = self.role.currentData() == "client"
         self.listen_port.setEnabled(is_client)
+        if answering:
+            self.connect_btn.setText("Wait for Call")
+            self._set_state(
+                "Receiver mode: keep this window open and wait until the other side starts the call.",
+                "info",
+            )
+        else:
+            self.connect_btn.setText("Start Call")
+            self._set_state(
+                "Caller mode: choose the contact, then start the call to create the session.",
+                "info",
+            )
 
     def _set_state(self, text: str, kind: str = "info") -> None:
         self.state_label.setText(text)
@@ -355,7 +373,7 @@ class ConnectView(QWidget):
         answering = self.dial_mode.currentData() == "answer"
         peer_name = self.peer_name.text().strip()
         if not answering and not peer_name:
-            self._set_state("Enter a peer name, or choose Answer mode.", "err")
+            self._set_state("Enter the contact to call, or switch to Wait for an incoming call.", "err")
             return
 
         worker = ProxyWorker(
@@ -378,7 +396,10 @@ class ConnectView(QWidget):
 
         self.connect_btn.setEnabled(False)
         self.disconnect_btn.setEnabled(True)
-        self._set_state("Starting…", "info")
+        if answering:
+            self._set_state("Waiting for an incoming call…", "info")
+        else:
+            self._set_state("Starting the call…", "info")
         self.logs.clear()
 
     def _on_disconnect_clicked(self) -> None:
