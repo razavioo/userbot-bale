@@ -123,9 +123,12 @@ class BaleAuthBrowser:
 
         # Fill the phone input. The field's id contains Persian characters
         # and a space ("شماره همراه"), so use an attribute selector.
-        log.warning("Browser: filling phone %s", phone_str)
+        # press_sequentially triggers real keystrokes so React sees every
+        # keydown/input event and enables the submit button.
+        log.warning("Browser: typing phone %s", phone_str)
         phone_input = page.locator("input[id='شماره همراه']").first
-        await phone_input.fill(phone_str, timeout=_TIMEOUT)
+        await phone_input.click(timeout=_TIMEOUT)
+        await phone_input.press_sequentially(phone_str, delay=40)
         await page.wait_for_timeout(500)
 
         # Click "تایید و ادامه" (Confirm and continue)
@@ -148,19 +151,28 @@ class BaleAuthBrowser:
     async def _async_validate_code(self, code: str) -> str:
         page = self._page
 
-        log.warning("Browser: filling code %s", code)
+        log.warning("Browser: typing code %s", code)
         code_input = page.locator("input[id='کد ورود']").first
-        await code_input.fill(code.strip(), timeout=_TIMEOUT)
+        await code_input.click(timeout=_TIMEOUT)
+        # Real keystrokes so React fires its onChange and re-enables the
+        # submit button; .fill() set the DOM value directly but did not
+        # trigger the keystroke events React relies on.
+        await code_input.press_sequentially(code.strip(), delay=40)
         await page.wait_for_timeout(500)
 
-        # The submit button is shared between steps; it becomes enabled
-        # once the code meets the expected length. Wait for :enabled.
+        # Prefer clicking the (now-enabled) submit button. If something
+        # keeps it disabled (e.g. 2FA prompt we don't know about), fall
+        # back to pressing Enter which the form's onSubmit accepts.
         log.warning("Browser: clicking تایید و ادامه (verify)")
         verify_btn = page.locator(
             "button[data-testid='submit-button']:not([disabled])"
         ).first
-        await verify_btn.wait_for(state="visible", timeout=_TIMEOUT)
-        await verify_btn.click(timeout=_TIMEOUT)
+        try:
+            await verify_btn.wait_for(state="visible", timeout=5_000)
+            await verify_btn.click(timeout=_TIMEOUT)
+        except Exception:
+            log.warning("Browser: submit still disabled, pressing Enter")
+            await code_input.press("Enter")
 
         # Poll for up to 20s: JWT cookie arrives OR the URL navigates
         # away from /login. Also bail early if the page shows an error.
