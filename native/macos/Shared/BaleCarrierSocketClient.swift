@@ -3,6 +3,7 @@ import Darwin
 
 final class BaleCarrierSocketClient {
     private let fileDescriptor: Int32
+    private let encoder = JSONEncoder()
 
     init(socketURL: URL) throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -48,6 +49,11 @@ final class BaleCarrierSocketClient {
     }
 
     func sendPacket(_ data: Data) throws {
+        try writeFrame(data)
+    }
+
+    func sendCommand(_ payload: [String: String]) throws {
+        let data = try encoder.encode(payload)
         try writeFrame(data)
     }
 

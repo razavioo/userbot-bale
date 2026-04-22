@@ -5,6 +5,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let queue = DispatchQueue(label: "com.baleobala.packet-tunnel")
     private var socketClient: BaleCarrierSocketClient?
     private var readLoopRunning = false
+    private var lastErrorMessage = ""
+    private let statusVersion = "1"
 
     override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         do {
@@ -25,7 +27,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
-        completionHandler?(messageData)
+        completionHandler?(handleControlMessage(messageData))
     }
 
     private func configureNetwork(completionHandler: @escaping (Error?) -> Void) {
@@ -57,6 +59,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         setTunnelNetworkSettings(settings) { error in
             if let error = error {
+                self.lastErrorMessage = error.localizedDescription
                 print("Failed to set tunnel settings: \(error)")
             }
             completionHandler(error)
@@ -68,6 +71,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             throw NSError(domain: "PacketTunnelProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "missing app group container"])
         }
         socketClient = try BaleCarrierSocketClient(socketURL: socketURL)
+        try? socketClient?.sendCommand([
+            "type": "status",
+            "version": statusVersion,
+            "call_established": "yes",
+            "data_flow_ok": "yes",
+            "route_ready": "yes",
+            "dns_ready": "yes",
+            "transport_selected": "packet-tunnel",
+            "last_error": "",
+        ])
     }
 
     private func carrierSocketURL() -> URL? {
@@ -214,6 +227,39 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         readLoopRunning = false
         socketClient = nil
         completionHandler()
+    }
+
+    private func handleControlMessage(_ messageData: Data) -> Data? {
+        guard
+            let raw = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any],
+            let type = raw["type"] as? String
+        else {
+            return messageData
+        }
+
+        if type == "status" {
+            let payload: [String: String] = [
+                "type": "status",
+                "version": statusVersion,
+                "state": readLoopRunning ? "running" : "stopped",
+                "call_established": socketClient == nil ? "no" : "yes",
+                "data_flow_ok": socketClient == nil ? "no" : "yes",
+                "route_ready": readLoopRunning ? "yes" : "no",
+                "dns_ready": readLoopRunning ? "yes" : "no",
+                "transport_selected": "packet-tunnel",
+                "last_error": lastErrorMessage,
+            ]
+            return try? JSONSerialization.data(withJSONObject: payload)
+        }
+
+        if type == "ping" {
+            return try? JSONSerialization.data(withJSONObject: [
+                "type": "pong",
+                "version": statusVersion,
+            ])
+        }
+
+        return messageData
     }
 
     private static func protocolNumber(for packet: Data) -> NSNumber {

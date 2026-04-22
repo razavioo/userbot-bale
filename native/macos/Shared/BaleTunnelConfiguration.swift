@@ -1,6 +1,7 @@
 import Foundation
 
 struct BaleTunnelConfiguration: Codable {
+    var configurationVersion: Int = 1
     var displayName: String
     var appGroupIdentifier: String = BaleAppGroup.identifier
     var providerBundleIdentifier: String = BaleAppGroup.providerBundleIdentifier
@@ -20,6 +21,7 @@ struct BaleTunnelConfiguration: Codable {
 
     init(
         displayName: String,
+        configurationVersion: Int = 1,
         appGroupIdentifier: String = BaleAppGroup.identifier,
         providerBundleIdentifier: String = BaleAppGroup.providerBundleIdentifier,
         serverAddress: String = BaleAppGroup.identifier,
@@ -36,6 +38,7 @@ struct BaleTunnelConfiguration: Codable {
         packetTunnelHost: String = "127.0.0.1",
         packetTunnelPort: Int = 1080
     ) {
+        self.configurationVersion = configurationVersion
         self.displayName = displayName
         self.appGroupIdentifier = appGroupIdentifier
         self.providerBundleIdentifier = providerBundleIdentifier
@@ -60,6 +63,7 @@ struct BaleTunnelConfiguration: Codable {
         }
         self.init(
             displayName: displayName,
+            configurationVersion: providerConfiguration["configurationVersion"] as? Int ?? 1,
             appGroupIdentifier: providerConfiguration["appGroupIdentifier"] as? String ?? BaleAppGroup.identifier,
             providerBundleIdentifier: providerConfiguration["providerBundleIdentifier"] as? String ?? BaleAppGroup.providerBundleIdentifier,
             serverAddress: providerConfiguration["serverAddress"] as? String ?? BaleAppGroup.identifier,
@@ -83,6 +87,7 @@ extension BaleTunnelConfiguration {
     func providerConfiguration() -> [String: Any] {
         [
             "appGroupIdentifier": appGroupIdentifier,
+            "configurationVersion": configurationVersion,
             "displayName": displayName,
             "carrierSocketPath": carrierSocketPath,
             "keychainTokenKey": keychainTokenKey,

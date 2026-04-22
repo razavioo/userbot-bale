@@ -339,18 +339,12 @@ class ConnectView(QWidget):
         self._refresh_enabled()
 
     def _refresh_enabled(self) -> None:
-        answering = self.dial_mode.currentData() == "answer"
-        self.peer_name.setEnabled(not answering)
-        target_role = "relay" if answering else "client"
-        current_role = self.role.currentData()
-        if current_role != target_role:
-            idx = self.role.findData(target_role)
-            if idx >= 0:
-                self.role.blockSignals(True)
-                self.role.setCurrentIndex(idx)
-                self.role.blockSignals(False)
-        is_client = target_role == "client"
+        is_client = self.role.currentData() == "client"
         self.listen_port.setEnabled(is_client)
+        if not self._running:
+            self.backend.setEnabled(True)
+            self.pair_name.setEnabled(True)
+            self.pair_code.setEnabled(True)
         self.connect_btn.setText("Connect")
         self._set_state("Idle. Pair a relay, then connect using the saved profile.", "info")
 
