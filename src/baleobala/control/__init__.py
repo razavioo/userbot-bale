@@ -3,7 +3,7 @@
 from baleobala.control.auth import AuthRecord, AuthStore
 from baleobala.control.backend import BackendState, MacOSPacketTunnelBackend, ProxyFallbackBackend, VpnBackend, backend_for_profile, default_backend_name
 from baleobala.control.keychain import FileSecretBackend, KeychainSecretBackend, SecretBackend
-from baleobala.control.pairing import PairingRecord, PairingStore
+from baleobala.control.pairing import PairingExchange, PairingRecord, PairingStore
 from baleobala.control.macos import MacOSSystemProxySession
 from baleobala.control.macos_launchd import LaunchAgentSpec, MacOSLaunchAgentManager
 from baleobala.control.analyzer import BundleAnalysis, ProductVerdict, analyze_bundle, build_product_verdict, bundle_status, merge_status_with_bundle
@@ -41,6 +41,7 @@ __all__ = [
     "BackendState",
     "MacOSPacketTunnelBackend",
     "PairingRecord",
+    "PairingExchange",
     "PairingStore",
     "MacOSSystemProxySession",
     "ProxyFallbackBackend",

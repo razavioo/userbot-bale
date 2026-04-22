@@ -14,6 +14,48 @@ from baleobala.control.store import JsonStore
 
 
 @dataclass(frozen=True)
+class PairingExchange:
+    version: str
+    exchange_type: str
+    profile_id: str
+    pair_code: str
+    name: str
+    role: str
+    relay_mode: str
+    backend_preference: str
+    transport_preference: str
+    peer_id: int | None = None
+    peer_name: str | None = None
+    secret_value: str | None = None
+    provisioning_status: str = "pending"
+    validation_error: str = ""
+    issued_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PairingExchange":
+        return cls(
+            version=str(data.get("version", "1")),
+            exchange_type=str(data.get("exchange_type", "request")),
+            profile_id=str(data.get("profile_id", "")),
+            pair_code=str(data.get("pair_code", "")),
+            name=str(data.get("name", "relay")),
+            role=str(data.get("role", "client")),
+            relay_mode=str(data.get("relay_mode", "proxy")),
+            backend_preference=str(data.get("backend_preference", data.get("relay_mode", "proxy"))),
+            transport_preference=str(data.get("transport_preference", "auto")),
+            peer_id=data.get("peer_id"),
+            peer_name=data.get("peer_name"),
+            secret_value=data.get("secret_value"),
+            provisioning_status=str(data.get("provisioning_status", "pending")),
+            validation_error=str(data.get("validation_error", "")),
+            issued_at=float(data.get("issued_at", time.time())),
+        )
+
+
+@dataclass(frozen=True)
 class PairingRecord:
     profile_id: str
     name: str
@@ -183,6 +225,84 @@ class PairingStore:
         items[matched] = updated
         self._save_all(items)
         return updated
+
+    def export_request(self, profile_id: str) -> PairingExchange:
+        record = self.get(profile_id)
+        if record is None:
+            raise LookupError(f"no pairing profile {profile_id!r} found")
+        secret_value = self.load_secret(profile_id)
+        return PairingExchange(
+            version="1",
+            exchange_type="request",
+            profile_id=record.profile_id,
+            pair_code=record.pair_code,
+            name=record.name,
+            role=record.role,
+            relay_mode=record.relay_mode,
+            backend_preference=record.backend_preference,
+            transport_preference=record.transport_preference,
+            peer_id=record.peer_id,
+            peer_name=record.peer_name,
+            secret_value=secret_value,
+            provisioning_status=record.provisioning_status,
+            validation_error=record.validation_error,
+        )
+
+    def accept_request(
+        self,
+        exchange: PairingExchange,
+        *,
+        name: str | None = None,
+        peer_id: int | None = None,
+        peer_name: str | None = None,
+        backend_preference: str | None = None,
+        transport_preference: str | None = None,
+    ) -> PairingExchange:
+        if exchange.exchange_type != "request":
+            raise ValueError("pairing exchange must be a request")
+        record = self.accept(
+            exchange.pair_code,
+            name=name or exchange.name,
+            peer_id=peer_id if peer_id is not None else exchange.peer_id,
+            peer_name=peer_name if peer_name is not None else exchange.peer_name,
+            backend_preference=backend_preference or exchange.backend_preference,
+            transport_preference=transport_preference or exchange.transport_preference,
+            validate=True,
+        )
+        if record.secret_name and exchange.secret_value:
+            self._secret_backend.save(record.secret_name, exchange.secret_value)
+        return PairingExchange(
+            version=exchange.version,
+            exchange_type="response",
+            profile_id=record.profile_id,
+            pair_code=record.pair_code,
+            name=record.name,
+            role=record.role,
+            relay_mode=record.relay_mode,
+            backend_preference=record.backend_preference,
+            transport_preference=record.transport_preference,
+            peer_id=record.peer_id,
+            peer_name=record.peer_name,
+            secret_value=self.load_secret(record.profile_id),
+            provisioning_status=record.provisioning_status,
+            validation_error=record.validation_error,
+        )
+
+    def apply_response(self, exchange: PairingExchange) -> PairingRecord:
+        if exchange.exchange_type != "response":
+            raise ValueError("pairing exchange must be a response")
+        record = self.accept(
+            exchange.pair_code,
+            name=exchange.name,
+            peer_id=exchange.peer_id,
+            peer_name=exchange.peer_name,
+            backend_preference=exchange.backend_preference,
+            transport_preference=exchange.transport_preference,
+            validate=exchange.provisioning_status == "complete",
+        )
+        if record.secret_name and exchange.secret_value:
+            self._secret_backend.save(record.secret_name, exchange.secret_value)
+        return record
 
     def touch(self, profile_id: str) -> PairingRecord | None:
         items = self._load_all()
