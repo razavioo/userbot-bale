@@ -2,6 +2,9 @@
 
 This is the shortest path to try baleobala from a fresh checkout.
 
+The production-facing CLI surface is `baleobala doctor`, `auth`, `pair`, `relay`, `vpn`, and `gui`.
+Direct module execution and lower-level transport commands remain available as fallback/debug tools.
+
 ## Linux
 
 ```bash
@@ -9,8 +12,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 baleobala doctor
-baleobala loopback "hello"
-baleobala tunnel-loopback
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
+baleobala vpn status
 ```
 
 For the native VPN path:
@@ -28,6 +31,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,desktop]"
 baleobala doctor
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
 ```
 
 Then open `native/macos/` in Xcode and configure:
@@ -44,10 +48,13 @@ The macOS packet tunnel reads its route and DNS plan from `BaleTunnelConfigurati
 
 ## First Run
 
-1. Start with `baleobala auth login` or the Qt sign-in flow.
+1. Start with `baleobala auth bale-login --phone ... --method browser --save` or the Qt sign-in flow.
 2. Save a relay pairing with `baleobala pair start` and `baleobala pair accept`.
 3. Run `baleobala relay enable` if you want the relay profile saved.
 4. Run `baleobala vpn up`.
+
+For engineering-only validation, `baleobala loopback` and `baleobala tunnel-loopback` remain useful,
+but they are not the primary production quick-start path.
 
 ## Verification
 

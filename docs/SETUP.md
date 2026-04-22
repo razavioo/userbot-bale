@@ -2,6 +2,10 @@
 
 This guide covers the current repo state and the easiest way to install and try it on Linux and macOS.
 
+For production-facing setup, prefer `baleobala doctor`, `baleobala auth bale-login`,
+`baleobala pair ...`, `baleobala relay ...`, `baleobala vpn ...`, and `baleobala gui`.
+The lower-level transport commands below remain available as engineering and debug tools.
+
 ## Install
 
 ```bash
@@ -24,17 +28,21 @@ pip install -e ".[dev,bale,desktop]"
 
 ## What works today
 
+- `baleobala auth`, `pair`, `relay`, and `vpn` manage the product control plane and saved state.
+- On Linux, `baleobala vpn up` defaults to the native `linux-tun` backend.
+- On macOS, `baleobala vpn agent install` creates a LaunchAgent that can start `vpn up` automatically at login.
+
+## Advanced And Debug Tools
+
 - `baleobala loopback` verifies codec/framing in-process.
 - `baleobala tunnel-loopback` verifies the byte tunnel in-process.
 - `baleobala tunnel` runs the full IP tunnel over Bale LiveKit.
 - `baleobala bale-call` uses Bale LiveKit credentials directly.
 - `baleobala bale-tunnel` runs the tunnel over Bale LiveKit.
 - `baleobala bale-proxy` exposes a local SOCKS5/HTTP CONNECT endpoint over the tunnel.
-- `baleobala auth`, `pair`, `relay`, and `vpn` manage the product control plane and saved state.
-- On Linux, `baleobala vpn up` defaults to the native `linux-tun` backend.
-- On macOS, `baleobala vpn agent install` creates a LaunchAgent that can start `vpn up` automatically at login.
 
-The Bale-backed commands still need either explicit LiveKit credentials or the Bale auth flow that is being finished for the desktop product.
+These commands still need either explicit LiveKit credentials or the Bale auth flow that is being
+finished for the desktop product, so they should not be treated as the primary production path.
 
 ## Linux audio path
 
@@ -63,6 +71,7 @@ For now, macOS users should treat the proxy path as fallback/debug mode and the 
 baleobala loopback "hello" "world"
 baleobala tunnel-loopback
 baleobala doctor
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
 baleobala vpn status
 ```
 
@@ -75,7 +84,7 @@ If these pass, the codec and tunnel core are healthy and the local machine has t
 - If Bale LiveKit setup fails, start by verifying the current `baleobala bale-call` path with explicit LiveKit credentials before moving to the automated auth work.
 - If `baleobala doctor` reports missing `sounddevice`, re-check the Python environment that is currently active.
 - If `baleobala doctor` is green but the proxy still fails, test `baleobala tunnel-loopback` first so we know the byte-tunnel core is healthy.
-- If `baleobala vpn up` complains about auth or your stored JWT has expired, run `baleobala auth login` first and then retry with the saved session.
+- If `baleobala vpn up` complains about auth or your stored JWT has expired, run `baleobala auth bale-login --phone ... --save` first and then retry with the saved session.
 - If `baleobala relay enable` says there is no pairing record, create one with `baleobala pair start` and `baleobala pair accept` first.
 - If a paired relay already exists locally, `baleobala vpn up` will use the most recently used paired relay automatically.
 - If you want the app to come back on login on macOS, run `baleobala vpn agent install` once after pairing.
