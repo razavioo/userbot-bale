@@ -71,6 +71,13 @@ class TunnelServiceState:
     profile_id: str | None = None
     backend: str | None = None
     pairing_id: str | None = None
+    version: str = "1"
+    transport_selected: str = ""
+    call_established: str = "no"
+    data_flow_ok: str = "no"
+    route_ready: str = "no"
+    dns_ready: str = "no"
+    last_error: str = ""
     updated_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +87,13 @@ class TunnelServiceState:
             "profile_id": self.profile_id,
             "backend": self.backend,
             "pairing_id": self.pairing_id,
+            "version": self.version,
+            "transport_selected": self.transport_selected,
+            "call_established": self.call_established,
+            "data_flow_ok": self.data_flow_ok,
+            "route_ready": self.route_ready,
+            "dns_ready": self.dns_ready,
+            "last_error": self.last_error,
             "updated_at": self.updated_at,
         }
 
@@ -91,6 +105,13 @@ class TunnelServiceState:
             profile_id=data.get("profile_id"),
             backend=data.get("backend"),
             pairing_id=data.get("pairing_id"),
+            version=str(data.get("version", "1")),
+            transport_selected=str(data.get("transport_selected", "")),
+            call_established=str(data.get("call_established", "no")),
+            data_flow_ok=str(data.get("data_flow_ok", "no")),
+            route_ready=str(data.get("route_ready", "no")),
+            dns_ready=str(data.get("dns_ready", "no")),
+            last_error=str(data.get("last_error", "")),
             updated_at=float(data.get("updated_at", time.time())),
         )
 

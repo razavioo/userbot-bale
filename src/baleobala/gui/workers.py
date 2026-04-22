@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -262,6 +263,53 @@ class ProxyWorker(QObject):
             self.connected.emit("Relay ready — awaiting client packets")
             log.info("starting tcp relay")
             relay.serve_forever()
+
+
+class ControlPlaneConnectWorker(QObject):
+    """Run connect/disconnect through ControlService instead of legacy proxy UX."""
+
+    connecting = Signal(str)
+    connected = Signal(dict)
+    stopped = Signal(dict)
+    failed = Signal(str)
+    log_line = Signal(str)
+
+    def __init__(self, service, *, profile_id: Optional[str] = None, disconnect: bool = False) -> None:  # noqa: ANN001
+        super().__init__()
+        self._service = service
+        self._profile_id = profile_id
+        self._disconnect = disconnect
+
+    def run(self) -> None:
+        try:
+            if self._disconnect:
+                self.connecting.emit("Stopping connection…")
+                result = self._service.stop_connection(self._profile_id)
+                self.log_line.emit("connection stopped")
+                self.stopped.emit({"backend": result.backend, "probe": result.probe})
+                return
+
+            self.connecting.emit("Reconciling saved profile…")
+            snapshot = self._service.reconcile_runtime()
+            if snapshot.pairing is None:
+                raise RuntimeError("No paired relay is ready. Create or accept a pairing first.")
+            self.log_line.emit(f"pairing={snapshot.pairing.name} backend={snapshot.pairing.backend_preference}")
+            self.connecting.emit("Starting backend…")
+            result = self._service.start_connection(self._profile_id)
+            time.sleep(0.05)
+            self.connected.emit(
+                {
+                    "backend": result.backend,
+                    "probe": result.probe,
+                    "pairing": {
+                        "name": result.pairing.name if result.pairing else "",
+                        "profile_id": result.pairing.profile_id if result.pairing else "",
+                    },
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("control-plane worker crashed")
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
 # Keep a global registry so workers + threads are never GC'd while

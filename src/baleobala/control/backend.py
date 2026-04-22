@@ -12,6 +12,7 @@ from typing import Protocol
 
 import baleobala.control.macos as macos
 from baleobala.control.paths import config_dir
+from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.readiness import BackendReadiness
 from baleobala.control.store import JsonStore
 from baleobala.control.tunnel_service import TunnelService
@@ -20,7 +21,7 @@ from baleobala.runtime.proxy import DirectSocks5Server
 
 
 class VpnBackend(Protocol):
-    def up(self, profile: VpnProfile) -> dict[str, str]:
+    def up(self, profile: VpnProfile, auth_record=None, pairing=None) -> dict[str, str]:
         """Start the backend for a saved VPN profile."""
 
     def down(self) -> None:
@@ -28,6 +29,9 @@ class VpnBackend(Protocol):
 
     def status(self) -> dict[str, str]:
         """Return the current backend state."""
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        """Actively probe the owned runtime."""
 
 
 @dataclass
@@ -72,7 +76,7 @@ class MacOSPacketTunnelBackend(VpnBackend):
         self._state_store = JsonStore(state_path or (config_dir() / "macos_packet_tunnel.json"))
         self._state = BackendState(backend="packet-tunnel")
 
-    def up(self, profile: VpnProfile) -> dict[str, str]:
+    def up(self, profile: VpnProfile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
         service_state = None
         if self._service is not None:
             service_state = self._service.start(
@@ -80,13 +84,25 @@ class MacOSPacketTunnelBackend(VpnBackend):
                 backend=profile.backend,
                 pairing_id=profile.pairing_id,
             )
-        self._state = BackendState(backend="packet-tunnel", state="running", profile_id=profile.profile_id, pairing_id=profile.pairing_id, endpoint=service_state.endpoint if service_state is not None else None)
+        self._state = BackendState(
+            backend="packet-tunnel",
+            state="running",
+            profile_id=profile.profile_id,
+            pairing_id=profile.pairing_id,
+            endpoint=service_state.endpoint if service_state is not None else None,
+        )
         readiness = BackendReadiness.for_packet_tunnel(
             state="running",
             endpoint=service_state.endpoint if service_state is not None else None,
             profile_id=profile.profile_id,
             pairing_id=profile.pairing_id,
             runtime_active=service_state is not None and service_state.state == "running",
+            call_established=service_state.call_established if service_state is not None else "no",
+            data_flow_ok=service_state.data_flow_ok if service_state is not None else "no",
+            route_ready=service_state.route_ready if service_state is not None else "no",
+            dns_ready=service_state.dns_ready if service_state is not None else "no",
+            transport_selected=service_state.transport_selected if service_state is not None else "",
+            last_error=service_state.last_error if service_state is not None else "",
         )
         self._state_store.save(readiness.to_dict())
         return self.status()
@@ -101,6 +117,21 @@ class MacOSPacketTunnelBackend(VpnBackend):
             pass
 
     def status(self) -> dict[str, str]:
+        if self._service is not None:
+            runtime = self._service.status()
+            return BackendReadiness.for_packet_tunnel(
+                state="running" if runtime.state == "running" else self._state.state,
+                endpoint=runtime.endpoint or self._state.endpoint,
+                profile_id=runtime.profile_id or self._state.profile_id,
+                pairing_id=runtime.pairing_id or self._state.pairing_id,
+                runtime_active=runtime.state == "running",
+                call_established=runtime.call_established,
+                data_flow_ok=runtime.data_flow_ok,
+                route_ready=runtime.route_ready,
+                dns_ready=runtime.dns_ready,
+                transport_selected=runtime.transport_selected,
+                last_error=runtime.last_error,
+            ).to_dict()
         payload = self._state_store.load(default=None)
         if isinstance(payload, dict):
             result = {str(key): str(value) for key, value in payload.items()}
@@ -114,6 +145,9 @@ class MacOSPacketTunnelBackend(VpnBackend):
             pairing_id=self._state.pairing_id,
             runtime_active=False,
         ).to_dict()
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        return probe_endpoint(self.status().get("endpoint"), timeout=timeout)
 
 
 class ProxyFallbackBackend(VpnBackend):
@@ -137,7 +171,7 @@ class ProxyFallbackBackend(VpnBackend):
             self._session = _NullProxySession(listen_host=listen_host, listen_port=listen_port)
         self._state = BackendState(backend="proxy")
 
-    def up(self, profile: VpnProfile) -> dict[str, str]:
+    def up(self, profile: VpnProfile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
         self._session.start()
         self._state = BackendState(backend="proxy", state="running", profile_id=profile.profile_id, pairing_id=profile.pairing_id)
         return self.status()
@@ -158,6 +192,9 @@ class ProxyFallbackBackend(VpnBackend):
         payload = readiness.to_dict()
         payload.update(session)
         return payload
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        return probe_endpoint(self.status().get("endpoint"), timeout=timeout)
 
 
 class DirectProxyBackend(VpnBackend):
@@ -205,7 +242,7 @@ class DirectProxyBackend(VpnBackend):
             )
         self._cleanup_registered = False
 
-    def up(self, profile: VpnProfile) -> dict[str, str]:
+    def up(self, profile: VpnProfile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
         server = self._server_factory()
         server.start()
         if not server.wait_ready(timeout=2.0):
@@ -271,6 +308,9 @@ class DirectProxyBackend(VpnBackend):
         payload = readiness.to_dict()
         payload.update(session)
         return payload
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        return probe_endpoint(self.status().get("endpoint"), timeout=timeout)
 
     def _register_cleanup(self) -> None:
         if self._cleanup_registered:

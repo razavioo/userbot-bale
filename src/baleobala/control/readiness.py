@@ -51,6 +51,12 @@ class BackendReadiness:
         payload.update(self.details)
         return payload
 
+    def merged_with(self, extra: dict[str, Any]) -> "BackendReadiness":
+        merged = self.to_dict()
+        for key, value in extra.items():
+            merged[str(key)] = str(value)
+        return type(self).from_dict(merged)
+
     @classmethod
     def for_direct_proxy(
         cls,
@@ -110,22 +116,31 @@ class BackendReadiness:
         tun: str,
         address: str,
         mtu: str,
+        call_established: str = "no",
+        data_flow_ok: str = "no",
+        transport_selected: str = "",
+        endpoint: str | None = None,
+        last_error: str = "",
     ) -> "BackendReadiness":
         ready = session_active and state == "running"
         return cls(
             backend="linux-tun",
             state=state,
             control_ready=_yn(ready),
+            transport_ready=_yn(transport_selected != ""),
             route_ready=_yn(ready),
             dns_ready=_yn(ready),
-            call_established=_yn(ready),
-            data_flow_ok=_yn(ready),
+            call_established=call_established,
+            data_flow_ok=data_flow_ok,
             teardown_clean=_yn(state != "running" or session_active),
-            carrier_latency_ms="0" if ready else "",
+            carrier_latency_ms="0" if call_established == "yes" else "",
+            last_error=last_error,
+            endpoint=endpoint,
             details={
                 "tun": tun,
                 "address": address,
                 "mtu": mtu,
+                "transport_selected": transport_selected,
             },
         )
 
@@ -138,20 +153,31 @@ class BackendReadiness:
         profile_id: str | None,
         pairing_id: str | None,
         runtime_active: bool,
+        call_established: str = "no",
+        data_flow_ok: str = "no",
+        route_ready: str = "no",
+        dns_ready: str = "no",
+        transport_selected: str = "",
+        last_error: str = "",
     ) -> "BackendReadiness":
         return cls(
             backend="packet-tunnel",
             state=state,
             control_ready=_yn(state == "running"),
             transport_ready=_yn(runtime_active),
-            call_established=_yn(state == "running"),
+            route_ready=route_ready,
+            dns_ready=dns_ready,
+            call_established=call_established,
+            data_flow_ok=data_flow_ok,
             teardown_clean=_yn(state != "running" or runtime_active),
+            last_error=last_error,
             endpoint=endpoint,
             details={
                 "profile_id": profile_id or "",
                 "pairing_id": pairing_id or "",
                 "mode": "native",
                 "policy": "full-tunnel",
+                "transport_selected": transport_selected,
             },
         )
 
