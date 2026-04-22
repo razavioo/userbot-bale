@@ -9,6 +9,8 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from baleobala.control.observability import StructuredEventRecorder, classify_failure
+
 log = logging.getLogger(__name__)
 
 
@@ -177,24 +179,38 @@ class ProxyWorker(QObject):
         from baleobala.runtime.bridge import AudioTunnelBridge
         from baleobala.runtime.frame import TunnelRole
 
+        recorder = StructuredEventRecorder(component="gui-proxy-connect")
         self.connecting.emit("Resolving Bale call session…")
+        recorder.event("call_session_resolution_started", stage="call_setup", outcome="begin")
 
         controller = BaleCarrierController(client=BaleApiClient(jwt=self._jwt))
         try:
             log.info("resolving call session")
             peer_id = self._peer_id
             if peer_id is None and self._peer_name:
+                recorder.event("peer_lookup_started", stage="call_setup", outcome="begin", peer_id=self._peer_name)
                 log.info("searching contact by name=%r", self._peer_name)
                 matches = controller.search_contacts(self._peer_name)
                 if not matches:
+                    info = classify_failure(last_error=f"no contacts match name {self._peer_name!r}")
+                    recorder.event(
+                        "peer_lookup_failed",
+                        stage="call_setup",
+                        outcome="failure",
+                        failure_class=info.failure_class,
+                        failure_code=info.failure_code,
+                        error_message=f"no contacts match name {self._peer_name!r}",
+                    )
                     raise RuntimeError(
                         f"no contacts match name {self._peer_name!r}"
                     )
                 peer_id = matches[0].user_id
+                recorder.event("peer_lookup_completed", stage="call_setup", outcome="success", peer_id=peer_id)
                 self.log_line.emit(
                     f"matched {self._peer_name!r} -> user_id {peer_id}"
                 )
             if peer_id is not None:
+                recorder.event("dial_started", stage="call_setup", outcome="begin", peer_id=peer_id)
                 log.info("dialing peer_id=%d", peer_id)
                 creds = controller.dial(
                     peer_id=peer_id,
@@ -202,6 +218,7 @@ class ProxyWorker(QObject):
                     cancel_event=self._stop_event,
                 )
             elif self._answer:
+                recorder.event("answer_started", stage="call_setup", outcome="begin")
                 self.log_line.emit("Waiting for incoming call…")
                 log.info("waiting for incoming call timeout=%ss", self._answer_timeout)
                 creds = controller.answer(
@@ -212,6 +229,7 @@ class ProxyWorker(QObject):
                 raise RuntimeError(
                     "Either peer_name/peer_id or 'answer' mode required."
                 )
+            recorder.event("credentials_received", stage="call_setup", outcome="success", session_id=creds.room)
         finally:
             try:
                 controller._client.stop()
@@ -222,9 +240,11 @@ class ProxyWorker(QObject):
             return
 
         self.connecting.emit("Opening LiveKit audio tunnel…")
+        recorder.event("carrier_session_open_started", stage="carrier_session", outcome="begin", session_id=creds.room)
         log.info("opening livekit session room=%s identity=%s", creds.room, creds.identity)
         carrier_ctl = BaleCarrierController()
         carrier = carrier_ctl.open_session(creds)
+        recorder.event("carrier_session_opened", stage="carrier_session", outcome="success", session_id=creds.room)
         role = TunnelRole.CLIENT if self._role == "client" else TunnelRole.SERVER
         bridge = AudioTunnelBridge(
             carrier=carrier,
@@ -255,12 +275,14 @@ class ProxyWorker(QObject):
             self.connected.emit(
                 f"SOCKS5 listening on {self._listen_host}:{self._listen_port}"
             )
+            recorder.event("transport_selected", stage="transport_init", outcome="success", transport_selected="socks5-proxy")
             log.info("starting socks5 server")
             server.serve_forever()
         else:
             relay = TunnelTcpRelay(transport, secret=secret)
             self._server = relay
             self.connected.emit("Relay ready — awaiting client packets")
+            recorder.event("transport_selected", stage="transport_init", outcome="success", transport_selected="tcp-relay")
             log.info("starting tcp relay")
             relay.serve_forever()
 
@@ -281,22 +303,37 @@ class ControlPlaneConnectWorker(QObject):
         self._disconnect = disconnect
 
     def run(self) -> None:
+        recorder = StructuredEventRecorder(component="gui-control-plane")
         try:
             if self._disconnect:
                 self.connecting.emit("Stopping connection…")
+                recorder.event("disconnect_started", stage="teardown", outcome="begin")
                 result = self._service.stop_connection(self._profile_id)
                 self.log_line.emit("connection stopped")
+                recorder.event("disconnect_completed", stage="teardown", outcome="success", backend=result.backend)
                 self.stopped.emit({"backend": result.backend, "probe": result.probe})
                 return
 
             self.connecting.emit("Reconciling saved profile…")
+            recorder.event("reconcile_started", stage="call_setup", outcome="begin")
             snapshot = self._service.reconcile_runtime()
             if snapshot.pairing is None:
+                info = classify_failure(last_error="No paired relay is ready")
+                recorder.event(
+                    "reconcile_failed",
+                    stage="call_setup",
+                    outcome="failure",
+                    failure_class=info.failure_class,
+                    failure_code=info.failure_code,
+                    error_message="No paired relay is ready. Create or accept a pairing first.",
+                )
                 raise RuntimeError("No paired relay is ready. Create or accept a pairing first.")
             self.log_line.emit(f"pairing={snapshot.pairing.name} backend={snapshot.pairing.backend_preference}")
             self.connecting.emit("Starting backend…")
+            recorder.event("backend_starting", stage="transport_init", outcome="begin", backend=snapshot.pairing.backend_preference)
             result = self._service.start_connection(self._profile_id)
             time.sleep(0.05)
+            recorder.event("backend_started", stage="transport_init", outcome="success", backend=result.backend)
             self.connected.emit(
                 {
                     "backend": result.backend,
@@ -308,6 +345,16 @@ class ControlPlaneConnectWorker(QObject):
                 }
             )
         except Exception as exc:  # noqa: BLE001
+            info = classify_failure(last_error=str(exc))
+            recorder.event(
+                "control_plane_failed",
+                stage=recorder.failed_stage or "call_setup",
+                outcome="failure",
+                failure_class=info.failure_class,
+                failure_code=info.failure_code,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
             log.exception("control-plane worker crashed")
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 

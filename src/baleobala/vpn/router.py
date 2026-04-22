@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
+from baleobala.control.observability import StructuredEventRecorder, classify_failure
+
 log = logging.getLogger(__name__)
 
 
@@ -46,21 +48,48 @@ class FailoverRouter:
     or raises RuntimeError if nothing works.
     """
 
-    def __init__(self, choices: List[RouterChoice]) -> None:
+    def __init__(self, choices: List[RouterChoice], *, recorder: StructuredEventRecorder | None = None) -> None:
         if not choices:
             raise ValueError("at least one RouterChoice required")
         self._choices = choices
+        self._recorder = recorder
 
     def build(self):  # type: ignore[no-untyped-def]
         errors: list[tuple[str, Exception]] = []
         for c in self._choices:
             try:
+                if self._recorder is not None:
+                    self._recorder.event(
+                        "transport_candidate_attempt",
+                        stage="transport_init",
+                        outcome="begin",
+                        transport_requested=c.name,
+                    )
                 log.info("router: attempting transport %s", c.name)
                 transport = c.factory()
+                if self._recorder is not None:
+                    self._recorder.event(
+                        "transport_selected",
+                        stage="transport_init",
+                        outcome="success",
+                        transport_selected=c.name,
+                    )
                 log.info("router: using transport %s (mtu=%d)",
                          c.name, getattr(transport, "mtu", -1))
                 return c.name, transport
             except Exception as e:  # noqa: BLE001
+                info = classify_failure(last_error=f"transport factory failed: {e}")
+                if self._recorder is not None:
+                    self._recorder.event(
+                        "transport_setup_failed",
+                        stage="transport_init",
+                        outcome="failure",
+                        transport_requested=c.name,
+                        failure_class=info.failure_class,
+                        failure_code=info.failure_code,
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                    )
                 log.warning("router: transport %s failed: %s", c.name, e)
                 errors.append((c.name, e))
         detail = "; ".join(f"{n}: {e}" for n, e in errors)
@@ -77,13 +106,14 @@ class TransportChain:
     selection: the router picks where to start, the chain lets us walk
     to the next option when the current one dies."""
 
-    def __init__(self, choices: List[RouterChoice]) -> None:
+    def __init__(self, choices: List[RouterChoice], *, recorder: StructuredEventRecorder | None = None) -> None:
         if not choices:
             raise ValueError("at least one RouterChoice required")
         self._choices = choices
         self._idx = -1
         self._current: object | None = None
         self._current_name: str | None = None
+        self._recorder = recorder
 
     def current(self):  # type: ignore[no-untyped-def]
         if self._current is None:
@@ -103,11 +133,25 @@ class TransportChain:
         while i < len(self._choices):
             c = self._choices[i]
             try:
+                if self._recorder is not None:
+                    self._recorder.event(
+                        "transport_candidate_attempt",
+                        stage="transport_runtime",
+                        outcome="begin",
+                        transport_requested=c.name,
+                    )
                 log.info("chain: advancing to transport %s", c.name)
                 new = c.factory()
                 self._idx = i
                 self._current = new
                 self._current_name = c.name
+                if self._recorder is not None:
+                    self._recorder.event(
+                        "transport_selected",
+                        stage="transport_runtime",
+                        outcome="success",
+                        transport_selected=c.name,
+                    )
                 if old is not None:
                     try:
                         old.close()  # type: ignore[attr-defined]
@@ -115,6 +159,18 @@ class TransportChain:
                         log.exception("closing old transport %s failed", old_name)
                 return c.name, new
             except Exception as e:  # noqa: BLE001
+                info = classify_failure(last_error=f"transport factory failed: {e}")
+                if self._recorder is not None:
+                    self._recorder.event(
+                        "transport_setup_failed",
+                        stage="transport_runtime",
+                        outcome="failure",
+                        transport_requested=c.name,
+                        failure_class=info.failure_class,
+                        failure_code=info.failure_code,
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                    )
                 log.warning("chain: transport %s failed: %s", c.name, e)
                 errors.append((c.name, e))
                 i += 1
