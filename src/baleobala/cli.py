@@ -245,6 +245,21 @@ def cmd_auth(args: argparse.Namespace) -> int:
     from baleobala.control import AuthStore
 
     store = AuthStore()
+    if args.auth_cmd == "bale-login":
+        jwt = _run_bale_auth_login(args)
+        if args.print_jwt:
+            print(jwt)
+        if args.save:
+            record = store.save_jwt(jwt, user_id=getattr(args, "user_id", None), phone=args.phone)
+            print(
+                f"saved auth for provider={record.provider} "
+                f"user_id={record.user_id or 'unknown'}",
+                file=sys.stderr,
+            )
+        if args.jwt_out:
+            Path(args.jwt_out).expanduser().write_text(jwt + "\n", encoding="utf-8")
+            print(f"wrote jwt to {args.jwt_out}", file=sys.stderr)
+        return 0
     if args.auth_cmd == "login":
         jwt = _read_secret_text(args.jwt, "BALE_JWT", args.jwt_file)
         if not jwt:
@@ -1247,6 +1262,8 @@ def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from baleobala.bale.protos import WEB_API_KEY, WEB_APP_ID
+
     p = argparse.ArgumentParser(
         prog="baleobala",
         description="Acoustic data bridge over voice/video calls.",
@@ -1287,6 +1304,37 @@ def build_parser() -> argparse.ArgumentParser:
     auth_login.add_argument("--user-id", type=int, default=None)
     auth_login.add_argument("--phone", default=None)
     auth_login.set_defaults(func=cmd_auth)
+
+    auth_bale_login = auth_sub.add_parser(
+        "bale-login",
+        help="login with Bale phone/SMS and optionally store JWT",
+    )
+    auth_bale_login.add_argument("--phone", required=True, help="phone in E.164, with or without '+'")
+    auth_bale_login.add_argument("--app-id", type=int, default=WEB_APP_ID)
+    auth_bale_login.add_argument("--api-key", default=WEB_API_KEY)
+    auth_bale_login.add_argument("--device-title", default="baleobala")
+    auth_bale_login.add_argument("--device-hash-hex", default=None)
+    auth_bale_login.add_argument(
+        "--method",
+        choices=["auto", "browser", "grpc"],
+        default="auto",
+        help="auth backend (default: auto; prefer browser like GUI)",
+    )
+    auth_bale_login.add_argument(
+        "--headful",
+        action="store_true",
+        help="browser mode: show Chromium window instead of headless",
+    )
+    auth_bale_login.add_argument("--save", action="store_true", help="save JWT to auth store")
+    auth_bale_login.add_argument("--user-id", type=int, default=None, help="optional user_id for saved auth")
+    auth_bale_login.add_argument("--jwt-out", default=None, help="optional file path to write JWT")
+    auth_bale_login.add_argument(
+        "--print-jwt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="print JWT to stdout (default: true)",
+    )
+    auth_bale_login.set_defaults(func=cmd_auth)
 
     auth_logout = auth_sub.add_parser("logout", help="clear stored auth state")
     auth_logout.set_defaults(func=cmd_auth)
@@ -1579,7 +1627,6 @@ def build_parser() -> argparse.ArgumentParser:
                     help="send: single message; omit to read lines from stdin")
     bc.set_defaults(func=cmd_bale_call)
 
-    from baleobala.bale.protos import WEB_API_KEY, WEB_APP_ID
     ba = sub.add_parser(
         "bale-auth",
         help="phone/SMS login flow → prints a JWT. Defaults to Bale Web "
@@ -1593,6 +1640,17 @@ def build_parser() -> argparse.ArgumentParser:
     ba.add_argument("--device-title", default="baleobala")
     ba.add_argument("--device-hash-hex", default=None,
                     help="hex-encoded device hash (default: random 16B)")
+    ba.add_argument(
+        "--method",
+        choices=["auto", "browser", "grpc"],
+        default="grpc",
+        help="auth backend (default: grpc for backwards compatibility)",
+    )
+    ba.add_argument(
+        "--headful",
+        action="store_true",
+        help="browser mode: show Chromium window instead of headless",
+    )
     ba.set_defaults(func=cmd_bale_auth)
 
     g = sub.add_parser("gui", help="launch the Qt GUI (login + connect)")
@@ -1610,6 +1668,73 @@ def cmd_bale_auth(args: argparse.Namespace) -> int:
     pipe the JWT to a file:
         baleobala bale-auth --phone +98... > ~/.bale_jwt
     """
+    jwt = _run_bale_auth_login(args)
+    print(jwt)
+    return 0
+
+
+def _run_bale_auth_login(args: argparse.Namespace) -> str:
+    """Run Bale phone/SMS auth flow and return a JWT.
+
+    Modes:
+      - browser: Playwright/web.bale.ai cookie flow (same path as GUI)
+      - grpc: direct gRPC-Web flow
+      - auto: prefer browser, fallback to grpc
+    """
+    method = getattr(args, "method", "auto")
+    if method not in {"auto", "browser", "grpc"}:
+        raise SystemExit(f"unknown auth method: {method}")
+
+    if method == "browser":
+        return _run_bale_auth_login_browser(args)
+    if method == "grpc":
+        return _run_bale_auth_login_grpc(args)
+
+    # auto
+    try:
+        return _run_bale_auth_login_browser(args)
+    except Exception as e:  # noqa: BLE001
+        print(f"[bale-auth] browser flow failed ({e}); falling back to grpc", file=sys.stderr)
+        return _run_bale_auth_login_grpc(args)
+
+
+def _run_bale_auth_login_browser(args: argparse.Namespace) -> str:
+    import os
+
+    from baleobala.bale.auth_browser import BaleAuthBrowser
+
+    phone = str(args.phone).lstrip("+")
+    if not phone.isdigit():
+        raise SystemExit("invalid phone number (digits only, optional +)")
+
+    headless = not bool(getattr(args, "headful", False))
+    prev_headless = os.environ.get("BALE_HEADLESS")
+    os.environ["BALE_HEADLESS"] = "1" if headless else "0"
+    try:
+        with BaleAuthBrowser() as auth:
+            auth.start_phone_auth(int(phone))
+            for attempt in range(1, 4):
+                code = input("SMS code: ").strip()
+                try:
+                    session = auth.validate_code(code)
+                    return session.jwt
+                except Exception as e:  # noqa: BLE001
+                    text = str(e)
+                    if "expired" in text.lower():
+                        raise SystemExit(
+                            f"code expired (attempt {attempt}); rerun to send a fresh SMS"
+                        )
+                    print(f"[bale-auth] {text}; retry {attempt}/3", file=sys.stderr)
+            raise SystemExit("too many invalid codes; giving up")
+    finally:
+        if prev_headless is None:
+            os.environ.pop("BALE_HEADLESS", None)
+        else:
+            os.environ["BALE_HEADLESS"] = prev_headless
+
+
+def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
+    """Direct gRPC-Web fallback used by CLI."""
     from baleobala.bale.auth import BaleAuth
     from baleobala.bale.grpc_web import GrpcWebError
 
@@ -1647,9 +1772,7 @@ def cmd_bale_auth(args: argparse.Namespace) -> int:
             print(f"[bale-auth] {e.message}; retry {attempt}/3", file=sys.stderr)
     else:
         raise SystemExit("too many invalid codes; giving up")
-
-    print(session.jwt)
-    return 0
+    return session.jwt
 
 
 def cmd_gui(args: argparse.Namespace) -> int:

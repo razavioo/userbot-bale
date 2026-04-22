@@ -20,7 +20,9 @@ import asyncio
 import inspect
 import itertools
 import logging
+import os
 import queue
+import ssl
 import threading
 from typing import Callable, Dict, Optional
 
@@ -39,6 +41,28 @@ DEFAULT_WS_URL = "wss://next-ws.bale.ai/ws/"
 def _require_websockets() -> None:
     if websockets is None:
         raise ImportError("websockets package is not installed.")
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _build_ssl_context() -> ssl.SSLContext | None:
+    cafile = os.environ.get("BALE_SSL_CA_FILE") or os.environ.get("SSL_CERT_FILE")
+    capath = os.environ.get("BALE_SSL_CA_PATH") or os.environ.get("SSL_CERT_DIR")
+    insecure = _env_truthy("BALE_WS_SSL_NO_VERIFY") or _env_truthy("BALE_SSL_NO_VERIFY")
+
+    if not cafile and not capath and not insecure:
+        return None
+
+    ctx = ssl.create_default_context()
+    if cafile or capath:
+        ctx.load_verify_locations(cafile=cafile or None, capath=capath or None)
+    if insecure:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 class WsClient:
@@ -133,6 +157,9 @@ class WsClient:
             ("Cookie", f"access_token={self._jwt}"),
         ]
         connect_kwargs = {"max_size": None}
+        ssl_context = _build_ssl_context()
+        if ssl_context is not None:
+            connect_kwargs["ssl"] = ssl_context
         params = inspect.signature(websockets.connect).parameters
         if "additional_headers" in params:
             connect_kwargs["additional_headers"] = headers

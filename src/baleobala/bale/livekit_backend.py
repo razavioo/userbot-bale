@@ -217,6 +217,8 @@ class LiveKitSession:
         if self._room is not None:
             try:
                 await self._room.disconnect()
+                # Let SDK callbacks drain before the event loop goes away.
+                await asyncio.sleep(0.25)
             except Exception:  # noqa: BLE001
                 log.exception("room.disconnect failed")
             self._room = None

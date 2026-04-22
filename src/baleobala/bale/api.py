@@ -45,6 +45,7 @@ from baleobala.bale.protos import (
     RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
     ResolvedContact, ResponseAuth, encode_accept_call,
     find_inbound_messages, parse_call_credentials,
+    parse_incoming_call_offer,
     parse_import_contacts_response, parse_response_auth,
     parse_search_contacts_response, parse_transaction_hash,
     parse_update_call_received,
@@ -430,6 +431,8 @@ class BaleApiClient:
             self._deliver_creds(creds)
         else:
             call_id = parse_update_call_received(resp.raw)
+            if call_id is None:
+                call_id = parse_incoming_call_offer(resp.raw)
             if call_id is not None and call_id != self._accepted_call_id:
                 log.info("incoming call received: callId=%d; auto-accepting", call_id)
                 self._accepted_call_id = call_id

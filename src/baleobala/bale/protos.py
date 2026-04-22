@@ -363,6 +363,42 @@ def parse_update_call_received(buf: bytes) -> int | None:
     return None
 
 
+def parse_incoming_call_offer(buf: bytes) -> int | None:
+    """Extract callId from the short incoming-call offer push.
+
+    Live-probed 2026-04-23 on the callee account: Bale may push a
+    compact call offer that contains the room UUID and wss URL but no
+    JWT token. The nested payload starts with field 1 = callId and also
+    includes the room (field 3) + URL (field 4). This helper lets the
+    callee AcceptCall immediately instead of waiting for a later
+    UpdateCallReceived variant that may never arrive.
+    """
+    room_pos = buf.find(b"\x1a$")
+    url_pos = buf.find(b"wss://meet-")
+    if room_pos == -1 or url_pos == -1:
+        return None
+
+    for start in range(room_pos - 2, -1, -1):
+        if buf[start] != 0x0A or start + 1 >= len(buf):
+            continue
+        length = buf[start + 1]
+        inner_start = start + 2
+        inner_end = inner_start + length
+        if inner_end > len(buf):
+            continue
+        if not (inner_start <= room_pos < inner_end and inner_start <= url_pos < inner_end):
+            continue
+        inner = buf[inner_start:inner_end]
+        if not inner.startswith(b"\x08"):
+            continue
+        try:
+            call_id, _ = _dec_varint(inner, 1)
+            return call_id
+        except (IndexError, ValueError):
+            continue
+    return None
+
+
 # MeetOuterClass.RequestAcceptCall
 #   field 1 (varint)    = callId (int64)
 #   field 2 (len-delim) = inviteEnable (BooleanValue { field 1 = 1 })
@@ -376,9 +412,9 @@ def encode_accept_call(call_id: int, invite_enable: bool = True) -> bytes:
     body += _enc_tag(1, 0) + _enc_varint(call_id)
     if invite_enable:
         body += _enc_len_delim(2, _enc_bool_value(True))
-    # StartCall wraps its payload at outer tag 6. Android RequestAcceptCall
-    # uses the same envelope pattern for bale.meet.v1.Meet RPCs.
-    return _enc_len_delim(6, bytes(body))
+    # Live-probed 2026-04-23: unlike StartCall, AcceptCall expects the
+    # raw RequestAcceptCall body, not a bale.meet outer tag-6 wrapper.
+    return bytes(body)
 
 
 def parse_call_credentials(buf: bytes) -> CallCredentials | None:
