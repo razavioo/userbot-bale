@@ -263,7 +263,7 @@ def cmd_auth(args: argparse.Namespace) -> int:
 
 
 def cmd_pair(args: argparse.Namespace) -> int:
-    from baleobala.control import PairingStore
+    from baleobala.control import PairingExchange, PairingStore
 
     store = PairingStore()
     if args.pair_cmd == "start":
@@ -294,6 +294,31 @@ def cmd_pair(args: argparse.Namespace) -> int:
     if args.pair_cmd == "remove":
         store.remove(args.profile_id)
         print(f"removed {args.profile_id}")
+        return 0
+    if args.pair_cmd == "export-request":
+        exchange = store.export_request(args.profile_id)
+        print(json.dumps(exchange.to_dict(), indent=2, sort_keys=True))
+        return 0
+    if args.pair_cmd == "accept-request":
+        exchange = PairingExchange.from_dict(json.loads(Path(args.request_file).read_text(encoding="utf-8")))
+        response = store.accept_request(
+            exchange,
+            name=args.name,
+            peer_id=args.peer_id,
+            peer_name=args.peer_name,
+            backend_preference=args.backend,
+            transport_preference=args.transport,
+        )
+        print(json.dumps(response.to_dict(), indent=2, sort_keys=True))
+        return 0
+    if args.pair_cmd == "apply-response":
+        exchange = PairingExchange.from_dict(json.loads(Path(args.response_file).read_text(encoding="utf-8")))
+        record = store.apply_response(exchange)
+        print(f"profile_id: {record.profile_id}")
+        print(f"name: {record.name}")
+        print(f"role: {record.role}")
+        print(f"status: {record.status}")
+        print(f"provisioning_status: {record.provisioning_status}")
         return 0
 
     records = store.list()
@@ -1284,6 +1309,23 @@ def build_parser() -> argparse.ArgumentParser:
     pair_accept.add_argument("--code", required=True)
     pair_accept.add_argument("--name", default=None)
     pair_accept.set_defaults(func=cmd_pair)
+
+    pair_export = pair_sub.add_parser("export-request", help="export a versioned pairing request bundle")
+    pair_export.add_argument("--profile-id", required=True)
+    pair_export.set_defaults(func=cmd_pair)
+
+    pair_accept_request = pair_sub.add_parser("accept-request", help="accept a pairing request bundle and emit a response bundle")
+    pair_accept_request.add_argument("--request-file", required=True)
+    pair_accept_request.add_argument("--name", default=None)
+    pair_accept_request.add_argument("--peer-id", type=int, default=None)
+    pair_accept_request.add_argument("--peer-name", default=None)
+    pair_accept_request.add_argument("--backend", default=None)
+    pair_accept_request.add_argument("--transport", default=None)
+    pair_accept_request.set_defaults(func=cmd_pair)
+
+    pair_apply_response = pair_sub.add_parser("apply-response", help="apply a pairing response bundle")
+    pair_apply_response.add_argument("--response-file", required=True)
+    pair_apply_response.set_defaults(func=cmd_pair)
 
     pair_list = pair_sub.add_parser("list", help="list pairing records")
     pair_list.set_defaults(func=cmd_pair)

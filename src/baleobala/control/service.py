@@ -8,7 +8,7 @@ from typing import Callable
 from baleobala.control.auth import AuthRecord, AuthStore
 from baleobala.control.backend import MacOSPacketTunnelBackend, VpnBackend, backend_for_profile
 from baleobala.control.probe import ProbeResult
-from baleobala.control.pairing import PairingRecord, PairingStore
+from baleobala.control.pairing import PairingExchange, PairingRecord, PairingStore
 from baleobala.control.tunnel_service import LocalTunnelService
 from baleobala.control.vpn import VpnProfile, VpnStore
 
@@ -115,6 +115,31 @@ class ControlService:
             peer_name=peer_name,
             validate=True,
         )
+
+    def export_pairing_request(self, profile_id: str) -> PairingExchange:
+        return self.pairing_store.export_request(profile_id)
+
+    def accept_pairing_request(
+        self,
+        exchange: PairingExchange,
+        *,
+        name: str | None = None,
+        peer_id: int | None = None,
+        peer_name: str | None = None,
+        backend_preference: str | None = None,
+        transport_preference: str | None = None,
+    ) -> PairingExchange:
+        return self.pairing_store.accept_request(
+            exchange,
+            name=name,
+            peer_id=peer_id,
+            peer_name=peer_name,
+            backend_preference=backend_preference,
+            transport_preference=transport_preference,
+        )
+
+    def apply_pairing_response(self, exchange: PairingExchange) -> PairingRecord:
+        return self.pairing_store.apply_response(exchange)
 
     def backend(self, profile: VpnProfile | None = None) -> VpnBackend:
         active_profile = profile or self.vpn_store.load() or self.vpn_store.ensure_default()

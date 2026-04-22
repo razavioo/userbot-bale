@@ -73,6 +73,43 @@ def test_pairing_store_begin_accept(tmp_path, monkeypatch) -> None:
     assert store.active() == accepted
 
 
+def test_pairing_exchange_request_response_roundtrip(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    from baleobala.control import PairingStore
+
+    initiator = PairingStore(path=tmp_path / "initiator.json")
+    responder = PairingStore(path=tmp_path / "responder.json")
+
+    pending = initiator.begin(
+        "relay-a",
+        role="client",
+        peer_id=7,
+        relay_mode="proxy",
+        backend_preference="packet-tunnel",
+    )
+    request = initiator.export_request(pending.profile_id)
+    assert request.exchange_type == "request"
+    assert request.secret_value
+
+    responder.add(pending)
+    response = responder.accept_request(
+        request,
+        peer_name="relay-a-peer",
+        backend_preference="packet-tunnel",
+        transport_preference="auto",
+    )
+    assert response.exchange_type == "response"
+    assert response.provisioning_status == "complete"
+
+    accepted = initiator.apply_response(response)
+    assert accepted.status == "paired"
+    assert accepted.provisioning_status == "complete"
+    assert accepted.peer_name == "relay-a-peer"
+    assert initiator.connectable(accepted.profile_id) == accepted
+    assert initiator.load_secret(accepted.profile_id) == response.secret_value
+
+
 def test_pairing_store_prefers_most_recently_used_pairing(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import PairingStore
@@ -130,6 +167,26 @@ def test_control_service_auth_roundtrip(tmp_path, monkeypatch) -> None:
     loaded = service.load_auth()
     assert loaded is not None
     assert loaded.jwt == "jwt-token"
+
+
+def test_control_service_exports_and_applies_pairing_exchange(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService
+
+    initiator = ControlService()
+    pending = initiator.begin_pairing("relay-a", role="client", peer_id=9, relay_mode="proxy")
+    request = initiator.export_pairing_request(pending.profile_id)
+
+    responder = ControlService(pairing_store=type(initiator.pairing_store)(path=tmp_path / "remote-pairing.json"))
+    responder.pairing_store.add(pending)
+    response = responder.accept_pairing_request(request, peer_name="remote-relay")
+    accepted = initiator.apply_pairing_response(response)
+
+    assert accepted.profile_id == pending.profile_id
+    assert accepted.status == "paired"
+    assert accepted.peer_name == "remote-relay"
 
 
 def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
