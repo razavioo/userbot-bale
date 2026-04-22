@@ -494,6 +494,79 @@ def test_carrier_tunnel_service_bridges_bytes(tmp_path, monkeypatch) -> None:
     runtime.stop()
 
 
+def test_carrier_tunnel_service_tracks_control_status_frames(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    import json
+    import socket
+
+    from baleobala.control.probe import probe_endpoint
+    from baleobala.control.tunnel_service import CarrierTunnelService
+
+    class Bridge:
+        def start(self):
+            pass
+
+        def send(self, data):  # noqa: ANN001
+            return len(data)
+
+        def recv(self, timeout=None):  # noqa: ANN001
+            return None
+
+        def close(self):
+            pass
+
+        @property
+        def closed(self):
+            return False
+
+    runtime = CarrierTunnelService(Bridge(), socket_path=tmp_path / "carrier.sock")
+    state = runtime.start(profile_id="p1", backend="packet-tunnel", pairing_id="pair-1")
+    endpoint = state.endpoint
+    assert endpoint is not None
+    socket_path = endpoint.removeprefix("unix://")
+
+    message = json.dumps(
+        {
+            "type": "status",
+            "version": "1",
+            "state": "running",
+            "transport_selected": "packet-tunnel",
+            "call_established": "yes",
+            "data_flow_ok": "yes",
+            "route_ready": "yes",
+            "dns_ready": "yes",
+            "last_error": "",
+        }
+    ).encode("utf-8")
+
+    def recv_exact(sock, size):  # noqa: ANN001
+        buf = bytearray()
+        while len(buf) < size:
+            chunk = sock.recv(size - len(buf))
+            if not chunk:
+                raise EOFError
+            buf.extend(chunk)
+        return bytes(buf)
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(socket_path)
+        client.sendall(len(message).to_bytes(4, "big") + message)
+        header = recv_exact(client, 4)
+        reply = json.loads(recv_exact(client, int.from_bytes(header, "big")).decode("utf-8"))
+
+    assert reply["transport_selected"] == "packet-tunnel"
+    assert runtime.status().call_established == "yes"
+    assert runtime.status().route_ready == "yes"
+
+    probe = probe_endpoint(endpoint)
+    assert probe.ok is True
+    assert probe.payload is not None
+    assert probe.payload["transport_selected"] == "packet-tunnel"
+    assert probe.payload["call_established"] == "yes"
+
+    runtime.stop()
+
+
 def test_build_parser_exposes_control_plane_commands() -> None:
     from baleobala.cli import build_parser
 

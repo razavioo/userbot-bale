@@ -43,6 +43,7 @@ def probe_endpoint(endpoint: str | None, *, timeout: float = 1.0) -> ProbeResult
 
 
 def _probe_unix_socket(path: str, *, timeout: float) -> ProbeResult:
+    plain_error = ""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
         try:
@@ -50,7 +51,36 @@ def _probe_unix_socket(path: str, *, timeout: float) -> ProbeResult:
             client.sendall(b"status")
             payload = client.recv(4096)
         except OSError as exc:
-            return ProbeResult(False, "unix", path, str(exc))
+            plain_error = str(exc)
+        else:
+            try:
+                decoded = json.loads(payload.decode("utf-8"))
+                if not isinstance(decoded, dict):
+                    decoded = {}
+                detail = str(decoded.get("state", "unknown"))
+                normalized = {str(key): str(value) for key, value in decoded.items()}
+                return ProbeResult(True, "unix", path, detail, normalized)
+            except Exception:
+                detail = payload.decode("utf-8", errors="replace").strip() or "connected"
+                return ProbeResult(True, "unix", path, detail, None)
+    return _probe_unix_framed_status(path, timeout=timeout, fallback_detail=plain_error)
+
+
+def _probe_unix_framed_status(path: str, *, timeout: float, fallback_detail: str) -> ProbeResult:
+    command = json.dumps({"type": "status", "version": "1"}).encode("utf-8")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        try:
+            client.connect(path)
+            client.sendall(len(command).to_bytes(4, "big") + command)
+            header = _recv_exact(client, 4)
+            payload = _recv_exact(client, int.from_bytes(header, "big"))
+        except OSError as exc:
+            detail = fallback_detail or str(exc)
+            return ProbeResult(False, "unix", path, detail)
+        except EOFError as exc:
+            detail = fallback_detail or str(exc)
+            return ProbeResult(False, "unix", path, detail)
     try:
         decoded = json.loads(payload.decode("utf-8"))
         if not isinstance(decoded, dict):
@@ -61,6 +91,16 @@ def _probe_unix_socket(path: str, *, timeout: float) -> ProbeResult:
         detail = payload.decode("utf-8", errors="replace").strip() or "connected"
         normalized = None
     return ProbeResult(True, "unix", path, detail, normalized)
+
+
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < size:
+        chunk = sock.recv(size - len(buf))
+        if not chunk:
+            raise EOFError("socket closed")
+        buf.extend(chunk)
+    return bytes(buf)
 
 
 def _probe_tcp_socket(host: str, port: int, *, timeout: float) -> ProbeResult:
