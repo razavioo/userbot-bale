@@ -20,7 +20,10 @@ def _network_ok() -> bool:
 
 @pytest.mark.skipif(not _network_ok(), reason="no network to ep.bale.ai")
 def test_live_tls_connect() -> None:
-    endpoints = fetch_endpoints()
+    try:
+        endpoints = fetch_endpoints()
+    except OSError as exc:
+        pytest.skip(f"endpoint bootstrap unavailable: {exc}")
     tls = [e for e in endpoints if e.scheme == "tls"]
     assert tls, "no TLS endpoint advertised"
     conn = connect(tls[0])
