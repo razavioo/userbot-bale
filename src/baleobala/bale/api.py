@@ -51,7 +51,7 @@ from baleobala.bale.protos import (
     parse_update_call_received,
 )
 from baleobala.bale.rpc_envelope import Response
-from baleobala.bale.ws_client import WsClient
+from baleobala.bale.ws_client import WsClient, WsTlsConfig
 
 log = logging.getLogger(__name__)
 
@@ -83,9 +83,11 @@ class BaleApiClient:
         jwt: str | None = None,
         ws_url: str | None = None,
         on_incoming_credentials: Optional[Callable[[CallCredentials], None]] = None,
+        ws_tls_config: WsTlsConfig | None = None,
     ) -> None:
         self._jwt = jwt
         self._ws_url = ws_url
+        self._ws_tls_config = ws_tls_config
         self._on_incoming_creds = on_incoming_credentials
         self._ws: WsClient | None = None
         self._endpoints: List[Endpoint] | None = None
@@ -120,7 +122,12 @@ class BaleApiClient:
         kwargs = {}
         if self._ws_url:
             kwargs["url"] = self._ws_url
-        self._ws = WsClient(jwt=self._jwt, on_update=self._dispatch_update, **kwargs)
+        self._ws = WsClient(
+            jwt=self._jwt,
+            on_update=self._dispatch_update,
+            tls_config=self._ws_tls_config,
+            **kwargs,
+        )
         self._ws.start(timeout=timeout)
         if self._jwt:
             self._subscribe_updates()

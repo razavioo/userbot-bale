@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import sys
 import threading
 import time
@@ -50,26 +49,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--topic", default="vpn")
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument(
+        "--ws-ca-file",
+        default=None,
+        help="custom CA bundle for Bale WS TLS verification on intercepted networks",
+    )
+    ap.add_argument(
+        "--ws-ca-path",
+        default=None,
+        help="custom CA directory for Bale WS TLS verification on intercepted networks",
+    )
+    ap.add_argument(
         "--ws-ssl-no-verify",
         action="store_true",
-        help="disable TLS verification for Bale WS during this smoke run",
+        help="debug-only: disable Bale WS TLS verification for this smoke run",
     )
     return ap
 
 
 def run_live_smoke(args: argparse.Namespace) -> int:
     from baleobala.bale.api import BaleApiClient
+    from baleobala.bale.ws_client import WsTlsConfig
     from baleobala.bale.livekit_backend import LiveKitSession
     from baleobala.carrier.bale import BaleCarrierController
 
-    if getattr(args, "ws_ssl_no_verify", False):
-        os.environ["BALE_WS_SSL_NO_VERIFY"] = "1"
+    ws_tls_config = WsTlsConfig.from_sources(
+        ca_file=getattr(args, "ws_ca_file", None),
+        ca_path=getattr(args, "ws_ca_path", None),
+        insecure=getattr(args, "ws_ssl_no_verify", False),
+        allow_insecure_debug=True,
+    )
 
     caller_jwt = _read_jwt(args.caller_jwt_file)
     callee_jwt = _read_jwt(args.callee_jwt_file)
 
-    caller = BaleCarrierController(client=BaleApiClient(jwt=caller_jwt))
-    callee = BaleCarrierController(client=BaleApiClient(jwt=callee_jwt))
+    caller = BaleCarrierController(client=BaleApiClient(jwt=caller_jwt, ws_tls_config=ws_tls_config))
+    callee = BaleCarrierController(client=BaleApiClient(jwt=callee_jwt, ws_tls_config=ws_tls_config))
 
     holder: dict[str, object] = {}
     err_holder: list[BaseException] = []

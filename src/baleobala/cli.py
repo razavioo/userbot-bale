@@ -1272,6 +1272,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="baleobala",
         description="Acoustic data bridge over voice/video calls.",
+        epilog=(
+            "Core user commands: doctor, auth, pair, relay, vpn, gui\n"
+            "Advanced/debug commands: loopback, tunnel-loopback, tunnel, bale-call, "
+            "bale-tunnel, bale-proxy, send, recv, devices, virtmic\n"
+            "Deprecated compatibility commands: bale-auth"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("-v", "--verbose", action="count", default=0)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1303,7 +1310,10 @@ def build_parser() -> argparse.ArgumentParser:
     auth = sub.add_parser("auth", help="manage local auth/session state")
     auth_sub = auth.add_subparsers(dest="auth_cmd", required=True)
 
-    auth_login = auth_sub.add_parser("login", help="store a Bale JWT for later use")
+    auth_login = auth_sub.add_parser(
+        "login",
+        help="import an existing Bale JWT into local auth state",
+    )
     auth_login.add_argument("--jwt", default=None)
     auth_login.add_argument("--jwt-file", default=None)
     auth_login.add_argument("--user-id", type=int, default=None)
@@ -1312,7 +1322,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_bale_login = auth_sub.add_parser(
         "bale-login",
-        help="login with Bale phone/SMS and optionally store JWT",
+        help="recommended: real Bale phone/SMS login with optional local save",
     )
     auth_bale_login.add_argument("--phone", required=True, help="phone in E.164, with or without '+'")
     auth_bale_login.add_argument("--app-id", type=int, default=WEB_APP_ID)
@@ -1440,7 +1450,21 @@ def build_parser() -> argparse.ArgumentParser:
     live_target.add_argument("--callee-peer-name", default=None)
     vpn_live_smoke.add_argument("--topic", default="vpn")
     vpn_live_smoke.add_argument("--timeout", type=float, default=90.0)
-    vpn_live_smoke.add_argument("--ws-ssl-no-verify", action="store_true")
+    vpn_live_smoke.add_argument(
+        "--ws-ca-file",
+        default=None,
+        help="custom CA bundle for Bale WS TLS verification on intercepted networks",
+    )
+    vpn_live_smoke.add_argument(
+        "--ws-ca-path",
+        default=None,
+        help="custom CA directory for Bale WS TLS verification on intercepted networks",
+    )
+    vpn_live_smoke.add_argument(
+        "--ws-ssl-no-verify",
+        action="store_true",
+        help="debug-only: disable Bale WS TLS verification for this smoke run",
+    )
     vpn_live_smoke.set_defaults(func=cmd_vpn)
 
     vpn_bundle = vpn_sub.add_parser("analyze-bundle", help="deterministically classify a netns session bundle")
@@ -1531,22 +1555,22 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_agent_status = vpn_agent_sub.add_parser("status", help="show LaunchAgent state")
     vpn_agent_status.set_defaults(func=cmd_vpn)
 
-    v = sub.add_parser("virtmic", help="create a virtual microphone and hold it open")
+    v = sub.add_parser("virtmic", help="debug: create a virtual microphone and hold it open")
     v.add_argument("--name", default="baleobala")
     v.set_defaults(func=cmd_virtmic)
 
-    lb = sub.add_parser("loopback", help="in-process self-test (no audio device)")
+    lb = sub.add_parser("loopback", help="debug: in-process codec self-test (no audio device)")
     lb.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     lb.add_argument("messages", nargs="*")
     lb.set_defaults(func=cmd_loopback)
 
-    tl = sub.add_parser("tunnel-loopback", help="in-process byte-tunnel self-test")
+    tl = sub.add_parser("tunnel-loopback", help="debug: in-process byte-tunnel self-test")
     tl.add_argument("messages", nargs="*")
     tl.set_defaults(func=cmd_tunnel_loopback)
 
     bt = sub.add_parser(
         "bale-tunnel",
-        help="run the byte tunnel over a Bale LiveKit room",
+        help="debug: run the byte tunnel over a Bale LiveKit room",
     )
     bt.add_argument("mode", choices=["send", "recv"])
     bt.add_argument("--livekit-url", default=None)
@@ -1567,7 +1591,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     bp = sub.add_parser(
         "bale-proxy",
-        help="run a SOCKS5/HTTP CONNECT proxy over Bale/LiveKit",
+        help="debug: run a SOCKS5/HTTP CONNECT proxy over Bale/LiveKit",
     )
     bp_sub = bp.add_subparsers(dest="proxy_mode", required=True)
 
@@ -1609,7 +1633,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     bc = sub.add_parser(
         "bale-call",
-        help="connect to a Bale LiveKit room and send/recv baleobala frames",
+        help="debug: connect to a Bale LiveKit room and send/recv baleobala frames",
     )
     bc.add_argument("mode", choices=["send", "recv"],
                     help="transmit from stdin, or receive and print")
@@ -1646,8 +1670,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ba = sub.add_parser(
         "bale-auth",
-        help="phone/SMS login flow → prints a JWT. Defaults to Bale Web "
-             "credentials (app_id=4), which is what web.bale.ai uses.",
+        help="deprecated compatibility: legacy phone/SMS login that prints a JWT",
     )
     ba.add_argument("--phone", required=True, help="phone in E.164, with or without '+'")
     ba.add_argument("--app-id", type=int, default=WEB_APP_ID,
@@ -1685,6 +1708,12 @@ def cmd_bale_auth(args: argparse.Namespace) -> int:
     pipe the JWT to a file:
         baleobala bale-auth --phone +98... > ~/.bale_jwt
     """
+    print(
+        "[deprecation] `baleobala bale-auth` is deprecated and kept for compatibility. "
+        "Use `baleobala auth bale-login --phone ... --save` for real login or "
+        "`baleobala auth login --jwt-file ...` to import an existing JWT.",
+        file=sys.stderr,
+    )
     jwt = _run_bale_auth_login(args)
     print(jwt)
     return 0

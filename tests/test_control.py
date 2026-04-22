@@ -660,6 +660,11 @@ def test_build_parser_exposes_control_plane_commands() -> None:
 
     vpn_up_parser = vpn_subcommands["up"]
     assert "linux-tun" in _arg_choices(vpn_up_parser, "backend")
+    live_smoke_parser = vpn_subcommands["live-smoke"]
+    live_smoke_opts = {action.dest for action in live_smoke_parser._actions}
+    assert "ws_ca_file" in live_smoke_opts
+    assert "ws_ca_path" in live_smoke_opts
+    assert "ws_ssl_no_verify" in live_smoke_opts
 
     relay_parser = subcommands["relay"]
     relay_subcommands = _subparser_choices(relay_parser)

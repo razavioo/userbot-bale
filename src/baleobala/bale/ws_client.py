@@ -17,6 +17,7 @@ thread, mirroring the pattern used by bale.livekit_backend.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import itertools
 import logging
@@ -25,6 +26,7 @@ import queue
 import ssl
 import threading
 from typing import Callable, Dict, Optional
+from urllib.parse import urlparse
 
 try:
     import websockets  # type: ignore
@@ -38,6 +40,52 @@ log = logging.getLogger(__name__)
 DEFAULT_WS_URL = "wss://next-ws.bale.ai/ws/"
 
 
+class WsTlsPolicyError(RuntimeError):
+    def __init__(self, message: str, *, failure_class: str) -> None:
+        super().__init__(message)
+        self.failure_class = failure_class
+
+
+@dataclasses.dataclass(frozen=True)
+class WsTlsConfig:
+    verify_mode: str = "strict"
+    ca_file: str | None = None
+    ca_path: str | None = None
+    allow_insecure_debug: bool = False
+
+    @property
+    def insecure(self) -> bool:
+        return self.verify_mode == "insecure"
+
+    @classmethod
+    def from_sources(
+        cls,
+        *,
+        ca_file: str | None = None,
+        ca_path: str | None = None,
+        insecure: bool = False,
+        allow_insecure_debug: bool = False,
+    ) -> "WsTlsConfig":
+        env_ca_file = os.environ.get("BALE_SSL_CA_FILE") or os.environ.get("SSL_CERT_FILE")
+        env_ca_path = os.environ.get("BALE_SSL_CA_PATH") or os.environ.get("SSL_CERT_DIR")
+        env_insecure = _env_truthy("BALE_WS_SSL_NO_VERIFY") or _env_truthy("BALE_SSL_NO_VERIFY")
+        resolved_ca_file = ca_file or env_ca_file
+        resolved_ca_path = ca_path or env_ca_path
+        resolved_insecure = insecure or env_insecure
+        if resolved_insecure and not allow_insecure_debug:
+            raise WsTlsPolicyError(
+                "insecure Bale WS TLS bypass is only allowed for debug flows",
+                failure_class="tls_insecure_rejected",
+            )
+        verify_mode = "insecure" if resolved_insecure else "strict"
+        return cls(
+            verify_mode=verify_mode,
+            ca_file=resolved_ca_file,
+            ca_path=resolved_ca_path,
+            allow_insecure_debug=allow_insecure_debug,
+        )
+
+
 def _require_websockets() -> None:
     if websockets is None:
         raise ImportError("websockets package is not installed.")
@@ -48,18 +96,45 @@ def _env_truthy(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _build_ssl_context() -> ssl.SSLContext | None:
-    cafile = os.environ.get("BALE_SSL_CA_FILE") or os.environ.get("SSL_CERT_FILE")
-    capath = os.environ.get("BALE_SSL_CA_PATH") or os.environ.get("SSL_CERT_DIR")
-    insecure = _env_truthy("BALE_WS_SSL_NO_VERIFY") or _env_truthy("BALE_SSL_NO_VERIFY")
+def _tls_event(
+    event: str,
+    *,
+    url: str,
+    failure_class: str,
+    ca_file: str | None,
+    ca_path: str | None,
+    insecure: bool,
+    error: BaseException | None = None,
+) -> dict[str, object]:
+    parsed = urlparse(url)
+    return {
+        "event": event,
+        "failure_class": failure_class,
+        "host": parsed.hostname or "",
+        "url": f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path or ''}",
+        "custom_ca_file": bool(ca_file),
+        "custom_ca_path": bool(ca_path),
+        "insecure_debug": insecure,
+        "error_type": type(error).__name__ if error is not None else "",
+    }
 
-    if not cafile and not capath and not insecure:
+
+def _build_ssl_context(config: WsTlsConfig) -> ssl.SSLContext | None:
+    if not config.ca_file and not config.ca_path and not config.insecure:
         return None
-
     ctx = ssl.create_default_context()
-    if cafile or capath:
-        ctx.load_verify_locations(cafile=cafile or None, capath=capath or None)
-    if insecure:
+    try:
+        if config.ca_file or config.ca_path:
+            ctx.load_verify_locations(
+                cafile=config.ca_file or None,
+                capath=config.ca_path or None,
+            )
+    except (OSError, ssl.SSLError) as e:
+        raise WsTlsPolicyError(
+            f"failed to load Bale WS CA override: {e}",
+            failure_class="tls_ca_load_failed",
+        ) from e
+    if config.insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
     return ctx
@@ -71,16 +146,19 @@ class WsClient:
         jwt: str,
         url: str = DEFAULT_WS_URL,
         on_update: Optional[Callable[[Response], None]] = None,
+        tls_config: WsTlsConfig | None = None,
     ) -> None:
         _require_websockets()
         self._jwt = jwt
         self._url = url
         self._on_update = on_update
+        self._tls_config = tls_config or WsTlsConfig.from_sources()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ws = None
         self._connected = threading.Event()
         self._stopped = threading.Event()
+        self._connect_error: BaseException | None = None
         self._seq_counter = itertools.count(1)
         self._pending: Dict[int, "queue.Queue[Response]"] = {}
         self._lock = threading.Lock()
@@ -91,6 +169,10 @@ class WsClient:
         )
         self._thread.start()
         if not self._connected.wait(timeout):
+            if self._connect_error is not None:
+                raise RuntimeError(
+                    f"WS failed to connect: {self._connect_error}"
+                ) from self._connect_error
             raise RuntimeError(f"WS did not connect within {timeout}s")
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -157,9 +239,21 @@ class WsClient:
             ("Cookie", f"access_token={self._jwt}"),
         ]
         connect_kwargs = {"max_size": None}
-        ssl_context = _build_ssl_context()
+        ssl_context = _build_ssl_context(self._tls_config)
         if ssl_context is not None:
             connect_kwargs["ssl"] = ssl_context
+        if self._tls_config.insecure:
+            log.warning(
+                "Bale WS TLS verification disabled for debug-only flow: %s",
+                _tls_event(
+                    "tls_insecure_debug",
+                    url=self._url,
+                    failure_class="tls_insecure_debug",
+                    ca_file=self._tls_config.ca_file,
+                    ca_path=self._tls_config.ca_path,
+                    insecure=True,
+                ),
+            )
         params = inspect.signature(websockets.connect).parameters
         if "additional_headers" in params:
             connect_kwargs["additional_headers"] = headers
@@ -187,8 +281,48 @@ class WsClient:
                         self._dispatch(bytes(msg))
                     else:
                         log.debug("text WS frame ignored: %r", msg[:64])
+        except ssl.SSLCertVerificationError as e:
+            self._connect_error = e
+            log.warning(
+                "Bale WS TLS verification failed: %s",
+                _tls_event(
+                    "ws_tls_failure",
+                    url=self._url,
+                    failure_class="tls_verify_failed",
+                    ca_file=self._tls_config.ca_file,
+                    ca_path=self._tls_config.ca_path,
+                    insecure=self._tls_config.insecure,
+                    error=e,
+                ),
+            )
+        except ssl.SSLError as e:
+            self._connect_error = e
+            log.warning(
+                "Bale WS TLS handshake failed: %s",
+                _tls_event(
+                    "ws_tls_failure",
+                    url=self._url,
+                    failure_class="tls_handshake_failed",
+                    ca_file=self._tls_config.ca_file,
+                    ca_path=self._tls_config.ca_path,
+                    insecure=self._tls_config.insecure,
+                    error=e,
+                ),
+            )
         except Exception as e:  # noqa: BLE001
-            log.exception("WS connection error: %s", e)
+            self._connect_error = e
+            log.exception(
+                "WS connection error: %s",
+                _tls_event(
+                    "ws_connect_failure",
+                    url=self._url,
+                    failure_class="ws_connect_failed",
+                    ca_file=self._tls_config.ca_file,
+                    ca_path=self._tls_config.ca_path,
+                    insecure=self._tls_config.insecure,
+                    error=e,
+                ),
+            )
         finally:
             self._stopped.set()
 
