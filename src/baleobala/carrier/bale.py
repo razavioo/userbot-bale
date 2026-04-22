@@ -73,6 +73,7 @@ class BaleCarrierController:
         *,
         timeout: float = 120.0,
         cancel_event=None,
+        ready_event=None,
     ) -> CarrierCredentials:
         self._client.start()
         try:
@@ -95,6 +96,8 @@ class BaleCarrierController:
                     got.set()
 
             self._client.listen_incoming_calls(on_creds)
+            if ready_event is not None:
+                ready_event.set()
             deadline = time.monotonic() + timeout
             while not got.is_set():
                 if cancel_event is not None and cancel_event.is_set():

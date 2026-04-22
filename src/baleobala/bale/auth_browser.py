@@ -73,7 +73,21 @@ class BaleAuthBrowser:
         from playwright.async_api import async_playwright
         headless = os.environ.get("BALE_HEADLESS", "1") != "0"
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=headless)
+        try:
+            # Prefer Playwright-managed Chromium when available.
+            self._browser = await self._pw.chromium.launch(headless=headless)
+        except Exception as e:
+            # In restricted networks, `playwright install chromium` may fail.
+            # Fall back to a system-installed Chrome channel so auth still works.
+            log.warning(
+                "Browser: bundled Chromium unavailable (%s); "
+                "falling back to system Chrome channel",
+                e,
+            )
+            self._browser = await self._pw.chromium.launch(
+                headless=headless,
+                channel="chrome",
+            )
         self._ctx = await self._browser.new_context(
             viewport={"width": 1280, "height": 800},
             locale="fa-IR",
