@@ -325,16 +325,74 @@ class CarrierTunnelService(TunnelService):
                 while not stop.is_set():
                     try:
                         header = _recv_exact(client, 4)
+                        length = int.from_bytes(header, "big")
+                        if length < 0:
+                            break
+                        payload = _recv_exact(client, length) if length else b""
                     except EOFError:
                         break
-                    length = int.from_bytes(header, "big")
-                    if length < 0:
-                        break
-                    payload = _recv_exact(client, length) if length else b""
+                    if self._handle_control_frame(client, payload):
+                        continue
                     self._bridge.send(payload)
             finally:
                 stop.set()
                 worker.join(timeout=1.0)
+
+    def _handle_control_frame(self, client: socket.socket, payload: bytes) -> bool:
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(decoded, dict):
+            return False
+        message_type = str(decoded.get("type", "")).strip().lower()
+        if not message_type:
+            return False
+
+        if message_type == "ping":
+            self._send_control_reply(
+                client,
+                {"type": "pong", "version": str(decoded.get("version", self._state.version))},
+            )
+            return True
+
+        if message_type == "status":
+            current = self.status()
+            updated = TunnelServiceState(
+                state=str(decoded.get("state", current.state or "running")),
+                endpoint=current.endpoint,
+                profile_id=current.profile_id,
+                backend=current.backend,
+                pairing_id=current.pairing_id,
+                version=str(decoded.get("version", current.version)),
+                transport_selected=str(decoded.get("transport_selected", current.transport_selected)),
+                call_established=str(decoded.get("call_established", current.call_established)),
+                data_flow_ok=str(decoded.get("data_flow_ok", current.data_flow_ok)),
+                route_ready=str(decoded.get("route_ready", current.route_ready)),
+                dns_ready=str(decoded.get("dns_ready", current.dns_ready)),
+                last_error=str(decoded.get("last_error", current.last_error)),
+                updated_at=time.time(),
+            )
+            self._state = updated
+            self._state_store.save(updated.to_dict())
+            self._send_control_reply(client, updated.to_dict())
+            return True
+
+        if message_type == "stop":
+            self._send_control_reply(
+                client,
+                {"type": "ok", "version": str(decoded.get("version", self._state.version))},
+            )
+            self.stop()
+            return True
+        return False
+
+    def _send_control_reply(self, client: socket.socket, payload: dict[str, Any]) -> None:
+        try:
+            data = json.dumps(payload, sort_keys=True).encode("utf-8")
+            client.sendall(_encode_frame(data))
+        except OSError:
+            return
 
     def stop(self) -> None:
         self._active = False
