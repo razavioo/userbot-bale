@@ -6,7 +6,7 @@ from baleobala.control.keychain import FileSecretBackend, KeychainSecretBackend,
 from baleobala.control.pairing import PairingRecord, PairingStore
 from baleobala.control.macos import MacOSSystemProxySession
 from baleobala.control.macos_launchd import LaunchAgentSpec, MacOSLaunchAgentManager
-from baleobala.control.analyzer import BundleAnalysis, ProductVerdict, analyze_bundle, build_product_verdict
+from baleobala.control.analyzer import BundleAnalysis, ProductVerdict, analyze_bundle, build_product_verdict, bundle_status, merge_status_with_bundle
 from baleobala.control.netns import (
     NetnsHarness,
     NetnsProcessManager,
@@ -28,7 +28,7 @@ from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.readiness import BackendReadiness
 from baleobala.control.scenario import NetnsScenario, build_proxy_pair_scenario, build_tunnel_pair_scenario
 from baleobala.control.smoke import SmokeReport, smoke_backend_status
-from baleobala.control.service import ControlService, ControlSnapshot
+from baleobala.control.service import ConnectionSnapshot, ControlService, ControlSnapshot
 from baleobala.control.tunnel_service import CarrierTunnelService, LocalTunnelService, TunnelBridge, TunnelService, TunnelServiceState
 from baleobala.control.vpn import VpnProfile, VpnStore
 
@@ -69,11 +69,14 @@ __all__ = [
     "BundleAnalysis",
     "ProductVerdict",
     "analyze_bundle",
+    "bundle_status",
+    "merge_status_with_bundle",
     "build_product_verdict",
     "LaunchAgentSpec",
     "MacOSLaunchAgentManager",
     "ControlService",
     "ControlSnapshot",
+    "ConnectionSnapshot",
     "SecretBackend",
     "FileSecretBackend",
     "KeychainSecretBackend",

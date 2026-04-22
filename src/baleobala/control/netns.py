@@ -524,17 +524,48 @@ def _contains_marker(text: str, marker: str) -> bool:
     return marker in text
 
 
-def _classify_failure(*, ready: bool, smoke_ok: bool, setup_ok: bool, teardown_ok: bool, last_error: str, bundle_ok: bool) -> str:
+def _marker_value(markers: list[str], prefix: str) -> str:
+    for marker in markers:
+        if marker.startswith(prefix):
+            return marker[len(prefix) :].strip()
+    return ""
+
+
+def _has_marker(markers: list[str], marker: str) -> bool:
+    return any(item == marker or item.startswith(marker) for item in markers)
+
+
+def _classify_failure(
+    *,
+    ready: bool,
+    smoke_ok: bool,
+    setup_ok: bool,
+    teardown_ok: bool,
+    last_error: str,
+    bundle_ok: bool,
+    markers: list[str] | None = None,
+) -> str:
+    markers = markers or []
     text = last_error.lower()
-    if not bundle_ok or not setup_ok or "missing" in text or "permission" in text or "timeout" in text and not ready:
-        return "infra_flake"
     if "expired" in text or "credential" in text or "peer" in text or "negotiation" in text:
         return "carrier_instability"
+    if "permission" in text:
+        return "permission_denied"
+    if "missing_tun" in text or "no such device" in text or "/dev/net/tun" in text:
+        return "missing_tun"
+    if "missing_iproute" in text or "ip: not found" in text or "iproute" in text:
+        return "missing_iproute"
+    if not setup_ok or not bundle_ok or "missing" in text:
+        return "infra_flake"
+    if "timeout" in text and not ready:
+        if _has_marker(markers, "call_established"):
+            return "transport_timeout"
+        return "auth_expired" if "expired" in text else "call_timeout"
     if ready and not smoke_ok:
         return "product_bug"
     if not teardown_ok:
         return "teardown_leak"
-    return "infra_flake"
+    return ""
 
 
 class NetnsSessionRunner:
@@ -563,7 +594,14 @@ class NetnsSessionRunner:
                 readiness="failed",
                 harness_steps=setup.steps,
                 last_error=setup.last_error,
-                failure_class=_classify_failure(ready=False, smoke_ok=False, setup_ok=False, teardown_ok=False, last_error=setup.last_error, bundle_ok=False),
+                failure_class=_classify_failure(
+                    ready=False,
+                    smoke_ok=False,
+                    setup_ok=False,
+                    teardown_ok=False,
+                    last_error=setup.last_error,
+                    bundle_ok=False,
+                ),
             )
 
         started = self._process_manager.start(
@@ -601,10 +639,22 @@ class NetnsSessionRunner:
             started=started,
             stopped=stopped,
             markers=markers,
+            failure_class=_classify_failure(
+                ready=ready,
+                smoke_ok=smoke.ok,
+                setup_ok=setup.ok,
+                teardown_ok=teardown.ok,
+                last_error=ready_error or smoke.last_error or teardown.last_error,
+                bundle_ok=True,
+                markers=markers,
+            ),
         )
         log_tails = _collect_log_tails(stopped)
-        call_established = "yes" if any(_contains_marker(tail, "call_established") for tail in log_tails.values()) or ready else "no"
-        transport_selected = self._extract_first_marker(log_tails, "transport_selected=")
+        final_markers = self._collect_markers(stopped)
+        if final_markers:
+            markers = final_markers
+        call_established = "yes" if _has_marker(markers, "call_established") else "no"
+        transport_selected = _marker_value(markers, "transport_selected=")
         data_flow_ok = "yes" if smoke.ok else "no"
         teardown_clean = "yes" if teardown.ok else "no"
         return self._report(
@@ -622,6 +672,7 @@ class NetnsSessionRunner:
                 teardown_ok=teardown.ok,
                 last_error=ready_error or smoke.last_error or teardown.last_error,
                 bundle_ok=bundle_ok,
+                markers=markers,
             ),
             artifact_bundle=str(bundle_dir),
             process_status=[item.to_dict() for item in stopped],
@@ -668,12 +719,25 @@ class NetnsSessionRunner:
 
     def _collect_markers(self, statuses: list[NetnsProcessStatus]) -> list[str]:
         out: list[str] = []
+        exact_markers = ("call_established", "teardown_done")
+        prefix_markers = ("transport_selected=", "proxy_listening=", "tunnel_up=")
         for item in statuses:
             try:
                 text = Path(item.log_path).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for marker in ("call_established", "transport_selected=", "proxy_listening=", "tunnel_up=", "teardown_done"):
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped in exact_markers:
+                    out.append(stripped)
+                    continue
+                for marker in prefix_markers:
+                    if stripped.startswith(marker):
+                        out.append(stripped)
+                        break
+            for marker in exact_markers:
                 if marker in text:
                     out.append(marker)
         return sorted(set(out))
@@ -724,13 +788,6 @@ class NetnsSessionRunner:
             last_error=last_error,
         )
 
-    def _extract_first_marker(self, log_tails: dict[str, str], prefix: str) -> str:
-        for text in log_tails.values():
-            for line in text.splitlines():
-                if line.startswith(prefix):
-                    return line[len(prefix) :].strip()
-        return ""
-
     def _make_artifact_bundle(self) -> Path:
         self._artifact_root.mkdir(parents=True, exist_ok=True)
         bundle_dir = self._artifact_root / f"{self._harness.topology.prefix}-{int(time.time() * 1000)}"
@@ -748,6 +805,7 @@ class NetnsSessionRunner:
         started: list[NetnsProcessStatus],
         stopped: list[NetnsProcessStatus],
         markers: list[str],
+        failure_class: str,
     ) -> bool:
         try:
             payload = {
@@ -759,6 +817,7 @@ class NetnsSessionRunner:
                 "started": [item.to_dict() for item in started],
                 "stopped": [item.to_dict() for item in stopped],
                 "markers": markers,
+                "failure_class": failure_class,
                 "log_tails": _collect_log_tails(stopped),
             }
             (bundle_dir / "verdict.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

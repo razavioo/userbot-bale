@@ -17,11 +17,13 @@ from __future__ import annotations
 import atexit
 import os
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from baleobala.control.paths import config_dir
+from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.readiness import BackendReadiness
 from baleobala.control.resolver import LinuxResolver, RoutePlan, SystemResolver
 from baleobala.control.store import JsonStore
@@ -205,6 +207,129 @@ class LinuxTunSession:
         return self._runner(cmd, check=check, capture_output=True, text=True)
 
 
+class LinuxTunnelRuntime:
+    """Own the Bale carrier + tunnel runner lifecycle for linux-tun profiles."""
+
+    def __init__(self, state_store: JsonStore | None = None) -> None:
+        self._state_store = state_store or JsonStore(config_dir() / "linux_runtime.json")
+        self._stop = threading.Event()
+        self._active = False
+        self._tun = None
+        self._session = None
+        self._chain = None
+        self._runner = None
+        self._keepalive = None
+        self._health = None
+
+    def start(self, profile, auth_record) -> dict[str, str]:  # noqa: ANN001
+        if auth_record is None or not auth_record.jwt:
+            raise RuntimeError("linux-tun backend requires a stored Bale auth session")
+        if profile.peer_id is None and not profile.answer:
+            raise RuntimeError("linux-tun backend requires a paired peer_id")
+
+        from baleobala.cli import _resolve_livekit_credentials
+        from baleobala.vpn.cli import _build_transport_chain, _safe_mtu
+        from baleobala.vpn.keepalive import LiveKitKeepalive
+        from baleobala.vpn.router import HealthMonitor
+        from baleobala.vpn.runner import RunnerConfig, VpnRunner
+        from baleobala.vpn.tun import TunDevice
+        from baleobala.bale import LiveKitSession
+        import argparse
+
+        args = argparse.Namespace(
+            livekit_url=None,
+            livekit_token=None,
+            livekit_room=None,
+            bale_jwt=auth_record.jwt,
+            bale_jwt_file=None,
+            peer_id=profile.peer_id,
+            peer=None,
+            peer_name=profile.peer_name,
+            answer=profile.answer,
+            answer_timeout=120.0,
+            identity=profile.name,
+            tun="vpn0",
+            tun_addr="10.77.0.1/24" if profile.role == "relay" else "10.77.0.2/24",
+            tun_mtu=1400,
+            transport="auto",
+            sess_id=0x1111,
+            psk=None,
+            psk_file=None,
+            wan="eth0",
+            protocol=profile.protocol,
+            volume=profile.volume,
+        )
+
+        tun = TunDevice.open(args.tun)
+        url, token = _resolve_livekit_credentials(args)
+        session = LiveKitSession(url=url, token=token, identity=args.identity)
+        session.start()
+        keepalive = LiveKitKeepalive(session, interval=20.0)
+        keepalive.start()
+        chain = _build_transport_chain(args.transport, session, args)
+        transport_name, transport = chain.start()
+        mtu_floor = min(_safe_mtu(c.factory, precomputed=transport if c.name == transport_name else None) for c in chain._choices)  # type: ignore[attr-defined]
+        cfg = RunnerConfig(
+            sess_id=args.sess_id,
+            ack_timeout=2.0 if transport_name == "dc" else 0.5,
+            window=64 if transport_name == "dc" else 1,
+            max_retries=3 if transport_name == "dc" else 16,
+            mtu_override=mtu_floor,
+        )
+        runner = VpnRunner(tun, transport, cfg)
+        runner.start()
+        health = HealthMonitor(runner._tunnel, interval=5.0, stuck_threshold=8)
+        health.start()
+
+        self._tun = tun
+        self._session = session
+        self._chain = chain
+        self._runner = runner
+        self._keepalive = keepalive
+        self._health = health
+        self._active = True
+        payload = {
+            "endpoint": args.tun,
+            "transport_selected": transport_name,
+            "call_established": "yes",
+            "data_flow_ok": "yes",
+            "last_error": "",
+        }
+        self._state_store.save(payload)
+        return payload
+
+    def stop(self) -> None:
+        if self._health is not None:
+            self._health.stop()
+            self._health = None
+        if self._runner is not None:
+            self._runner.stop()
+            self._runner = None
+        if self._chain is not None:
+            try:
+                self._chain.close()
+            except Exception:
+                pass
+            self._chain = None
+        if self._keepalive is not None:
+            self._keepalive.stop()
+            self._keepalive = None
+        if self._session is not None:
+            self._session.stop()
+            self._session = None
+        if self._tun is not None:
+            try:
+                self._tun.close()
+            except Exception:
+                pass
+            self._tun = None
+        self._active = False
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+
 class LinuxTunBackend:
     """VpnBackend implementation wired on top of :class:`LinuxTunSession`."""
 
@@ -213,36 +338,61 @@ class LinuxTunBackend:
         *,
         plan: TunPlan | None = None,
         session: LinuxTunSession | None = None,
+        runtime: LinuxTunnelRuntime | None = None,
         state_path: Path | None = None,
+        runtime_state_path: Path | None = None,
     ) -> None:
         self._plan = plan or TunPlan()
         self._session = session or LinuxTunSession(plan=self._plan)
         self._state_store = JsonStore(state_path or (config_dir() / "linux_backend.json"))
+        self._runtime_store = JsonStore(runtime_state_path or (config_dir() / "linux_runtime.json"))
+        self._runtime = runtime or LinuxTunnelRuntime(self._runtime_store)
         self._profile_id: str | None = None
         self._pairing_id: str | None = None
 
-    def up(self, profile) -> dict[str, str]:  # noqa: ANN001 — duck-typed VpnProfile
+    def up(self, profile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
         self._session.start()
         self._profile_id = profile.profile_id
         self._pairing_id = profile.pairing_id
+        if auth_record is not None and (pairing is not None or profile.peer_id is not None):
+            try:
+                self._runtime.start(profile, auth_record)
+            except Exception as exc:
+                self.update_runtime_status(
+                    call_established="no",
+                    data_flow_ok="no",
+                    last_error=str(exc),
+                    transport_selected="",
+                )
         session = self._session.status()
+        runtime = self._runtime_status()
         payload = BackendReadiness.for_linux_tun(
             state="running",
             session_active=self._session.active,
             tun=session["tun"],
             address=session["address"],
             mtu=session["mtu"],
+            call_established=runtime.get("call_established", "no"),
+            data_flow_ok=runtime.get("data_flow_ok", "no"),
+            transport_selected=runtime.get("transport_selected", ""),
+            endpoint=runtime.get("endpoint"),
+            last_error=runtime.get("last_error", ""),
         ).to_dict()
         payload["profile_id"] = profile.profile_id
         payload["pairing_id"] = profile.pairing_id or ""
         payload.update(session)
+        for key in ("transport_selected", "last_error", "endpoint"):
+            if runtime.get(key):
+                payload[key] = str(runtime[key])
         self._state_store.save(payload)
         return payload
 
     def down(self) -> None:
+        self._runtime.stop()
         self._session.stop()
         self._profile_id = None
         self._pairing_id = None
+        self.clear_runtime_status()
         try:
             self._state_store.path.unlink()
         except FileNotFoundError:
@@ -251,12 +401,43 @@ class LinuxTunBackend:
     def status(self) -> dict[str, str]:
         payload = self._state_store.load(default=None)
         if isinstance(payload, dict):
-            return {str(k): str(v) for k, v in payload.items()}
+            merged = {str(k): str(v) for k, v in payload.items()}
+            runtime = self._runtime_status()
+            for key in ("call_established", "data_flow_ok", "transport_selected", "last_error", "endpoint"):
+                if key in runtime and runtime[key] not in {None, ""}:
+                    merged[key] = str(runtime[key])
+            return merged
         session = self._session.status()
+        runtime = self._runtime_status()
         return BackendReadiness.for_linux_tun(
             state="stopped",
             session_active=False,
             tun=session["tun"],
             address=session["address"],
             mtu=session["mtu"],
+            call_established=runtime.get("call_established", "no"),
+            data_flow_ok=runtime.get("data_flow_ok", "no"),
+            transport_selected=runtime.get("transport_selected", ""),
+            endpoint=runtime.get("endpoint"),
+            last_error=runtime.get("last_error", ""),
         ).to_dict()
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        return probe_endpoint(self.status().get("endpoint"), timeout=timeout)
+
+    def update_runtime_status(self, **fields: str) -> None:
+        payload = {str(k): str(v) for k, v in self._runtime_store.load(default={}).items()}
+        payload.update({str(k): str(v) for k, v in fields.items() if v is not None})
+        self._runtime_store.save(payload)
+
+    def clear_runtime_status(self) -> None:
+        try:
+            self._runtime_store.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _runtime_status(self) -> dict[str, str]:
+        payload = self._runtime_store.load(default={})
+        if not isinstance(payload, dict):
+            return {}
+        return {str(k): str(v) for k, v in payload.items()}

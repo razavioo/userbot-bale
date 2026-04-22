@@ -13,14 +13,18 @@ class ProbeResult:
     kind: str
     target: str
     detail: str
+    payload: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, str]:
-        return {
+        payload = {
             "ok": "yes" if self.ok else "no",
             "kind": self.kind,
             "target": self.target,
             "detail": self.detail,
         }
+        if self.payload:
+            payload.update(self.payload)
+        return payload
 
 
 def probe_endpoint(endpoint: str | None, *, timeout: float = 1.0) -> ProbeResult:
@@ -49,10 +53,14 @@ def _probe_unix_socket(path: str, *, timeout: float) -> ProbeResult:
             return ProbeResult(False, "unix", path, str(exc))
     try:
         decoded = json.loads(payload.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            decoded = {}
         detail = str(decoded.get("state", "unknown"))
+        normalized = {str(key): str(value) for key, value in decoded.items()}
     except Exception:
         detail = payload.decode("utf-8", errors="replace").strip() or "connected"
-    return ProbeResult(True, "unix", path, detail)
+        normalized = None
+    return ProbeResult(True, "unix", path, detail, normalized)
 
 
 def _probe_tcp_socket(host: str, port: int, *, timeout: float) -> ProbeResult:

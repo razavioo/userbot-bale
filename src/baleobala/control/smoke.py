@@ -50,6 +50,8 @@ def _build_report(status: dict[str, str], probe: ProbeResult) -> SmokeReport:
     data_path_ready = status.get("data_path_ready", "no")
     route_ready = status.get("route_ready", "no")
     dns_ready = status.get("dns_ready", "no")
+    call_established = status.get("call_established", "no")
+    data_flow_ok = status.get("data_flow_ok", "no")
     state = status.get("state", "stopped")
     backend = status.get("backend", "")
     last_error = status.get("last_error", "")
@@ -59,6 +61,8 @@ def _build_report(status: dict[str, str], probe: ProbeResult) -> SmokeReport:
         ok = ok and probe.ok
     if backend == "linux-tun":
         ok = ok and route_ready == "yes" and dns_ready == "yes"
+    if backend == "packet-tunnel":
+        ok = ok and call_established == "yes"
     if backend == "direct":
         ok = ok and data_path_ready == "yes"
 

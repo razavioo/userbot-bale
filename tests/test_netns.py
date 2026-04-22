@@ -13,6 +13,7 @@ from baleobala.control.netns import (
     render_teardown_commands,
 )
 from baleobala.control.scenario import build_proxy_pair_scenario
+import json
 import subprocess
 
 
@@ -176,7 +177,8 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
         state_path=tmp_path / "proc.json",
         popen_factory=FakeReadyPopen,
     )
-    session = NetnsSessionRunner(harness, manager)
+    artifact_root = tmp_path / "artifacts"
+    session = NetnsSessionRunner(harness, manager, artifact_root=artifact_root)
     report = session.run(
         server_cmd=["sh", "-lc", "echo ready"],
         client_cmd=["sh", "-lc", "echo ready"],
@@ -192,6 +194,9 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     assert report.artifact_bundle
     assert any(step["phase"] == "smoke" for step in report.harness_steps)
     assert "call_established" in report.log_tails["server"]
+    verdict = json.loads(next(artifact_root.glob("bb-*/verdict.json")).read_text(encoding="utf-8"))
+    assert "transport_selected=dc" in verdict["markers"]
+    assert verdict["failure_class"] == ""
 
 
 def test_netns_session_runner_times_out_when_patterns_never_appear(tmp_path) -> None:
@@ -215,7 +220,7 @@ def test_netns_session_runner_times_out_when_patterns_never_appear(tmp_path) -> 
     assert not report.ok
     assert report.readiness == "timeout"
     assert report.last_error == "process readiness timeout"
-    assert report.failure_class in {"infra_flake", "carrier_instability"}
+    assert report.failure_class == "call_timeout"
 
 
 def test_netns_session_runner_uses_custom_smoke_commands(tmp_path) -> None:

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QObject, Qt, QThread
 from PySide6.QtGui import QAction, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,6 +35,7 @@ from baleobala.control import ControlService
 from baleobala.control.paths import data_dir
 from baleobala.gui.theme import apply_theme
 from baleobala.gui.workers import (
+    ControlPlaneConnectWorker,
     ProxyWorker,
     QtLogHandler,
     StartSmsWorker,
@@ -243,39 +245,44 @@ class ConnectView(QWidget):
     def __init__(self, parent: "MainWindow") -> None:
         super().__init__(parent)
         self._main = parent
-        self._proxy_worker: Optional[ProxyWorker] = None
-        self._proxy_thread: Optional[QThread] = None
+        self._worker: Optional[QObject] = None
+        self._worker_thread: Optional[QThread] = None
 
         header = QLabel("Connect")
         header.setObjectName("title")
-        subtitle = QLabel("The receiver must Start Listening before the caller can Place Call.")
+        subtitle = QLabel("Pair once, then connect with the saved product profile and backend.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
 
         # ---- Session section ----
         self.role = QComboBox()
-        self.role.addItem("Caller — start the call and run a local SOCKS5 proxy", "client")
-        self.role.addItem("Receiver — wait for an incoming call", "relay")
-        self.role.setEnabled(False)
+        self.role.addItem("Client", "client")
+        self.role.addItem("Relay", "relay")
 
-        self.dial_mode = QComboBox()
-        self.dial_mode.addItem("Place a call to a contact", "name")
-        self.dial_mode.addItem("Wait for an incoming call", "answer")
-        self.dial_mode.currentIndexChanged.connect(self._refresh_enabled)
+        self.backend = QComboBox()
+        self.backend.addItem("Auto / saved backend", "")
+        self.backend.addItem("Packet tunnel", "packet-tunnel")
+        self.backend.addItem("Linux TUN", "linux-tun")
+        self.backend.addItem("Proxy fallback", "proxy")
+        self.backend.addItem("Direct proxy", "direct")
 
-        self.peer_name = QLineEdit()
-        self.peer_name.setPlaceholderText("Contact display name or handle")
+        self.pair_name = QLineEdit()
+        self.pair_name.setPlaceholderText("home-relay")
+
+        self.pair_code = QLineEdit()
+        self.pair_code.setPlaceholderText("Existing pairing code (optional)")
 
         session_form = QFormLayout()
         session_form.setHorizontalSpacing(14)
         session_form.setVerticalSpacing(8)
         session_form.addRow("Role", self.role)
-        session_form.addRow("Call mode", self.dial_mode)
-        session_form.addRow("Contact to call", self.peer_name)
+        session_form.addRow("Backend", self.backend)
+        session_form.addRow("Pairing name", self.pair_name)
+        session_form.addRow("Pairing code", self.pair_code)
 
         # ---- Proxy section ----
         self.proxy_secret = QLineEdit()
-        self.proxy_secret.setPlaceholderText("Optional shared secret for both sides")
+        self.proxy_secret.setPlaceholderText("Optional shared secret for advanced/debug use")
         self.proxy_secret.setEchoMode(QLineEdit.EchoMode.Password)
 
         self.listen_port = QSpinBox()
@@ -344,12 +351,8 @@ class ConnectView(QWidget):
                 self.role.blockSignals(False)
         is_client = target_role == "client"
         self.listen_port.setEnabled(is_client)
-        if answering:
-            self.connect_btn.setText("Start Listening")
-            self._set_state("Idle. Press Start Listening to wait for calls.", "info")
-        else:
-            self.connect_btn.setText("Place Call")
-            self._set_state("Idle. Enter a contact and press Place Call.", "info")
+        self.connect_btn.setText("Connect")
+        self._set_state("Idle. Pair a relay, then connect using the saved profile.", "info")
 
     def _set_state(self, text: str, kind: str = "info") -> None:
         self.state_label.setText(text)
@@ -373,57 +376,54 @@ class ConnectView(QWidget):
             QMessageBox.warning(self, "Not signed in", "Please sign in first.")
             return
 
-        answering = self.dial_mode.currentData() == "answer"
-        peer_name = self.peer_name.text().strip()
-        if not answering and not peer_name:
-            self._set_state("Enter the contact to call first.", "err")
-            return
+        pair_name = self.pair_name.text().strip() or "default-relay"
+        pair_code = self.pair_code.text().strip()
+        role = self.role.currentData()
+        backend = self.backend.currentData()
+        self._ensure_pairing(pair_name=pair_name, pair_code=pair_code, role=role)
+        self._persist_profile_defaults(pair_name=pair_name, role=role, backend=backend)
 
-        worker = ProxyWorker(
-            role="relay" if answering else "client",
-            jwt=jwt,
-            peer_name=peer_name if not answering else "",
-            answer=answering,
-            dial_timeout=120.0,
-            listen_port=self.listen_port.value(),
-            proxy_secret=self.proxy_secret.text().strip() or None,
-        )
+        worker = ControlPlaneConnectWorker(self._main.service)
         worker.connecting.connect(self._on_connecting)
-        worker.connected.connect(self._on_connected)
-        worker.stopped.connect(self._on_stopped)
+        worker.connected.connect(self._on_control_connected)
+        worker.stopped.connect(self._on_control_stopped)
         worker.failed.connect(self._on_failed)
         worker.log_line.connect(self._append_log)
 
-        self._proxy_worker = worker
-        self._proxy_thread = run_in_thread(worker)
+        self._worker = worker
+        self._worker_thread = run_in_thread(worker)
         self._running = True
-        self._set_running_ui(answering)
-        self._set_state(
-            "Listening for calls — tell the caller they can dial now." if answering
-            else "Placing the call…",
-            "info",
-        )
+        self._set_running_ui(False)
+        self._set_state("Starting product backend…", "info")
         self.logs.clear()
 
     def _stop_session(self) -> None:
-        if self._proxy_worker:
-            self._proxy_worker.stop()
+        worker = ControlPlaneConnectWorker(self._main.service, disconnect=True)
+        worker.connecting.connect(self._on_connecting)
+        worker.stopped.connect(self._on_control_stopped)
+        worker.failed.connect(self._on_failed)
+        worker.log_line.connect(self._append_log)
+        self._worker = worker
+        self._worker_thread = run_in_thread(worker)
         self.connect_btn.setEnabled(False)
         self._set_state("Stopping…", "info")
 
     def _set_running_ui(self, answering: bool) -> None:
-        self.dial_mode.setEnabled(False)
-        self.peer_name.setEnabled(False)
+        self.backend.setEnabled(False)
+        self.pair_name.setEnabled(False)
+        self.pair_code.setEnabled(False)
         self.listen_port.setEnabled(False)
         self.connect_btn.setObjectName("danger")
-        self.connect_btn.setText("Stop Listening" if answering else "Cancel Call")
+        self.connect_btn.setText("Disconnect")
         self.connect_btn.style().unpolish(self.connect_btn)
         self.connect_btn.style().polish(self.connect_btn)
         self.connect_btn.setEnabled(True)
 
     def _reset_idle_ui(self) -> None:
         self._running = False
-        self.dial_mode.setEnabled(True)
+        self.backend.setEnabled(True)
+        self.pair_name.setEnabled(True)
+        self.pair_code.setEnabled(True)
         self.connect_btn.setObjectName("primary")
         self.connect_btn.style().unpolish(self.connect_btn)
         self.connect_btn.style().polish(self.connect_btn)
@@ -436,26 +436,67 @@ class ConnectView(QWidget):
         self._set_state(msg, "info")
         self._append_log(msg)
 
-    def _on_connected(self, msg: str) -> None:
-        self._set_state("Connected — " + msg, "ok")
-        self._append_log(msg)
+    def _on_control_connected(self, payload: dict) -> None:
+        backend = payload.get("backend", {})
+        probe = payload.get("probe", {})
+        self._set_state(
+            f"Connected via {backend.get('backend', 'backend')} ({backend.get('transport_selected', 'pending transport')})",
+            "ok",
+        )
+        self._append_log(json.dumps({"backend": backend, "probe": probe}, sort_keys=True))
 
-    def _on_stopped(self) -> None:
+    def _on_control_stopped(self, payload: dict) -> None:
         self._set_state("Stopped.", "info")
-        self._append_log("stopped")
-        self._proxy_worker = None
+        if payload:
+            self._append_log(json.dumps(payload, sort_keys=True))
         self._reset_idle_ui()
-        self._proxy_thread = None
+        self._worker = None
+        self._worker_thread = None
 
     def _on_failed(self, err: str) -> None:
         self._set_state(f"Failed: {err}", "err")
         self._append_log("FAIL " + err)
-        self._proxy_worker = None
-        self._proxy_thread = None
+        self._worker = None
+        self._worker_thread = None
         self._reset_idle_ui()
 
     def _append_log(self, line: str) -> None:
         self.logs.appendPlainText(line)
+
+    def _ensure_pairing(self, *, pair_name: str, pair_code: str, role: str) -> None:
+        pairing = self._main.service.load_pairing()
+        if pair_code:
+            pairing = self._main.service.accept_pairing(pair_code, name=pair_name)
+            self._append_log(f"accepted pairing {pairing.profile_id}")
+        elif pairing is None:
+            pairing = self._main.service.begin_pairing(
+                pair_name,
+                role=role,
+                relay_mode="proxy",
+                backend_preference=self.backend.currentData() or "",
+            )
+            self._append_log(f"created pairing {pairing.profile_id} code={pairing.pair_code}")
+
+    def _persist_profile_defaults(self, *, pair_name: str, role: str, backend: str) -> None:
+        profile = self._main.service.ensure_profile()
+        self._main.service.save_profile(
+            type(profile)(
+                profile_id=profile.profile_id,
+                name=pair_name,
+                backend=backend or profile.backend,
+                role=role,
+                pairing_id=profile.pairing_id,
+                peer_id=profile.peer_id,
+                peer_name=profile.peer_name,
+                answer=role == "relay",
+                auto_start=profile.auto_start,
+                listen_host=profile.listen_host,
+                listen_port=self.listen_port.value(),
+                protocol=profile.protocol,
+                volume=profile.volume,
+                proxy_secret=self.proxy_secret.text().strip() or profile.proxy_secret,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

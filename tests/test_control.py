@@ -144,11 +144,72 @@ def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     assert status["backend"] == "packet-tunnel"
     assert status["state"] == "running"
     assert status["transport_ready"] == "no"
-    assert status["call_established"] == "yes"
+    assert status["call_established"] == "no"
     assert status["teardown_clean"] == "no"
     assert status["profile_id"] == "p1"
     backend.down()
     assert backend.status()["state"] == "stopped"
+
+
+def test_pairing_store_tracks_managed_provisioning_metadata(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    from baleobala.control import PairingStore
+
+    store = PairingStore()
+    pending = store.begin(
+        "relay-a",
+        role="client",
+        peer_id=7,
+        relay_mode="proxy",
+        backend_preference="packet-tunnel",
+        transport_preference="auto",
+        secret_name="pair.secret",
+    )
+    accepted = store.accept(pending.pair_code, peer_name="relay-a", validate=True)
+
+    assert accepted.provisioning_status == "complete"
+    assert accepted.backend_preference == "packet-tunnel"
+    assert accepted.secret_name == "pair.secret"
+    assert store.connectable(accepted.profile_id) == accepted
+    assert store.load_secret(accepted.profile_id) is not None
+
+
+def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    from baleobala.control import AuthStore, ControlService, PairingStore, VpnStore
+    from baleobala.control.vpn import VpnProfile
+
+    AuthStore().save_jwt("jwt-token", user_id=42, phone="+989")
+    pairing = PairingStore().begin("relay-a", role="client", peer_id=7, relay_mode="packet-tunnel")
+    pairing = PairingStore().accept(pairing.pair_code, validate=True)
+    VpnStore().save(
+        VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend="packet-tunnel",
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+        )
+    )
+
+    service = ControlService()
+    snapshot = service.start_connection()
+    assert snapshot.backend["state"] == "running"
+
+    runtime_file = tmp_path / "tunnel_service.json"
+    assert runtime_file.exists()
+    payload = json.loads(runtime_file.read_text(encoding="utf-8"))
+    payload["endpoint"] = "unix:///tmp/does-not-exist.sock"
+    runtime_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    reconciled = service.reconcile_runtime()
+    assert reconciled.backend["state"] == "degraded"
+    assert "No such file" in reconciled.backend["last_error"] or "does-not-exist" in reconciled.backend["last_error"]
 
 
 def test_bundle_analyzer_classifies_missing_bundle(tmp_path, monkeypatch) -> None:
@@ -158,6 +219,105 @@ def test_bundle_analyzer_classifies_missing_bundle(tmp_path, monkeypatch) -> Non
     analysis = analyze_bundle(tmp_path / "missing")
     assert analysis.classification == "infra_flake"
     assert analysis.ok == "no"
+
+
+def test_bundle_analyzer_accepts_complete_success_bundle(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "verdict.json").write_text(
+        json.dumps(
+            {
+                "scenario": {"kind": "proxy-pair"},
+                "setup": {"ok": "yes"},
+                "smoke": {"ok": "yes", "last_error": ""},
+                "teardown": {"ok": "yes"},
+                "started": [{"name": "server"}],
+                "stopped": [{"name": "server"}],
+                "markers": ["call_established", "transport_selected=dc"],
+                "failure_class": "",
+                "log_tails": {"server": "call_established\ntransport_selected=dc\n"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = analyze_bundle(bundle)
+    assert analysis.classification == "accepted_flow"
+    assert analysis.ok == "yes"
+
+
+def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    bundle = tmp_path / "bundle-carrier"
+    bundle.mkdir()
+    (bundle / "verdict.json").write_text(
+        json.dumps(
+            {
+                "scenario": {"kind": "proxy-pair"},
+                "setup": {"ok": "yes"},
+                "smoke": {"ok": "no", "last_error": "process readiness timeout"},
+                "teardown": {"ok": "yes"},
+                "started": [{"name": "server"}],
+                "stopped": [{"name": "server"}],
+                "markers": ["call_established"],
+                "failure_class": "transport_timeout",
+                "log_tails": {"server": "call_established\n"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = analyze_bundle(bundle)
+    assert analysis.classification == "carrier_instability"
+    assert analysis.reason == "transport_timeout"
+
+
+def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import merge_status_with_bundle
+
+    bundle = tmp_path / "bundle-merge"
+    bundle.mkdir()
+    (bundle / "verdict.json").write_text(
+        json.dumps(
+            {
+                "scenario": {"kind": "proxy-pair"},
+                "setup": {"ok": "yes"},
+                "smoke": {"ok": "yes", "last_error": ""},
+                "teardown": {"ok": "yes"},
+                "started": [{"name": "server"}],
+                "stopped": [{"name": "server"}],
+                "markers": ["call_established", "transport_selected=dc"],
+                "failure_class": "",
+                "log_tails": {"server": "call_established\ntransport_selected=dc\n"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merged = merge_status_with_bundle(
+        {
+            "backend": "linux-tun",
+            "state": "running",
+            "call_established": "no",
+            "transport_selected": "",
+            "data_flow_ok": "no",
+            "teardown_clean": "no",
+            "failure_class": "",
+        },
+        bundle,
+    )
+    assert merged["backend"] == "proxy-pair"
+    assert merged["call_established"] == "yes"
+    assert merged["transport_selected"] == "dc"
+    assert merged["data_flow_ok"] == "yes"
+    assert merged["teardown_clean"] == "yes"
+    assert merged["artifact_bundle"] == str(bundle)
 
 
 def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
@@ -179,6 +339,28 @@ def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
     )
     assert verdict.ok == "no"
     assert verdict.analysis_classification == "product_bug"
+
+
+def test_product_verdict_leaves_failure_class_empty_for_accepted_flow(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import BundleAnalysis, build_product_verdict
+
+    verdict = build_product_verdict(
+        {
+            "backend": "proxy-pair",
+            "state": "running",
+            "call_established": "yes",
+            "transport_selected": "dc",
+            "data_flow_ok": "yes",
+            "teardown_clean": "yes",
+            "failure_class": "",
+            "artifact_bundle": "/tmp/bundle",
+        },
+        BundleAnalysis("accepted_flow", "bundle indicates accepted flow", "/tmp/bundle", "yes"),
+    )
+    assert verdict.ok == "yes"
+    assert verdict.failure_class == ""
+    assert verdict.analysis_classification == "accepted_flow"
 
 
 def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
