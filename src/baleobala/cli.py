@@ -597,6 +597,11 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 print(f"{key}: {value}")
         return 0 if report.ok else 2
 
+    if args.vpn_cmd == "live-smoke":
+        from baleobala.bale.live_smoke import run_live_smoke
+
+        return run_live_smoke(args)
+
     if args.vpn_cmd == "analyze-bundle":
         analysis = analyze_bundle(args.bundle_path)
         payload = analysis.to_dict()
@@ -1425,6 +1430,18 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_smoke.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     vpn_smoke.add_argument("--timeout", type=float, default=1.0, help="probe timeout in seconds")
     vpn_smoke.set_defaults(func=cmd_vpn)
+
+    vpn_live_smoke = vpn_sub.add_parser("live-smoke", help="run the real two-account Bale LiveKit/DataChannel smoke test")
+    vpn_live_smoke.add_argument("--caller-jwt-file", required=True)
+    vpn_live_smoke.add_argument("--callee-jwt-file", required=True)
+    live_target = vpn_live_smoke.add_mutually_exclusive_group(required=True)
+    live_target.add_argument("--callee-peer-id", type=int)
+    live_target.add_argument("--callee-peer", default=None)
+    live_target.add_argument("--callee-peer-name", default=None)
+    vpn_live_smoke.add_argument("--topic", default="vpn")
+    vpn_live_smoke.add_argument("--timeout", type=float, default=90.0)
+    vpn_live_smoke.add_argument("--ws-ssl-no-verify", action="store_true")
+    vpn_live_smoke.set_defaults(func=cmd_vpn)
 
     vpn_bundle = vpn_sub.add_parser("analyze-bundle", help="deterministically classify a netns session bundle")
     vpn_bundle.add_argument("bundle_path", help="path to a verdict bundle directory")
