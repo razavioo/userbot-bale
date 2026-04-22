@@ -2,6 +2,11 @@
 
 This repo now has the source pieces needed for signed macOS builds and packaged Linux builds.
 
+For production packaging and operator docs, expose `baleobala` as the single entrypoint and center
+the user flow on `doctor`, `auth bale-login`, `pair`, `relay`, `vpn`, and `gui`. Legacy and low-level
+transport commands remain available for compatibility or debugging, but should not be presented as
+parallel first-run paths.
+
 ## macOS signed build
 
 Use Xcode to archive both native targets under `native/macos/`:
@@ -32,8 +37,7 @@ Ship the wheel alongside system packages for:
 ## Bootstrap checklist
 
 - `baleobala doctor` passes on the target machine.
-- Auth is stored locally and expired sessions are treated as missing.
+- `baleobala auth bale-login --phone ... --save` stores auth locally and expired sessions are treated as missing.
 - A relay pairing exists or can be created on first run.
 - `vpn up` starts the correct platform backend.
 - The first-run smoke tests pass in CI before publishing.
-
