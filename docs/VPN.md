@@ -126,12 +126,44 @@ baleobala tunnel exit-node --bale-jwt-file … --psk-file /etc/baleobala/vpn.psk
 ## Authentication
 
 Bootstrap a JWT for either side with phone-SMS login (live-verified
-against Bale Web's gRPC-Web auth endpoint):
+against Bale Web's browser/web flow or the older gRPC-Web path):
 
 ```bash
-baleobala bale-auth --phone +989XXXXXXXXX > ~/.bale_jwt
+baleobala auth bale-login --phone +989XXXXXXXXX --method browser --save --jwt-out ~/.bale_jwt
 chmod 0600 ~/.bale_jwt
 ```
+
+The older `baleobala bale-auth --phone ...` command is still available
+for backwards compatibility, but `auth bale-login` is the preferred
+entry point because it can force the real browser login path that we
+verified against the GUI flow.
+
+## Real Two-Account Smoke
+
+To validate the full live path on one machine with two Bale accounts:
+
+```bash
+baleobala vpn live-smoke \
+  --caller-jwt-file ~/.bale_jwt_a \
+  --callee-jwt-file ~/.bale_jwt_b \
+  --callee-peer-id <callee-user-id> \
+  --timeout 120
+```
+
+If Bale's WebSocket TLS is being intercepted by a local or corporate
+certificate chain, prefer:
+
+```bash
+baleobala vpn live-smoke \
+  --caller-jwt-file ~/.bale_jwt_a \
+  --callee-jwt-file ~/.bale_jwt_b \
+  --callee-peer-id <callee-user-id> \
+  --ws-ca-file /path/to/intercepting-ca.pem
+```
+
+`--ws-ssl-no-verify` still exists only as a debug-only workaround for
+temporary investigation. Production and normal operator flows should
+use a CA override instead of disabling TLS verification.
 
 ## Troubleshooting
 
