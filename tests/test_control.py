@@ -650,6 +650,7 @@ def test_build_parser_exposes_control_plane_commands() -> None:
     assert "agent" in vpn_subcommands
     assert "probe" in vpn_subcommands
     assert "smoke" in vpn_subcommands
+    assert "live-smoke" in vpn_subcommands
     assert "netns-plan" in vpn_subcommands
     assert "netns-run" in vpn_subcommands
     assert "netns-process-plan" in vpn_subcommands

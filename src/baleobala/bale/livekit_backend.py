@@ -33,6 +33,7 @@ dedicated thread and bridge via thread-safe queues. The consumer
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import queue
 import threading
@@ -69,6 +70,12 @@ def _float_to_int16(block: np.ndarray) -> np.ndarray:
 
 def _int16_to_float(pcm: np.ndarray) -> np.ndarray:
     return (pcm.astype(np.float32) / 32768.0).astype(np.float32)
+
+
+class _IgnoreClosedLoopFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return "error putting to queue: Event loop is closed" not in message
 
 
 class LiveKitSession:
@@ -132,16 +139,23 @@ class LiveKitSession:
     def stop(self) -> None:
         if self._loop is None:
             return
+        livekit_logger = logging.getLogger("livekit")
+        suppress_filter = _IgnoreClosedLoopFilter()
+        livekit_logger.addFilter(suppress_filter)
         fut = asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop)
         try:
-            fut.result(timeout=5)
-        except Exception:  # noqa: BLE001
-            log.exception("LiveKit shutdown failed")
-        self._stopped.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            self._thread = None
-        self._incoming.put(None)
+            try:
+                fut.result(timeout=5)
+            except Exception:  # noqa: BLE001
+                log.exception("LiveKit shutdown failed")
+            self._stopped.set()
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+                self._thread = None
+            self._incoming.put(None)
+        finally:
+            with contextlib.suppress(Exception):
+                livekit_logger.removeFilter(suppress_filter)
 
     def _thread_main(self) -> None:
         loop = asyncio.new_event_loop()
