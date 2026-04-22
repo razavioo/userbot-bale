@@ -192,11 +192,19 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     assert report.data_flow_ok == "yes"
     assert report.teardown_clean == "yes"
     assert report.artifact_bundle
+    assert report.run_id
+    assert report.failure_code == ""
     assert any(step["phase"] == "smoke" for step in report.harness_steps)
     assert "call_established" in report.log_tails["server"]
-    verdict = json.loads(next(artifact_root.glob("bb-*/verdict.json")).read_text(encoding="utf-8"))
+    bundle = next(artifact_root.glob("bb-*"))
+    verdict = json.loads((bundle / "verdict.json").read_text(encoding="utf-8"))
     assert "transport_selected=dc" in verdict["markers"]
     assert verdict["failure_class"] == ""
+    assert verdict["failure_code"] == ""
+    assert (bundle / "summary.json").exists()
+    assert (bundle / "events.jsonl").exists()
+    assert (bundle / "server.log").exists()
+    assert (bundle / "client.log").exists()
 
 
 def test_netns_session_runner_times_out_when_patterns_never_appear(tmp_path) -> None:
@@ -220,7 +228,8 @@ def test_netns_session_runner_times_out_when_patterns_never_appear(tmp_path) -> 
     assert not report.ok
     assert report.readiness == "timeout"
     assert report.last_error == "process readiness timeout"
-    assert report.failure_class == "call_timeout"
+    assert report.failure_class == "call_setup"
+    assert report.failure_code == "call_setup_timeout"
 
 
 def test_netns_session_runner_uses_custom_smoke_commands(tmp_path) -> None:

@@ -6,6 +6,7 @@ import threading
 import time
 from pathlib import Path
 
+from baleobala.control.observability import StructuredEventRecorder
 from baleobala.vpn.supervisor import (
     SessionCheckpoint,
     SupervisedRunner,
@@ -96,6 +97,7 @@ def test_supervisor_retries_transport_factory_failures(tmp_path: Path) -> None:
 
 def test_supervisor_persists_checkpoint_while_running(tmp_path: Path) -> None:
     path = tmp_path / "ck.json"
+    recorder = StructuredEventRecorder(component="test-supervisor")
 
     factory_event = threading.Event()
 
@@ -110,6 +112,7 @@ def test_supervisor_persists_checkpoint_while_running(tmp_path: Path) -> None:
             initial_backoff=1.0, max_backoff=1.0, max_retries=None
         ),
         checkpoint_path=path,
+        recorder=recorder,
     )
     sup.start()
     assert factory_event.wait(1.0)
@@ -118,4 +121,6 @@ def test_supervisor_persists_checkpoint_while_running(tmp_path: Path) -> None:
     ck = load_checkpoint(path)
     assert ck is not None
     assert ck.last_error == "blocked"
+    assert any(event["event"] == "transport_setup_failed" for event in recorder.events)
+    assert any(event["event"] == "supervisor_retry_scheduled" for event in recorder.events)
     sup.stop()

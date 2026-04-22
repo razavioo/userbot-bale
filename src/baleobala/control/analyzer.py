@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 
+from baleobala.control.observability import classify_failure
+
 
 @dataclass(frozen=True)
 class BundleAnalysis:
@@ -13,6 +15,11 @@ class BundleAnalysis:
     reason: str
     bundle_path: str
     ok: str
+    failure_code: str = ""
+    last_success_stage: str = ""
+    failed_stage: str = ""
+    transport_selected: str = ""
+    retry_count: str = "0"
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -20,6 +27,11 @@ class BundleAnalysis:
             "reason": self.reason,
             "bundle_path": self.bundle_path,
             "ok": self.ok,
+            "failure_code": self.failure_code,
+            "last_success_stage": self.last_success_stage,
+            "failed_stage": self.failed_stage,
+            "transport_selected": self.transport_selected,
+            "retry_count": self.retry_count,
         }
 
 
@@ -46,6 +58,10 @@ def bundle_status(bundle_path: str | Path) -> dict[str, str]:
         "data_flow_ok": str(smoke.get("ok", "no")),
         "teardown_clean": str(teardown.get("ok", "no")),
         "failure_class": str(payload.get("failure_class", "")),
+        "failure_code": str(payload.get("failure_code", "")),
+        "run_id": str(payload.get("run_id", "")),
+        "last_success_stage": str(payload.get("last_success_stage", "")),
+        "failed_stage": str(payload.get("failed_stage", "")),
     }
     if "scenario" in payload:
         scenario = payload.get("scenario", {})
@@ -92,6 +108,20 @@ class ProductVerdict:
         }
 
 
+def _read_events(path: Path) -> list[dict[str, object]]:
+    events_path = path / "events.jsonl"
+    if not events_path.exists():
+        return []
+    try:
+        return [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except Exception:
+        return []
+
+
 def analyze_bundle(bundle_path: str | Path) -> BundleAnalysis:
     path = Path(bundle_path)
     verdict_path = path / "verdict.json"
@@ -111,27 +141,60 @@ def analyze_bundle(bundle_path: str | Path) -> BundleAnalysis:
     stopped = payload.get("stopped", [])
     log_tails = payload.get("log_tails", {})
     failure_class = str(payload.get("failure_class", ""))
+    failure_code = str(payload.get("failure_code", ""))
+    last_success_stage = str(payload.get("last_success_stage", ""))
+    failed_stage = str(payload.get("failed_stage", ""))
+    transport_selected = next(
+        (marker.split("=", 1)[1].strip() for marker in markers if str(marker).startswith("transport_selected=")),
+        "",
+    )
+
+    events = _read_events(path)
+    retry_count = str(sum(1 for item in events if item.get("event") == "supervisor_retry_scheduled"))
+    if not last_success_stage:
+        for item in reversed(events):
+            if str(item.get("outcome", "")) == "success" and item.get("stage"):
+                last_success_stage = str(item.get("stage", ""))
+                break
+    if not failed_stage:
+        for item in events:
+            if str(item.get("outcome", "")) == "failure" and item.get("stage"):
+                failed_stage = str(item.get("stage", ""))
+                break
 
     if not started or not stopped or not scenario:
-        return BundleAnalysis("infra_flake", "incomplete bundle", str(path), "no")
+        info = classify_failure(setup_ok=False, bundle_ok=False, legacy_failure_class=failure_class)
+        return BundleAnalysis("infra_flake", "incomplete bundle", str(path), "no", info.failure_code, last_success_stage, failed_stage, transport_selected, retry_count)
     if str(setup.get("ok", "no")) != "yes":
-        return BundleAnalysis("infra_flake", "setup failed", str(path), "no")
+        info = classify_failure(setup_ok=False, last_error=str(setup.get("last_error", "")), legacy_failure_class=failure_class)
+        return BundleAnalysis("infra_flake", "setup failed", str(path), "no", info.failure_code, last_success_stage, failed_stage or "setup", transport_selected, retry_count)
     if str(teardown.get("ok", "no")) != "yes":
-        return BundleAnalysis("infra_flake", "teardown failed", str(path), "no")
-    if failure_class in {"carrier_instability", "auth_expired", "call_timeout", "transport_timeout"}:
-        return BundleAnalysis("carrier_instability", failure_class, str(path), "no")
-    if failure_class in {"permission_denied", "missing_tun", "missing_iproute", "teardown_leak"}:
-        return BundleAnalysis("infra_flake", failure_class, str(path), "no")
+        info = classify_failure(teardown_ok=False, last_error=str(teardown.get("last_error", "")), legacy_failure_class=failure_class)
+        return BundleAnalysis("infra_flake", info.failure_code or "teardown failed", str(path), "no", info.failure_code, last_success_stage, failed_stage or "teardown", transport_selected, retry_count)
+    if failure_class in {"auth", "call_setup", "transport_init", "transport_runtime"} or failure_code in {"jwt_expired", "call_setup_timeout", "carrier_negotiation_failed", "transport_closed_early", "transport_factory_failed", "transport_listen_setup_failed"}:
+        return BundleAnalysis("carrier_instability", failure_code or failure_class, str(path), "no", failure_code, last_success_stage, failed_stage, transport_selected, retry_count)
+    if failure_class in {"environment", "infra", "teardown"}:
+        return BundleAnalysis("infra_flake", failure_code or failure_class, str(path), "no", failure_code, last_success_stage, failed_stage, transport_selected, retry_count)
     if str(smoke.get("ok", "no")) != "yes":
         last_error = str(smoke.get("last_error", ""))
-        if "expired" in last_error or "credential" in last_error or "peer" in last_error or "negotiation" in last_error:
-            return BundleAnalysis("carrier_instability", last_error or "carrier negotiation failure", str(path), "no")
-        if markers and any(marker.startswith("transport_selected") for marker in markers) and "call_established" in markers:
-            return BundleAnalysis("product_bug", last_error or "payload flow failed", str(path), "no")
-        return BundleAnalysis("infra_flake", last_error or "smoke failed", str(path), "no")
+        info = classify_failure(
+            ready="call_established" in markers,
+            smoke_ok=False,
+            setup_ok=True,
+            teardown_ok=True,
+            last_error=last_error,
+            bundle_ok=True,
+            markers=list(markers),
+            legacy_failure_class=failure_class,
+        )
+        if info.failure_class in {"auth", "call_setup", "transport_init", "transport_runtime"}:
+            return BundleAnalysis("carrier_instability", last_error or info.failure_code, str(path), "no", info.failure_code, last_success_stage, failed_stage, transport_selected, retry_count)
+        if markers and any(str(marker).startswith("transport_selected") for marker in markers) and "call_established" in markers:
+            return BundleAnalysis("product_bug", last_error or "payload flow failed", str(path), "no", info.failure_code or "payload_probe_failed", last_success_stage, failed_stage or "smoke", transport_selected, retry_count)
+        return BundleAnalysis("infra_flake", last_error or "smoke failed", str(path), "no", info.failure_code, last_success_stage, failed_stage, transport_selected, retry_count)
     if "call_established" not in markers and not any("call_established" in tail for tail in log_tails.values()):
-        return BundleAnalysis("infra_flake", "missing call_established marker", str(path), "no")
-    return BundleAnalysis("accepted_flow", "bundle indicates accepted flow", str(path), "yes")
+        return BundleAnalysis("infra_flake", "missing call_established marker", str(path), "no", failure_code, last_success_stage, failed_stage or "call_setup", transport_selected, retry_count)
+    return BundleAnalysis("accepted_flow", "bundle indicates accepted flow", str(path), "yes", failure_code, last_success_stage, failed_stage, transport_selected, retry_count)
 
 
 def build_product_verdict(status: dict[str, str], bundle_analysis: BundleAnalysis | None = None) -> ProductVerdict:

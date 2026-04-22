@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from baleobala.control.paths import config_dir
+from baleobala.control.observability import StructuredEventRecorder, classify_failure
 from baleobala.control.store import JsonStore
 
 from .runner import RunnerConfig, VpnRunner
@@ -76,6 +77,7 @@ class SupervisedRunner:
         supervisor_config: SupervisorConfig | None = None,
         checkpoint_path: Path | None = None,
         checkpoint: SessionCheckpoint | None = None,
+        recorder: StructuredEventRecorder | None = None,
     ) -> None:
         self._tun = tun
         self._transport_factory = transport_factory
@@ -89,6 +91,7 @@ class SupervisedRunner:
         self._runner: VpnRunner | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._recorder = recorder or StructuredEventRecorder(component="vpn-supervisor")
 
     @property
     def checkpoint(self) -> SessionCheckpoint:
@@ -125,9 +128,27 @@ class SupervisedRunner:
             try:
                 transport = self._transport_factory()
             except Exception as e:  # noqa: BLE001
+                info = classify_failure(last_error="transport factory failed: " + str(e))
+                self._recorder.event(
+                    "transport_setup_failed",
+                    stage="transport_init",
+                    outcome="failure",
+                    attempt=attempts + 1,
+                    failure_class=info.failure_class,
+                    failure_code=info.failure_code,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
                 log.warning("transport factory failed: %s", e)
                 self._checkpoint.last_error = str(e)
                 self._persist()
+                self._recorder.event(
+                    "supervisor_retry_scheduled",
+                    stage="transport_runtime",
+                    outcome="begin",
+                    attempt=attempts + 1,
+                    error_message=str(e),
+                )
                 if not self._wait_backoff(backoff):
                     return
                 backoff = min(backoff * self._cfg.backoff_factor, self._cfg.max_backoff)
@@ -139,9 +160,21 @@ class SupervisedRunner:
             self._checkpoint.last_error = None
             self._persist()
             try:
+                self._recorder.event("runner_started", stage="transport_runtime", outcome="success", attempt=attempts)
                 runner.start()
                 runner.join()  # blocks until tun or transport closes
             except Exception as e:  # noqa: BLE001
+                info = classify_failure(ready=True, last_error=str(e))
+                self._recorder.event(
+                    "runner_crashed",
+                    stage="transport_runtime",
+                    outcome="failure",
+                    attempt=attempts,
+                    failure_class=info.failure_class,
+                    failure_code=info.failure_code,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
                 log.warning("runner crashed: %s", e)
                 self._checkpoint.last_error = str(e)
             finally:
@@ -162,8 +195,22 @@ class SupervisedRunner:
                 backoff = self._cfg.initial_backoff
             attempts += 1
             if self._cfg.max_retries is not None and attempts > self._cfg.max_retries:
+                self._recorder.event(
+                    "supervisor_give_up",
+                    stage="transport_runtime",
+                    outcome="failure",
+                    attempt=attempts,
+                    error_message=self._checkpoint.last_error,
+                )
                 log.error("supervisor giving up after %d attempts", attempts)
                 return
+            self._recorder.event(
+                "supervisor_retry_scheduled",
+                stage="transport_runtime",
+                outcome="begin",
+                attempt=attempts,
+                error_message=self._checkpoint.last_error,
+            )
             log.info(
                 "transport closed; reconnect in %.1fs (attempt %d)", backoff, attempts
             )

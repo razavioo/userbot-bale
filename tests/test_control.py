@@ -44,6 +44,20 @@ def test_auth_store_tracks_token_expiry(tmp_path, monkeypatch) -> None:
     assert "expires_in" in store.status()
 
 
+def test_observability_redacts_secrets() -> None:
+    from baleobala.control.observability import redact_value
+
+    payload = {
+        "jwt": "secret-token",
+        "Authorization": "Bearer abc",
+        "nested": ["proxy_secret=demo", "cookie=session=1"],
+    }
+    redacted = redact_value(payload)
+    assert redacted["jwt"] == "jwt=<redacted>"
+    assert redacted["Authorization"] == "Authorization=<redacted>"
+    assert redacted["nested"][0] == "proxy_secret=<redacted>"
+
+
 def test_auth_store_treats_expired_token_as_missing(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import AuthStore
@@ -322,7 +336,8 @@ def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monke
                 "started": [{"name": "server"}],
                 "stopped": [{"name": "server"}],
                 "markers": ["call_established"],
-                "failure_class": "transport_timeout",
+                "failure_class": "transport_runtime",
+                "failure_code": "transport_closed_early",
                 "log_tails": {"server": "call_established\n"},
             }
         ),
@@ -331,7 +346,8 @@ def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monke
 
     analysis = analyze_bundle(bundle)
     assert analysis.classification == "carrier_instability"
-    assert analysis.reason == "transport_timeout"
+    assert analysis.reason == "transport_closed_early"
+    assert analysis.failure_code == "transport_closed_early"
 
 
 def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monkeypatch) -> None:

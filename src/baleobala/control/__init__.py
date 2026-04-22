@@ -23,6 +23,7 @@ from baleobala.control.netns import (
     render_smoke_commands,
     render_teardown_commands,
 )
+from baleobala.control.observability import FailureInfo, StructuredEventRecorder, classify_failure, environment_snapshot, new_run_id, redact_value
 from baleobala.control.paths import app_dir, config_dir, data_dir
 from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.readiness import BackendReadiness
@@ -73,6 +74,12 @@ __all__ = [
     "bundle_status",
     "merge_status_with_bundle",
     "build_product_verdict",
+    "FailureInfo",
+    "StructuredEventRecorder",
+    "classify_failure",
+    "environment_snapshot",
+    "new_run_id",
+    "redact_value",
     "LaunchAgentSpec",
     "MacOSLaunchAgentManager",
     "ControlService",
