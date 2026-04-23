@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Iterator, Literal
 
+from baleobala.presentation import capability_note, summarize_doctor, summarize_snapshot
 from baleobala.virtmic import VirtualMic
 
 log = logging.getLogger("baleobala")
@@ -204,8 +205,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("ggwave", _module_available("ggwave"), "available" if _module_available("ggwave") else "missing"))
     checks.append(("PySide6", _module_available("PySide6"), "available" if _module_available("PySide6") else "missing"))
 
+    headline, _missing, next_step = summarize_doctor(checks)
     print("baleobala doctor")
+    print(headline)
     print(f"platform: {sys.platform}")
+    print(capability_note())
     print("")
     missing_critical = []
     for name, ok, detail in checks:
@@ -216,10 +220,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     if sys.platform == "darwin":
         print("")
-        print("macOS note: the current virtmic helper is Linux-only; use the desktop/VPN release path for the final product.")
+        print("macOS path: use `baleobala gui` for sign-in and pairing, then the native app for system tunnel control.")
     else:
         print("")
-        print("Linux note: the current virtual mic helper is available now; the full VPN path is tracked in docs/VPN_PLAN.md.")
+        print("Linux path: sign in, create or accept a pairing, then start the secure connection with `baleobala vpn up`.")
+    print("")
+    print(next_step)
 
     if args.strict and missing_critical:
         return 1
@@ -269,18 +275,55 @@ def cmd_auth(args: argparse.Namespace) -> int:
         return 0
     if args.auth_cmd == "logout":
         store.clear()
-        print("cleared auth store")
+        print("Signed out. Next step: run `baleobala auth bale-login --phone +98912xxxxxxx --save` when you want to sign in again.")
         return 0
     status = store.status()
-    for key, value in status.items():
-        print(f"{key}: {value}")
+    state = status.get("state", "empty")
+    if state == "configured":
+        print("Signed in and ready.")
+        print(f"phone: {status.get('phone', 'unknown')}")
+        print(f"user_id: {status.get('user_id', 'unknown')}")
+        print(f"expires_in: {status.get('expires_in', 'unknown')}")
+    elif state == "expired":
+        print("Saved session expired.")
+        print("Next step: run `baleobala auth bale-login --phone +98912xxxxxxx --save` for a fresh session.")
+    elif state == "missing-secret":
+        print("Auth metadata exists, but the saved secret is missing.")
+        print("Next step: sign in again so the local secret store can be rebuilt.")
+    else:
+        print("No saved sign-in found.")
+        print("Next step: run `baleobala auth bale-login --phone +98912xxxxxxx --save`.")
     return 0
 
 
 def cmd_pair(args: argparse.Namespace) -> int:
-    from baleobala.control import PairingExchange, PairingStore
+    from baleobala.control import ControlService, PairingExchange, PairingStore, ProvisioningError
 
-    store = PairingStore()
+    service = ControlService()
+    store = service.pairing_store
+    def _print_record(record):  # noqa: ANN001
+        print(f"profile_id: {record.profile_id}")
+        print(f"name: {record.name}")
+        print(f"role: {record.role}")
+        print(f"status: {record.status}")
+        print(f"provisioning_status: {record.provisioning_status}")
+        if record.authorization_status:
+            print(f"authorization_status: {record.authorization_status}")
+        if record.relay_id:
+            print(f"relay_id: {record.relay_id}")
+        if record.authorization_id:
+            print(f"authorization_id: {record.authorization_id}")
+        if record.device_id:
+            print(f"device_id: {record.device_id}")
+        if record.credential_epoch:
+            print(f"credential_epoch: {record.credential_epoch}")
+        if record.peer_id is not None:
+            print(f"peer_id: {record.peer_id}")
+        if record.peer_name:
+            print(f"peer_name: {record.peer_name}")
+        if record.server_error:
+            print(f"server_error: {record.server_error}")
+
     if args.pair_cmd == "start":
         record = store.begin(
             args.name,
@@ -290,21 +333,60 @@ def cmd_pair(args: argparse.Namespace) -> int:
             relay_mode=args.relay_mode,
             backend_preference=args.relay_mode,
         )
-        print(f"profile_id: {record.profile_id}")
-        print(f"name: {record.name}")
-        print(f"role: {record.role}")
-        print(f"status: {record.status}")
-        print(f"provisioning_status: {record.provisioning_status}")
+        _print_record(record)
         print(f"pair_code: {record.pair_code}")
+        return 0
+    if args.pair_cmd == "enroll":
+        record = service.enroll_pairing(
+            args.name,
+            role=args.role,
+            peer_id=args.peer_id,
+            peer_name=args.peer_name,
+            relay_mode=args.relay_mode,
+            backend_preference=args.backend or args.relay_mode,
+            transport_preference=args.transport,
+        )
+        _print_record(record)
         return 0
     if args.pair_cmd == "accept":
         record = store.accept(args.code, name=args.name, validate=True)
-        print(f"profile_id: {record.profile_id}")
-        print(f"name: {record.name}")
-        print(f"role: {record.role}")
-        print(f"status: {record.status}")
-        print(f"provisioning_status: {record.provisioning_status}")
+        _print_record(record)
         print(f"pair_code: {record.pair_code}")
+        return 0
+    if args.pair_cmd == "request-access":
+        try:
+            record = service.request_pairing_access(args.profile_id)
+        except ProvisioningError as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_record(record)
+        return 0
+    if args.pair_cmd == "approve":
+        try:
+            record = service.approve_pairing_access(args.profile_id)
+        except ProvisioningError as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_record(record)
+        return 0
+    if args.pair_cmd == "reject":
+        try:
+            record = service.reject_pairing_access(args.profile_id, reason=args.reason)
+        except ProvisioningError as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_record(record)
+        return 0
+    if args.pair_cmd == "sync":
+        try:
+            record = service.sync_pairing(args.profile_id)
+        except ProvisioningError as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_record(record)
+        return 0
+    if args.pair_cmd == "revoke-device":
+        try:
+            record = service.revoke_pairing_device(args.profile_id)
+        except ProvisioningError as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_record(record)
         return 0
     if args.pair_cmd == "remove":
         store.remove(args.profile_id)
@@ -338,12 +420,17 @@ def cmd_pair(args: argparse.Namespace) -> int:
 
     records = store.list()
     if not records:
-        print("no pairings saved")
+        print("No relay pairings saved.")
+        print("Next step: run `baleobala pair enroll --name home-relay` to create one.")
         return 0
+    print("Saved relay pairings:")
     for record in records:
-        print(
-            f"{record.profile_id}\t{record.status}\t{record.role}\t{record.name}\t{record.pair_code}"
-        )
+        summary = f"- {record.name} [{record.status}] role={record.role} id={record.profile_id}"
+        if record.relay_id:
+            summary += f" relay_id={record.relay_id}"
+        if record.authorization_status not in {"", "none"}:
+            summary += f" authz={record.authorization_status}"
+        print(summary)
     return 0
 
 
@@ -360,7 +447,11 @@ def cmd_relay(args: argparse.Namespace) -> int:
         if profile is None:
             profile = pairing_store.active()
         if profile is None:
-            raise SystemExit("Need a pairing profile before enabling relay.")
+            raise SystemExit(
+                "No relay pairing is ready.\n"
+                "Why this usually happens: the device has not created or accepted a pairing yet.\n"
+                "Next step: run `baleobala pair start --name home-relay` or `baleobala pair accept --code <pair-code>`."
+            )
         pairing_store.touch(profile.profile_id)
         vpn_profile = VpnProfile(
             profile_id=profile.profile_id,
@@ -386,8 +477,11 @@ def cmd_relay(args: argparse.Namespace) -> int:
         print("relay disabled")
         return 0
     status = vpn_store.status()
-    for key, value in status.items():
-        print(f"{key}: {value}")
+    print("Relay settings summary")
+    print(f"state: {status.get('state', 'unknown')}")
+    print(f"profile: {status.get('name', 'unknown')}")
+    print(f"backend: {status.get('backend', 'unknown')}")
+    print(f"auto_start: {status.get('auto_start', 'no')}")
     return 0
 
 
@@ -473,6 +567,7 @@ def _backend_up(backend, profile, auth_record=None, pairing=None):  # noqa: ANN0
 def cmd_vpn(args: argparse.Namespace) -> int:
     from baleobala.control import (
         AuthStore,
+        ControlService,
         NetnsHarness,
         NetnsProcessManager,
         NetnsProcessSpec,
@@ -501,6 +596,11 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     vpn_store = VpnStore()
     auth_store = AuthStore()
     pairing_store = PairingStore()
+    control_service = ControlService(
+        auth_store=auth_store,
+        pairing_store=pairing_store,
+        vpn_store=vpn_store,
+    )
 
     if args.vpn_cmd == "plan":
         print("baleobala vpn plan")
@@ -545,15 +645,25 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         pairing = pairing_store.active()
         profile = vpn_store.load() or vpn_store.ensure_default()
         backend = backend_for_profile(profile)
-        print("auth:")
-        for key, value in auth_status.items():
-            print(f"  {key}: {value}")
-        print("vpn:")
-        for key, value in vpn_status.items():
-            print(f"  {key}: {value}")
-        print("backend:")
-        for key, value in backend.status().items():
-            print(f"  {key}: {value}")
+        snapshot_lines = summarize_snapshot(
+            type("Snapshot", (), {
+                "auth": auth_status,
+                "vpn": vpn_status,
+                "pairing": {"state": "empty"} if pairing is None else {
+                    "state": pairing.status,
+                    "name": pairing.name,
+                },
+                "backend": backend.status(),
+            })()
+        )
+        print("baleobala secure connection status")
+        for line in snapshot_lines:
+            print(line)
+        print("")
+        print("Details:")
+        print(f"saved_profile: {vpn_status.get('name', 'default')}")
+        print(f"backend: {backend.status().get('backend', 'unknown')}")
+        print(f"backend_state: {backend.status().get('state', 'unknown')}")
         if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
             from baleobala.control.macos import MacOSSystemProxySession
             system_proxy = MacOSSystemProxySession(state_path=None)
@@ -563,11 +673,14 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         print("pairing:")
         if pairing is None:
             print("  state: empty")
+            print("  next_step: run `baleobala pair enroll --name home-relay`")
         else:
             print(f"  profile_id: {pairing.profile_id}")
             print(f"  name: {pairing.name}")
             print(f"  role: {pairing.role}")
             print(f"  status: {pairing.status}")
+            print(f"  authorization_status: {pairing.authorization_status}")
+            print(f"  provisioning_status: {pairing.provisioning_status}")
         return 0
 
     if args.vpn_cmd == "probe":
@@ -864,6 +977,11 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         pairing = pairing_store.get(args.profile_id)
         if pairing is None:
             raise SystemExit(f"no pairing profile {args.profile_id!r} found")
+        if getattr(pairing, "relay_id", ""):
+            try:
+                pairing = control_service.sync_pairing(pairing.profile_id)
+            except Exception:
+                pass
         pairing_store.touch(pairing.profile_id)
         profile = VpnProfile(
             profile_id=pairing.profile_id,
@@ -881,6 +999,15 @@ def cmd_vpn(args: argparse.Namespace) -> int:
             volume=profile.volume,
         )
         vpn_store.save(profile)
+    if profile.pairing_id:
+        pairing = pairing_store.get(profile.pairing_id)
+        if pairing is not None and getattr(pairing, "relay_id", ""):
+            profile = control_service.resolve_profile(profile.pairing_id)
+        elif pairing is not None and pairing.status != "paired":
+            raise SystemExit(
+                "pairing is not ready. Run `baleobala pair request-access --profile-id "
+                f"{pairing.profile_id}` and `baleobala pair approve --profile-id {pairing.profile_id}`."
+            )
 
     auth_record = auth_store.load()
     if auth_record is None and profile.backend == "proxy":
@@ -1281,8 +1408,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = argparse.ArgumentParser(
         prog="baleobala",
-        description="Acoustic data bridge over voice/video calls.",
+        description="Sign in, pair a relay, and start a secure Bale connection.",
         epilog=(
+            "Main product path: doctor -> auth -> pair -> connect\n"
             "Core user commands: doctor, auth, pair, relay, vpn, gui\n"
             "Advanced/debug commands: loopback, tunnel-loopback, tunnel, bale-call, "
             "bale-tunnel, bale-proxy, send, recv, devices, virtmic\n"
@@ -1317,7 +1445,7 @@ def build_parser() -> argparse.ArgumentParser:
     doc.add_argument("--strict", action="store_true", help="return nonzero when critical deps are missing")
     doc.set_defaults(func=cmd_doctor)
 
-    auth = sub.add_parser("auth", help="manage local auth/session state")
+    auth = sub.add_parser("auth", help="sign in, import, or inspect the saved Bale session")
     auth_sub = auth.add_subparsers(dest="auth_cmd", required=True)
 
     auth_login = auth_sub.add_parser(
@@ -1367,8 +1495,18 @@ def build_parser() -> argparse.ArgumentParser:
     auth_status = auth_sub.add_parser("status", help="show stored auth state")
     auth_status.set_defaults(func=cmd_auth)
 
-    pair = sub.add_parser("pair", help="manage relay pairing records")
+    pair = sub.add_parser("pair", help="enroll, authorize, and inspect relay pairings")
     pair_sub = pair.add_subparsers(dest="pair_cmd", required=True)
+
+    pair_enroll = pair_sub.add_parser("enroll", help="create a server-backed relay pairing")
+    pair_enroll.add_argument("--name", default="relay")
+    pair_enroll.add_argument("--role", choices=["client", "relay"], default="client")
+    pair_enroll.add_argument("--peer-id", type=int, default=None)
+    pair_enroll.add_argument("--peer-name", default=None)
+    pair_enroll.add_argument("--relay-mode", choices=["proxy"], default="proxy")
+    pair_enroll.add_argument("--backend", default=None)
+    pair_enroll.add_argument("--transport", default="auto")
+    pair_enroll.set_defaults(func=cmd_pair)
 
     pair_start = pair_sub.add_parser("start", help="create a pending pairing record")
     pair_start.add_argument("--name", default="relay")
@@ -1382,6 +1520,27 @@ def build_parser() -> argparse.ArgumentParser:
     pair_accept.add_argument("--code", required=True)
     pair_accept.add_argument("--name", default=None)
     pair_accept.set_defaults(func=cmd_pair)
+
+    pair_request = pair_sub.add_parser("request-access", help="request device access to an enrolled relay")
+    pair_request.add_argument("--profile-id", required=True)
+    pair_request.set_defaults(func=cmd_pair)
+
+    pair_approve = pair_sub.add_parser("approve", help="approve a pending device access request")
+    pair_approve.add_argument("--profile-id", required=True)
+    pair_approve.set_defaults(func=cmd_pair)
+
+    pair_reject = pair_sub.add_parser("reject", help="reject a pending device access request")
+    pair_reject.add_argument("--profile-id", required=True)
+    pair_reject.add_argument("--reason", default="")
+    pair_reject.set_defaults(func=cmd_pair)
+
+    pair_sync = pair_sub.add_parser("sync", help="sync the local pairing cache with the provisioning service")
+    pair_sync.add_argument("--profile-id", required=True)
+    pair_sync.set_defaults(func=cmd_pair)
+
+    pair_revoke = pair_sub.add_parser("revoke-device", help="revoke the current device from a relay")
+    pair_revoke.add_argument("--profile-id", required=True)
+    pair_revoke.set_defaults(func=cmd_pair)
 
     pair_export = pair_sub.add_parser("export-request", help="export a versioned pairing request bundle")
     pair_export.add_argument("--profile-id", required=True)
@@ -1407,7 +1566,7 @@ def build_parser() -> argparse.ArgumentParser:
     pair_remove.add_argument("--profile-id", required=True)
     pair_remove.set_defaults(func=cmd_pair)
 
-    relay = sub.add_parser("relay", help="manage relay runtime settings")
+    relay = sub.add_parser("relay", help="save relay-side connection settings")
     relay_sub = relay.add_subparsers(dest="relay_cmd", required=True)
 
     relay_enable = relay_sub.add_parser("enable", help="save relay settings")
@@ -1428,7 +1587,7 @@ def build_parser() -> argparse.ArgumentParser:
     relay_status = relay_sub.add_parser("status", help="show relay settings")
     relay_status.set_defaults(func=cmd_relay)
 
-    vpn = sub.add_parser("vpn", help="run or inspect the VPN control plane")
+    vpn = sub.add_parser("vpn", help="start, stop, and inspect the secure connection runtime")
     vpn_sub = vpn.add_subparsers(dest="vpn_cmd", required=True)
 
     vpn_up = vpn_sub.add_parser("up", help="start the current VPN backend")
@@ -1715,7 +1874,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ba.set_defaults(func=cmd_bale_auth)
 
-    g = sub.add_parser("gui", help="launch the Qt GUI (login + connect)")
+    g = sub.add_parser("gui", help="launch the desktop app for sign-in, pairing, and connection")
     g.set_defaults(func=cmd_gui)
 
     from baleobala.vpn.cli import add_tunnel_subparser

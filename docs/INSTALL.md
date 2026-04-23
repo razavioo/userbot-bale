@@ -1,6 +1,7 @@
 # Install and Bootstrap
 
 This is the shortest path to try baleobala from a fresh checkout.
+The main user journey is `doctor -> auth -> pair -> connect`.
 
 The production-facing CLI surface is `baleobala doctor`, `auth`, `pair`, `relay`, `vpn`, and `gui`.
 Direct module execution and lower-level transport commands remain available as fallback/debug tools.
@@ -43,15 +44,16 @@ Then open `native/macos/` in Xcode and configure:
 
 The repo now includes `native/macos/Baleobala.xcodeproj`, which is the project file you should open.
 Use `scripts/open-macos-xcode.sh` to open it, `scripts/build-macos.sh` for a terminal build, and `scripts/run-macos.sh` to build and launch the app once Xcode is set up.
+For a distributable direct build, follow the runbook in `native/macos/README.md` and validate with `./scripts/acceptance-macos-native.sh release` before publishing.
 
 The macOS packet tunnel reads its route and DNS plan from `BaleTunnelConfiguration`, so the same profile data drives both the app and the extension.
 
 ## First Run
 
-1. Start with `baleobala auth bale-login --phone ... --method browser --save` or the Qt sign-in flow.
-2. Save a relay pairing with `baleobala pair start` and `baleobala pair accept`.
-3. Run `baleobala relay enable` if you want the relay profile saved.
-4. Run `baleobala vpn up`.
+1. Start with `baleobala doctor`.
+2. Sign in with `baleobala auth bale-login --phone ... --method browser --save` or the Qt sign-in flow.
+3. Save a relay pairing with `baleobala pair enroll`, then `pair request-access`, then `pair approve`.
+4. Start the secure connection with `baleobala vpn up` or the desktop app.
 
 For engineering-only validation, `baleobala loopback` and `baleobala tunnel-loopback` remain useful,
 but they are not the primary production quick-start path.
