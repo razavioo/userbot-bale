@@ -18,9 +18,9 @@ import atexit
 import os
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from baleobala.control.paths import config_dir
 from baleobala.control.probe import ProbeResult, probe_endpoint
@@ -221,6 +221,21 @@ class LinuxTunnelRuntime:
         self._keepalive = None
         self._health = None
         self._controller = None
+        self._carrier_resolver = None
+        self._carrier_hosts: tuple[str, ...] = ()
+        self._credential_watcher = None
+        self._refresh_credentials = None
+        self._pairing_store = None
+        self._profile_id = None
+
+    def set_credential_refresh_context(self, pairing_store, refresh_credentials) -> None:  # noqa: ANN001
+        self._pairing_store = pairing_store
+        self._refresh_credentials = refresh_credentials
+
+    def refresh_pairing_credentials(self, profile_id: str):  # noqa: ANN001
+        if self._refresh_credentials is None:
+            raise RuntimeError("credential refresh callback is not configured")
+        return self._refresh_credentials(profile_id)
 
     def start(self, profile, auth_record) -> dict[str, str]:  # noqa: ANN001
         if auth_record is None or not auth_record.jwt:
@@ -235,6 +250,8 @@ class LinuxTunnelRuntime:
         from baleobala.vpn.runner import RunnerConfig, VpnRunner
         from baleobala.vpn.tun import TunDevice
         from baleobala.bale import LiveKitSession
+        from baleobala.control.credential_watcher import CredentialWatcher
+        from baleobala.control.resolver import LinuxResolver
         import argparse
 
         args = argparse.Namespace(
@@ -265,8 +282,23 @@ class LinuxTunnelRuntime:
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         session.start()
+        carrier_resolver = LinuxResolver()
+        carrier_hosts = tuple(sorted(session.carrier_hosts()))
+        for host in carrier_hosts:
+            carrier_resolver.add_bypass_host(host)
         keepalive = LiveKitKeepalive(session, interval=20.0)
         keepalive.start()
+        credential_watcher = None
+        if self._pairing_store is not None and self._refresh_credentials is not None:
+            profile_id = getattr(profile, "profile_id", None) or getattr(profile, "pairing_id", None)
+            if profile_id:
+                credential_watcher = CredentialWatcher(
+                    self._pairing_store,
+                    self,
+                    profile_id,
+                    lambda refreshed: None,
+                )
+                credential_watcher.start()
         chain = _build_transport_chain(args.transport, session, args)
         transport_name, transport = chain.start()
         mtu_floor = min(_safe_mtu(c.factory, precomputed=transport if c.name == transport_name else None) for c in chain._choices)  # type: ignore[attr-defined]
@@ -294,6 +326,9 @@ class LinuxTunnelRuntime:
         self._runner = runner
         self._keepalive = keepalive
         self._controller = controller
+        self._carrier_resolver = carrier_resolver
+        self._carrier_hosts = carrier_hosts
+        self._credential_watcher = credential_watcher
         self._active = True
         payload = {
             "endpoint": args.tun,
@@ -326,6 +361,17 @@ class LinuxTunnelRuntime:
         if self._keepalive is not None:
             self._keepalive.stop()
             self._keepalive = None
+        if self._credential_watcher is not None:
+            self._credential_watcher.stop()
+            self._credential_watcher = None
+        if self._carrier_resolver is not None:
+            for host in self._carrier_hosts:
+                try:
+                    self._carrier_resolver.remove_bypass_host(host)
+                except Exception:
+                    pass
+            self._carrier_resolver = None
+            self._carrier_hosts = ()
         if self._session is not None:
             self._session.stop()
             self._session = None
@@ -350,6 +396,10 @@ class LinuxTunnelRuntime:
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         session.start()
+        carrier_resolver = LinuxResolver()
+        carrier_hosts = tuple(sorted(session.carrier_hosts()))
+        for host in carrier_hosts:
+            carrier_resolver.add_bypass_host(host)
         keepalive = LiveKitKeepalive(session, interval=20.0)
         keepalive.start()
         chain = _build_transport_chain(args.transport, session, args)
@@ -360,6 +410,11 @@ class LinuxTunnelRuntime:
                 original_close()
             finally:
                 keepalive.stop()
+                for host in carrier_hosts:
+                    try:
+                        carrier_resolver.remove_bypass_host(host)
+                    except Exception:
+                        pass
                 session.stop()
 
         chain.close = close_with_session  # type: ignore[method-assign]
@@ -393,6 +448,13 @@ class LinuxTunBackend:
         self._runtime = runtime or LinuxTunnelRuntime(self._runtime_store)
         self._profile_id: str | None = None
         self._pairing_id: str | None = None
+        self._pairing_store = None
+        self._refresh_credentials = None
+
+    def set_credential_refresh_context(self, pairing_store, refresh_credentials) -> None:  # noqa: ANN001
+        self._pairing_store = pairing_store
+        self._refresh_credentials = refresh_credentials
+        self._runtime.set_credential_refresh_context(pairing_store, refresh_credentials)
 
     def up(self, profile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
         self._session.start()
