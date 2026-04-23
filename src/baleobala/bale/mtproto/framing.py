@@ -20,17 +20,19 @@ Post-auth frame layout (envelope shown; body is encrypted):
     bytes(16)  msg_key          sha1(payload)[4:20]
     bytes(N)   encrypted_payload  AES-256-IGE(aux_key(msg_key, auth_key))
 
-The actual constants (message_type values, encryption variant —
-IGE vs CBC — and the msg_key derivation) must be confirmed against a
-capture before we can send a valid frame. The encode/decode functions
-below raise with a pointer at docs/CAPTURE.md so callers know where
-the gate sits.
+The actual Bale-specific message_type values and post-auth crypto
+details still need capture validation. The plain pre-auth frame shape is
+concrete enough to implement and test offline now, which lets the
+session/RPC machinery stop depending on placeholders.
 """
 
 from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+
+HEADER_LEN = 12
+MAX_FRAME_LEN = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -40,19 +42,21 @@ class Frame:
     body: bytes
 
     def encode(self) -> bytes:
-        """Pre-auth frame encoder. Validated once a capture lands."""
-        raise NotImplementedError(
-            "MTProto frame encoding is gated on a live capture. "
-            "See docs/CAPTURE.md for the mitmproxy+Frida workflow "
-            "that produces the reference bytes."
-        )
+        """Encode a plain MTProto frame with a uint32 length prefix."""
+        body_len = 8 + len(self.body)
+        return struct.pack("<III", body_len, self.seq, self.message_type) + self.body
 
     @classmethod
     def decode(cls, buf: bytes) -> "Frame":
-        raise NotImplementedError(
-            "MTProto frame decoding is gated on a live capture. "
-            "See docs/CAPTURE.md."
-        )
+        if len(buf) < HEADER_LEN:
+            raise ValueError(f"short frame: {len(buf)} < {HEADER_LEN}")
+        total_len, seq, message_type = struct.unpack("<III", buf[:HEADER_LEN])
+        expected = 4 + total_len
+        if total_len < 8:
+            raise ValueError(f"invalid frame length: {total_len}")
+        if len(buf) != expected:
+            raise ValueError(f"frame length mismatch: declared {expected}, got {len(buf)}")
+        return cls(seq=seq, message_type=message_type, body=buf[HEADER_LEN:])
 
 
 def _read_exact(conn, n: int) -> bytes:
@@ -69,6 +73,20 @@ def _read_exact(conn, n: int) -> bytes:
 
 def _write_all(conn, data: bytes) -> None:
     conn.stream.sendall(data)
+
+
+def read_frame(conn, *, max_len: int = MAX_FRAME_LEN) -> Frame:
+    raw = _read_exact(conn, 4)
+    (n,) = struct.unpack("<I", raw)
+    if n < 8:
+        raise ValueError(f"undersize frame: {n}")
+    if n > max_len:
+        raise ValueError(f"oversize frame: {n}")
+    return Frame.decode(raw + _read_exact(conn, n))
+
+
+def write_frame(conn, frame: Frame) -> None:
+    _write_all(conn, frame.encode())
 
 
 # Convenience for the live smoketest: read a length-prefixed frame
