@@ -1,0 +1,146 @@
+name: Nightly Linux Live Acceptance
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  live-acceptance:
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: python3 -m pip install -e .[test]
+
+      - name: Validate acceptance secrets
+        env:
+          BALE_SERVER_JWT: ${{ secrets.BALE_SERVER_JWT }}
+          BALE_CLIENT_JWT: ${{ secrets.BALE_CLIENT_JWT }}
+          PEER_ID: ${{ secrets.PEER_ID }}
+          PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
+        run: |
+          missing=""
+          for name in BALE_SERVER_JWT BALE_CLIENT_JWT PEER_ID PROXY_SECRET; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing required acceptance secrets:$missing" >&2
+            exit 1
+          fi
+
+      - name: Write JWT files
+        env:
+          BALE_SERVER_JWT: ${{ secrets.BALE_SERVER_JWT }}
+          BALE_CLIENT_JWT: ${{ secrets.BALE_CLIENT_JWT }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/live-acceptance/secrets"
+          printf '%s' "$BALE_SERVER_JWT" > "$RUNNER_TEMP/live-acceptance/secrets/server.jwt"
+          printf '%s' "$BALE_CLIENT_JWT" > "$RUNNER_TEMP/live-acceptance/secrets/client.jwt"
+          chmod 0600 "$RUNNER_TEMP/live-acceptance/secrets/server.jwt" "$RUNNER_TEMP/live-acceptance/secrets/client.jwt"
+
+      - name: Run proxy-pair acceptance
+        id: proxy_pair
+        env:
+          SERVER_JWT_FILE: ${{ runner.temp }}/live-acceptance/secrets/server.jwt
+          CLIENT_JWT_FILE: ${{ runner.temp }}/live-acceptance/secrets/client.jwt
+          PEER_ID: ${{ secrets.PEER_ID }}
+          PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
+        run: |
+          set -uo pipefail
+          artifact_root="$RUNNER_TEMP/live-acceptance/proxy-pair"
+          mkdir -p "$artifact_root"
+          report_file="$artifact_root/report.json"
+          python3 -m baleobala.cli vpn netns-session \
+            --kind proxy-pair \
+            --server-jwt-file "$SERVER_JWT_FILE" \
+            --client-jwt-file "$CLIENT_JWT_FILE" \
+            --peer-id "$PEER_ID" \
+            --proxy-secret "$PROXY_SECRET" \
+            --artifact-dir "$artifact_root" \
+            --bundle-label proxy-pair \
+            --json > "$report_file"
+          session_rc=$?
+          bundle_dir="$(find "$artifact_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+          if [ -z "$bundle_dir" ]; then
+            bundle_dir="$artifact_root"
+          fi
+          echo "bundle_dir=$bundle_dir" >> "$GITHUB_OUTPUT"
+          echo "session_rc=$session_rc" >> "$GITHUB_OUTPUT"
+
+      - name: Upload proxy-pair bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpn-netns-artifacts-proxy-pair
+          path: ${{ steps.proxy_pair.outputs.bundle_dir }}
+
+      - name: Validate proxy-pair bundle
+        env:
+          SESSION_RC: ${{ steps.proxy_pair.outputs.session_rc }}
+        run: |
+          set -euo pipefail
+          bundle_dir="${{ steps.proxy_pair.outputs.bundle_dir }}"
+          if [ -z "$bundle_dir" ] || [ ! -d "$bundle_dir" ]; then
+            echo "proxy-pair bundle directory was not created" >&2
+            exit 1
+          fi
+          analysis_file="$(dirname "$bundle_dir")/analysis.json"
+          python3 -m baleobala.cli vpn analyze-bundle "$bundle_dir" --json > "$analysis_file"
+          python3 -c 'import json, os, sys; session_rc = int(os.environ["SESSION_RC"]); payload = json.load(open(sys.argv[1], encoding="utf-8")); classification = payload.get("classification"); bundle = sys.argv[2]; sys.exit(f"proxy-pair session failed with exit code {session_rc}") if session_rc != 0 else None; sys.exit(f"proxy-pair bundle classified as {classification!r} at {bundle}") if classification != "accepted_flow" else None' "$analysis_file" "$bundle_dir"
+
+      - name: Run tunnel-pair acceptance
+        id: tunnel_pair
+        env:
+          SERVER_JWT_FILE: ${{ runner.temp }}/live-acceptance/secrets/server.jwt
+          CLIENT_JWT_FILE: ${{ runner.temp }}/live-acceptance/secrets/client.jwt
+          PEER_ID: ${{ secrets.PEER_ID }}
+        run: |
+          set -uo pipefail
+          artifact_root="$RUNNER_TEMP/live-acceptance/tunnel-pair"
+          mkdir -p "$artifact_root"
+          report_file="$artifact_root/report.json"
+          python3 -m baleobala.cli vpn netns-session \
+            --kind tunnel-pair \
+            --server-jwt-file "$SERVER_JWT_FILE" \
+            --client-jwt-file "$CLIENT_JWT_FILE" \
+            --peer-id "$PEER_ID" \
+            --transport auto \
+            --full-device \
+            --artifact-dir "$artifact_root" \
+            --bundle-label tunnel-pair \
+            --json > "$report_file"
+          session_rc=$?
+          bundle_dir="$(find "$artifact_root" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+          if [ -z "$bundle_dir" ]; then
+            bundle_dir="$artifact_root"
+          fi
+          echo "bundle_dir=$bundle_dir" >> "$GITHUB_OUTPUT"
+          echo "session_rc=$session_rc" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tunnel-pair bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpn-netns-artifacts-tunnel-pair
+          path: ${{ steps.tunnel_pair.outputs.bundle_dir }}
+
+      - name: Validate tunnel-pair bundle
+        env:
+          SESSION_RC: ${{ steps.tunnel_pair.outputs.session_rc }}
+        run: |
+          set -euo pipefail
+          bundle_dir="${{ steps.tunnel_pair.outputs.bundle_dir }}"
+          if [ -z "$bundle_dir" ] || [ ! -d "$bundle_dir" ]; then
+            echo "tunnel-pair bundle directory was not created" >&2
+            exit 1
+          fi
+          analysis_file="$(dirname "$bundle_dir")/analysis.json"
+          python3 -m baleobala.cli vpn analyze-bundle "$bundle_dir" --json > "$analysis_file"
+          python3 -c 'import json, os, sys; session_rc = int(os.environ["SESSION_RC"]); payload = json.load(open(sys.argv[1], encoding="utf-8")); classification = payload.get("classification"); bundle = sys.argv[2]; sys.exit(f"tunnel-pair session failed with exit code {session_rc}") if session_rc != 0 else None; sys.exit(f"tunnel-pair bundle classified as {classification!r} at {bundle}") if classification != "accepted_flow" else None' "$analysis_file" "$bundle_dir"

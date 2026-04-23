@@ -1,0 +1,19 @@
+name: Weekly macOS Acceptance
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  macos-acceptance:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run native acceptance contract checks
+        run: ./scripts/acceptance-macos-native.sh
+
+      - name: Verify debug-local build
+        run: ./scripts/build-macos.sh debug-local

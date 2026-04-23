@@ -664,6 +664,10 @@ class NetnsSessionRunner:
                 started=[],
                 stopped=[],
                 markers=[],
+                call_established="no",
+                transport_selected="",
+                data_flow_ok="no",
+                teardown_clean="no",
                 failure_class=preflight.last_error or "infra",
                 failure_code=preflight.last_error or "preflight_failed",
                 recorder=recorder,
@@ -671,7 +675,7 @@ class NetnsSessionRunner:
             return self._report(ok=False, stage="preflight", readiness="failed", failure_class="infra", failure_code=preflight.last_error or "preflight_failed", run_id=recorder.run_id, last_success_stage=recorder.last_success_stage, failed_stage="preflight", artifact_bundle=str(bundle_dir), last_error=preflight.last_error)
         setup = self._harness.setup()
         if not setup.ok:
-            self._write_bundle(bundle_dir, scenario=scenario, setup=setup, smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)), teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)), started=[], stopped=[], markers=[], failure_class="infra", failure_code=setup.last_error or "setup_failed", recorder=recorder)
+            self._write_bundle(bundle_dir, scenario=scenario, setup=setup, smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)), teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)), started=[], stopped=[], markers=[], call_established="no", transport_selected="", data_flow_ok="no", teardown_clean="no", failure_class="infra", failure_code=setup.last_error or "setup_failed", recorder=recorder)
             return self._report(ok=False, stage="setup", readiness="failed", harness_steps=setup.steps, last_error=setup.last_error, failure_class="infra", failure_code=setup.last_error or "setup_failed", run_id=recorder.run_id, last_success_stage=recorder.last_success_stage, failed_stage="setup", artifact_bundle=str(bundle_dir))
         recorder.event(
             "setup_completed",
@@ -690,7 +694,7 @@ class NetnsSessionRunner:
                 bundle_ok=False,
                 legacy_failure_class=_classify_network_failure(network) or "runtime_setup_failed",
             )
-            self._write_bundle(bundle_dir, scenario=scenario, setup=setup, smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)), teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)), started=[], stopped=[], markers=[], failure_class="infra", failure_code=failure.failure_code, recorder=recorder, network=network.to_dict())
+            self._write_bundle(bundle_dir, scenario=scenario, setup=setup, smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)), teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)), started=[], stopped=[], markers=[], call_established="no", transport_selected="", data_flow_ok="no", teardown_clean="no", failure_class="infra", failure_code=failure.failure_code, recorder=recorder, network=network.to_dict())
             return self._report(ok=False, stage="runtime_setup", readiness="failed", tun_created=network_setup["tun_created"], routes_programmed=network_setup["routes_programmed"], dns_configured=network_setup["dns_configured"], nat_configured=network_setup["nat_configured"], carrier_bypass_configured=network_setup["carrier_bypass_configured"], default_route_active=network_setup["default_route_active"], failure_class="infra", failure_code=failure.failure_code, run_id=recorder.run_id, last_success_stage=recorder.last_success_stage, failed_stage="runtime_setup", artifact_bundle=str(bundle_dir), harness_steps=setup.steps + network.steps, last_error=network.last_error)
 
         started = self._process_manager.start(
@@ -728,6 +732,10 @@ class NetnsSessionRunner:
             recorder.event("readiness_failed", stage="readiness_wait", outcome="failure", error_message=ready_error, failure_class="call_setup", failure_code="call_setup_timeout")
         elif _has_marker(markers, "call_established"):
             recorder.event("call_established", stage="readiness_wait", outcome="success", transport_selected=_marker_value(markers, "transport_selected="))
+        call_established = "yes" if _has_marker(markers, "call_established") else "no"
+        transport_selected = _marker_value(markers, "transport_selected=")
+        data_flow_ok = "yes" if smoke.ok and ready else "no"
+        teardown_clean = "yes" if teardown.ok and network_teardown.ok else "no"
         bundle_ok = self._write_bundle(
             bundle_dir,
             scenario=scenario,
@@ -737,6 +745,10 @@ class NetnsSessionRunner:
             started=started,
             stopped=stopped,
             markers=markers,
+            call_established=call_established,
+            transport_selected=transport_selected,
+            data_flow_ok=data_flow_ok,
+            teardown_clean=teardown_clean,
             failure_class="" if ok else (_classify_network_failure(network) or _classify_network_failure(network_teardown) or "product_bug"),
             failure_code=ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error,
             recorder=recorder,
@@ -749,10 +761,6 @@ class NetnsSessionRunner:
         final_markers = self._collect_markers(stopped)
         if final_markers:
             markers = final_markers
-        call_established = "yes" if _has_marker(markers, "call_established") else "no"
-        transport_selected = _marker_value(markers, "transport_selected=")
-        data_flow_ok = "yes" if smoke.ok and ready else "no"
-        teardown_clean = "yes" if teardown.ok and network_teardown.ok else "no"
         from baleobala.control.analyzer import analyze_bundle
         final_failure = classify_failure(ready=ready, smoke_ok=smoke.ok, setup_ok=setup.ok, teardown_ok=teardown.ok and network_teardown.ok, last_error=ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error, bundle_ok=bundle_ok, markers=markers, legacy_failure_class=_classify_network_failure(network) or _classify_network_failure(network_teardown))
         bundle_analysis = analyze_bundle(bundle_dir)
@@ -1144,6 +1152,10 @@ class NetnsSessionRunner:
         started: list[NetnsProcessStatus],
         stopped: list[NetnsProcessStatus],
         markers: list[str],
+        call_established: str,
+        transport_selected: str,
+        data_flow_ok: str,
+        teardown_clean: str,
         failure_class: str,
         failure_code: str,
         recorder: StructuredEventRecorder,
@@ -1159,8 +1171,10 @@ class NetnsSessionRunner:
                 "failure_code": failure_code,
                 "last_success_stage": recorder.last_success_stage,
                 "failed_stage": recorder.failed_stage,
-                "transport_selected": _marker_value(markers, "transport_selected="),
-                "call_established": "yes" if _has_marker(markers, "call_established") else "no",
+                "transport_selected": transport_selected,
+                "call_established": call_established,
+                "data_flow_ok": data_flow_ok,
+                "teardown_clean": teardown_clean,
                 "smoke_kind": str(scenario_payload.get("smoke_kind", "")) if isinstance(scenario_payload, dict) else "",
                 "artifact_bundle": str(bundle_dir),
             }
@@ -1173,6 +1187,11 @@ class NetnsSessionRunner:
                 "started": [item.to_dict() for item in started],
                 "stopped": [item.to_dict() for item in stopped],
                 "markers": markers,
+                "call_established": call_established,
+                "transport_selected": transport_selected,
+                "data_flow_ok": data_flow_ok,
+                "teardown_clean": teardown_clean,
+                "artifact_bundle": str(bundle_dir),
                 "network": network or {},
                 "failure_class": failure_class,
                 "failure_code": failure_code,
