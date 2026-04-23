@@ -1,8 +1,8 @@
 # Baleobala macOS Native Integration
 
-This directory holds the native macOS app and packet-tunnel extension scaffold, plus the shared configuration and transport contract that the Python control plane depends on.
+This directory holds the native macOS companion app and packet-tunnel extension scaffold, plus the shared configuration and transport contract that the Python control plane depends on.
 
-The app is the control surface: it installs the packet-tunnel profile into System Settings, shows the installed profile state, and starts/stops the tunnel.
+The native app is the system-control companion: it installs the packet-tunnel profile into System Settings, shows tunnel readiness, and starts or stops the macOS tunnel after sign-in and pairing are already handled in the shared CLI/Qt flow.
 
 ## Shape
 
@@ -51,19 +51,32 @@ For a normal signed build:
 ./scripts/build-macos.sh build
 ```
 
-For an archive suitable for distribution:
+For a Release archive suitable for distribution:
 
 ```bash
 ./scripts/build-macos.sh archive
 ```
 
-To export a signed archive, first set `EXPORT_OPTIONS_PLIST` to a valid export options plist and then run:
+To export a signed archive for direct distribution:
 
 ```bash
-EXPORT_OPTIONS_PLIST=/path/to/ExportOptions.plist ./scripts/build-macos.sh export
+./scripts/build-macos.sh export
 ```
 
-The build script intentionally separates `build`, `archive`, and `export` because the last two steps require the real signing and provisioning environment from Xcode/Apple Developer tooling.
+To notarize and staple the exported app:
+
+```bash
+./scripts/build-macos.sh notarize
+./scripts/build-macos.sh staple
+```
+
+To run the full release pipeline:
+
+```bash
+./scripts/build-macos.sh release
+```
+
+The release pipeline expects real signing, provisioning, and notarization inputs from the local Apple Developer environment. The repo ships the command surface and validation; it does not store certificates, provisioning profiles, or notarization credentials.
 
 ## Acceptance
 
@@ -77,34 +90,105 @@ That script validates:
 
 - app-group consistency across Swift constants and entitlements,
 - packet-tunnel bundle identifier consistency,
+- network-extension entitlement presence on the packet-tunnel target,
 - presence of versioned control/status handling in the packet-tunnel provider,
 - local unsigned Xcode compilation of the macOS targets.
 
-## Production Checklist
+Run the release-gate checks with real signing inputs configured:
 
-To finish real macOS shipping outside this repo, the remaining steps are:
+```bash
+./scripts/acceptance-macos-native.sh release
+```
 
-1. Configure a real Apple Developer team, signing certificates, and provisioning profiles for both the app target and the packet-tunnel extension.
-2. Enable the same app group and Network Extension entitlement in the Developer portal that the code expects locally.
-3. Verify that the app target and packet-tunnel target share the same keychain-access and app-group assumptions on a real machine.
-4. Archive and export a signed app from Xcode or `./scripts/build-macos.sh archive` plus `export`.
-5. Install the exported app on a clean macOS machine and verify `NETunnelProviderManager` install, update, enable, connect, disconnect, and uninstall behavior.
-6. Validate that route, DNS, and teardown behavior match the Python runtime status and probe output during real tunnel sessions.
+Release acceptance additionally fails when:
 
-## Pairing Exchange
+- the effective `DEVELOPMENT_TEAM` is still empty,
+- app or packet-tunnel provisioning inputs are missing,
+- code-sign identity is missing,
+- the direct-distribution export options plist is missing or invalid.
 
-The repo now supports a versioned pairing request/response flow on the Python side. Until a remote provisioning service exists, the practical bridge is file exchange:
+## Direct Distribution Runbook
 
-1. On the initiator, create a pairing and export a request bundle:
-   `baleobala pair export-request --profile-id <id>`
-2. Transfer that JSON bundle to the responder.
-3. On the responder, accept it and emit a response bundle:
-   `baleobala pair accept-request --request-file request.json`
-4. Transfer the response JSON back to the initiator.
-5. On the initiator, apply it:
-   `baleobala pair apply-response --response-file response.json`
+The supported ship-ready path is direct distribution outside the Mac App Store.
 
-That file-mediated flow is the current stand-in for a future server-backed provisioning exchange.
+### 1. Apple-side prerequisites
+
+- Create Developer ID signing assets for the macOS app.
+- Create provisioning profiles for both `com.baleobala.app` and `com.baleobala.app.packet-tunnel`.
+- Enable the app group `group.com.baleobala.vpn` for both targets.
+- Enable the `packet-tunnel-provider` Network Extension entitlement for the packet-tunnel target.
+- Configure a notarytool keychain profile on the release machine.
+
+### 2. Local release inputs
+
+Set these before running any signed build or release command:
+
+```bash
+export MACOS_DEVELOPMENT_TEAM=YOURTEAMID
+export MACOS_CODE_SIGN_IDENTITY="Developer ID Application: Your Name (YOURTEAMID)"
+export MACOS_APP_PROFILE_SPECIFIER="Baleobala Direct App"
+export MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER="Baleobala Packet Tunnel"
+export MACOS_NOTARY_PROFILE="baleobala-notary"
+```
+
+`EXPORT_OPTIONS_PLIST` defaults to `native/macos/ExportOptions.direct.plist`. The build script expands that template into a generated plist with the resolved team and provisioning-profile values at export time. Override it only when the release machine needs a different direct-distribution export configuration.
+
+### 3. Repo validation and release build
+
+Validate the release inputs:
+
+```bash
+./scripts/build-macos.sh validate-release-env
+./scripts/acceptance-macos-native.sh release
+```
+
+Create the distributable app:
+
+```bash
+./scripts/build-macos.sh release
+```
+
+Artifacts land under `build/macos/`:
+
+- `archive/Baleobala.xcarchive`
+- `export/Baleobala.app`
+- `notary/submission.json`
+- `release-metadata.txt`
+
+### 4. Clean-machine release validation
+
+Install the stapled exported app on a clean macOS machine and verify:
+
+1. first install succeeds without Xcode present,
+2. `NETunnelProviderManager` installs the profile,
+3. enable, connect, disconnect, and relaunch all work,
+4. upgrading from the previous shipped app preserves or safely refreshes the profile,
+5. uninstall removes app state without leaving a stuck tunnel profile.
+
+### 5. Runtime validation during a real tunnel session
+
+During a real signed session, verify:
+
+- the packet tunnel connects to the same carrier socket contract the Python runtime exposes,
+- route behavior matches the configured included and excluded route plan,
+- DNS servers and search domains applied by the extension match the shared tunnel profile,
+- teardown restores the machine to a clean post-disconnect state,
+- Python-side probe or status output agrees with the native app’s connected state.
+
+## Relay Provisioning
+
+Relay pairing is now modeled as a provisioning workflow instead of a JSON file exchange:
+
+1. Enroll the relay:
+   `baleobala pair enroll --name home-relay --role client`
+2. Request access for the current device:
+   `baleobala pair request-access --profile-id <id>`
+3. Approve the pending request from an authorized owner session:
+   `baleobala pair approve --profile-id <id>`
+4. Sync local state and credentials when needed:
+   `baleobala pair sync --profile-id <id>`
+
+The older `export-request`, `accept-request`, and `apply-response` commands remain debug-only compatibility paths.
 
 ## Local Run
 

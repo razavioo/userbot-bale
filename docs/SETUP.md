@@ -1,6 +1,7 @@
 # Getting Started
 
 This guide covers the current repo state and the easiest way to install and try it on Linux and macOS.
+The main user journey is `doctor -> auth -> pair -> connect`.
 
 For production-facing setup, prefer `baleobala doctor`, `baleobala auth bale-login`,
 `baleobala pair ...`, `baleobala relay ...`, `baleobala vpn ...`, and `baleobala gui`.
@@ -68,14 +69,13 @@ For now, macOS users should treat the proxy path as fallback/debug mode and the 
 ## Verify the install
 
 ```bash
-baleobala loopback "hello" "world"
-baleobala tunnel-loopback
 baleobala doctor
 baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
+baleobala pair enroll --name home-relay
 baleobala vpn status
 ```
 
-If these pass, the codec and tunnel core are healthy and the local machine has the baseline dependencies it needs.
+If these pass, the machine is ready for the main sign-in, pairing, and secure-connection path.
 
 ## Current troubleshooting
 
@@ -85,7 +85,7 @@ If these pass, the codec and tunnel core are healthy and the local machine has t
 - If `baleobala doctor` reports missing `sounddevice`, re-check the Python environment that is currently active.
 - If `baleobala doctor` is green but the proxy still fails, test `baleobala tunnel-loopback` first so we know the byte-tunnel core is healthy.
 - If `baleobala vpn up` complains about auth or your stored JWT has expired, run `baleobala auth bale-login --phone ... --save` first and then retry with the saved session.
-- If `baleobala relay enable` says there is no pairing record, create one with `baleobala pair start` and `baleobala pair accept` first.
+- If `baleobala relay enable` says there is no pairing record, create one with `baleobala pair enroll`, then request and approve access first.
 - If a paired relay already exists locally, `baleobala vpn up` will use the most recently used paired relay automatically.
 - If you want the app to come back on login on macOS, run `baleobala vpn agent install` once after pairing.
 - On macOS, `vpn up` now prefers the packet-tunnel backend recorded in the saved profile. If you explicitly choose the proxy fallback, `vpn down` restores the stored system proxy settings.

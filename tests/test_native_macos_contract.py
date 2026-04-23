@@ -56,4 +56,5 @@ def test_build_and_acceptance_scripts_cover_archive_and_validation() -> None:
     assert "export" in build_script
     assert "xcodebuild" in acceptance_script
     assert "acceptance-macos-native.sh" in readme
-    assert "pair export-request" in readme
+    assert "pair enroll" in readme
+    assert "request-access" in readme

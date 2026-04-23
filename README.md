@@ -1,10 +1,12 @@
 # baleobala
 
-`baleobala` is a CLI and GUI project for Bale login, pairing, and tunnel/proxy flows.
+`baleobala` is a CLI and GUI project for Bale sign-in, relay pairing, and secure connection flows.
 
 Production-facing commands are `doctor`, `auth`, `pair`, `relay`, `vpn`, and `gui`.
 Low-level commands such as `loopback`, `tunnel-loopback`, `bale-call`, `bale-tunnel`, and
 `bale-proxy` remain available for engineering and debugging, not as parallel first-run paths.
+
+The main product path is: `doctor -> auth -> pair -> connect`.
 
 ## Install
 
@@ -29,7 +31,7 @@ baleobala gui
 
 - `doctor`: checks local readiness and required dependencies.
 - `auth bale-login`: runs the real Bale phone/SMS login flow and can save or export the JWT.
-- `gui`: launches the Qt app for login and connection flows.
+- `gui`: launches the guided desktop app for sign-in, pairing, and connection.
 
 ## Login Modes
 
@@ -59,8 +61,9 @@ baleobala vpn status
 baleobala vpn live-smoke --caller-jwt-file ~/.bale_jwt_a --callee-jwt-file ~/.bale_jwt_b --callee-peer-id 123456789
 baleobala vpn up
 baleobala vpn down
-baleobala pair start --name home-relay --role client
-baleobala pair accept --code "<pair-code>"
+baleobala pair enroll --name home-relay --role client
+baleobala pair request-access --profile-id "<profile-id>"
+baleobala pair approve --profile-id "<profile-id>"
 baleobala relay status
 ```
 
@@ -71,8 +74,9 @@ baleobala relay status
 - `--ws-ssl-no-verify` remains available only as a debug-only workaround and should not be used as a production path.
 - `vpn up`: starts the active VPN/proxy backend.
 - `vpn down`: stops the active backend and cleans up state.
-- `pair start`: creates a new pairing record.
-- `pair accept`: accepts and stores a pairing code.
+- `pair enroll`: creates a server-backed relay pairing record.
+- `pair request-access`: asks the control plane to authorize this device.
+- `pair approve`: completes owner approval and provisions credentials.
 - `relay status`: shows saved relay settings.
 
 ## Advanced And Debug Commands
@@ -90,7 +94,7 @@ baleobala recv
 - `recv`: reads audio input and prints decoded messages.
 
 These commands are useful for engineering and troubleshooting, but the production user path
-should stay centered on `auth`, `pair`, `relay`, `vpn`, and `gui`.
+should stay centered on `doctor`, `auth`, `pair`, `vpn`, and `gui`.
 
 ## When To Use What
 
