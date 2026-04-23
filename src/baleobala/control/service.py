@@ -142,7 +142,7 @@ class ControlService:
 
         revoked = pairing.revoked_at is not None or pairing.authorization_status == "revoked" or pairing.provisioning_status == "revoked" or pairing.status == "revoked"
         rejected = pairing.authorization_status == "rejected" or pairing.provisioning_status == "rejected" or pairing.status == "rejected"
-        pending = pairing.authorization_status in {"pending", "none"} or pairing.provisioning_status in {"pending", "enrolled"}
+        pending = pairing.authorization_status == "pending" or pairing.provisioning_status in {"pending", "enrolled"}
         incomplete = pairing.provisioning_status not in {"complete", "accepted", "paired"}
 
         if pairing.relay_id:
@@ -255,12 +255,12 @@ class ControlService:
 
         return gate
 
-    def _clear_active_backend(self) -> None:
+    def _clear_active_backend(self, *, shutdown: bool = True) -> None:
         self._stop_credential_watcher()
         backend = self._active_backend
         self._active_backend = None
         self._active_profile_id = None
-        if backend is not None:
+        if shutdown and backend is not None:
             try:
                 backend.down()
             except Exception:
@@ -768,7 +768,7 @@ class ControlService:
             backend.down()
         finally:
             if self._active_backend is backend:
-                self._clear_active_backend()
+                self._clear_active_backend(shutdown=False)
             elif self._active_backend is not None and self._active_profile_id in {None, profile.profile_id}:
                 self._clear_active_backend()
         return ConnectionSnapshot(
@@ -792,11 +792,11 @@ class ControlService:
         status = backend.status()
         probe = backend.probe().to_dict()
         if self._active_backend is backend and status.get("state") != "running":
-            self._clear_active_backend()
+            self._clear_active_backend(shutdown=False)
         if status.get("state") == "running" and probe.get("ok") == "no":
             backend.down()
             if self._active_backend is backend or self._active_backend is not None:
-                self._clear_active_backend()
+                self._clear_active_backend(shutdown=False)
             status = backend.status()
             status["state"] = "degraded"
             status["last_error"] = probe.get("detail", status.get("last_error", ""))

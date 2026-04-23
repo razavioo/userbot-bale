@@ -37,6 +37,7 @@ import contextlib
 import logging
 import queue
 import threading
+from urllib.parse import urlparse
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from enum import Enum
@@ -153,6 +154,17 @@ class LiveKitSession:
     def terminal_error(self) -> BaseException | None:
         with self._state_lock:
             return self._terminal_error
+
+    @property
+    def carrier_hosts(self) -> set[str]:
+        hosts = {"next-ws.bale.ai"}
+        parsed = urlparse(self.url)
+        hostname = parsed.hostname
+        if hostname is None and "://" not in self.url:
+            hostname = urlparse(f"//{self.url}").hostname
+        if hostname:
+            hosts.add(hostname)
+        return hosts
 
     def is_running(self) -> bool:
         return self._state_is(LiveKitSessionState.RUNNING)

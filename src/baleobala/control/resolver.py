@@ -9,6 +9,7 @@ state so that process crashes leave a paper trail a subsequent ``restore()``
 
 from __future__ import annotations
 
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -38,6 +39,9 @@ class ResolverSnapshot:
     interface: str | None = None
     dns_servers: tuple[str, ...] = ()
     routes: tuple[str, ...] = ()
+    bypass_hosts: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    default_gateway: str | None = None
+    default_gateway_iface: str | None = None
     prior_resolv_conf: str | None = None
     prior_resolvectl_dns: dict[str, list[str]] = field(default_factory=dict)
 
@@ -47,6 +51,9 @@ class ResolverSnapshot:
             "interface": self.interface,
             "dns_servers": list(self.dns_servers),
             "routes": list(self.routes),
+            "bypass_hosts": {host: list(ips) for host, ips in self.bypass_hosts.items()},
+            "default_gateway": self.default_gateway,
+            "default_gateway_iface": self.default_gateway_iface,
             "prior_resolv_conf": self.prior_resolv_conf,
             "prior_resolvectl_dns": self.prior_resolvectl_dns,
         }
@@ -58,6 +65,12 @@ class ResolverSnapshot:
             interface=data.get("interface"),
             dns_servers=tuple(data.get("dns_servers", [])),
             routes=tuple(data.get("routes", [])),
+            bypass_hosts={
+                str(host): tuple(ips)
+                for host, ips in dict(data.get("bypass_hosts", {})).items()
+            },
+            default_gateway=data.get("default_gateway"),
+            default_gateway_iface=data.get("default_gateway_iface"),
             prior_resolv_conf=data.get("prior_resolv_conf"),
             prior_resolvectl_dns=dict(data.get("prior_resolvectl_dns", {})),
         )
@@ -133,8 +146,15 @@ class LinuxResolver(_BaseResolver):
             interface=plan.interface,
             dns_servers=plan.dns_servers,
             routes=plan.routes,
+            default_gateway=self._snapshot.default_gateway,
+            default_gateway_iface=self._snapshot.default_gateway_iface,
+            bypass_hosts=dict(self._snapshot.bypass_hosts),
         )
         applied_routes: list[str] = []
+        gateway, gateway_iface = self._discover_default_route()
+        if gateway is not None:
+            snap.default_gateway = gateway
+            snap.default_gateway_iface = gateway_iface
         try:
             for route in plan.routes:
                 if plan.interface is None:
@@ -171,6 +191,8 @@ class LinuxResolver(_BaseResolver):
         if not self._snapshot.applied:
             return
         snap = self._snapshot
+        for host, ips in snap.bypass_hosts.items():
+            self._remove_bypass_routes(ips, snap.default_gateway, snap.default_gateway_iface)
         for route in snap.routes:
             if snap.interface:
                 self._run(["ip", "route", "del", route, "dev", snap.interface])
@@ -187,6 +209,78 @@ class LinuxResolver(_BaseResolver):
                 pass
         self._snapshot = ResolverSnapshot()
         self._clear_state()
+
+    def add_bypass_host(self, hostname: str) -> None:
+        if not hostname:
+            return
+        snap = self._snapshot
+        ips = self._resolve_host_ips(hostname)
+        if not ips:
+            raise RuntimeError(f"could not resolve bypass host {hostname!r}")
+        gateway, gateway_iface = self._ensure_default_route()
+        if gateway is None:
+            raise RuntimeError("could not determine real gateway for bypass host-route")
+        stored = dict(snap.bypass_hosts)
+        if stored.get(hostname) == ips and snap.applied:
+            return
+        self._program_bypass_routes(ips, gateway, gateway_iface)
+        stored[hostname] = ips
+        self._snapshot = ResolverSnapshot(
+            applied=True,
+            interface=snap.interface,
+            dns_servers=snap.dns_servers,
+            routes=snap.routes,
+            bypass_hosts=stored,
+            default_gateway=gateway,
+            default_gateway_iface=gateway_iface,
+            prior_resolv_conf=snap.prior_resolv_conf,
+            prior_resolvectl_dns=dict(snap.prior_resolvectl_dns),
+        )
+        self._persist()
+
+    def remove_bypass_host(self, hostname: str) -> None:
+        snap = self._snapshot
+        stored = dict(snap.bypass_hosts)
+        ips = stored.pop(hostname, None)
+        if ips is None:
+            ips = self._resolve_host_ips(hostname)
+        if not ips:
+            return
+        gateway = snap.default_gateway
+        gateway_iface = snap.default_gateway_iface
+        if gateway is None:
+            gateway, gateway_iface = self._discover_default_route()
+        self._remove_bypass_routes(ips, gateway, gateway_iface)
+        if stored:
+            self._snapshot = ResolverSnapshot(
+                applied=True,
+                interface=snap.interface,
+                dns_servers=snap.dns_servers,
+                routes=snap.routes,
+                bypass_hosts=stored,
+                default_gateway=gateway,
+                default_gateway_iface=gateway_iface,
+                prior_resolv_conf=snap.prior_resolv_conf,
+                prior_resolvectl_dns=dict(snap.prior_resolvectl_dns),
+            )
+            self._persist()
+        else:
+            self._snapshot = ResolverSnapshot()
+            if snap.routes or snap.dns_servers:
+                # Keep any route/DNS state managed by configure() intact.
+                self._snapshot = ResolverSnapshot(
+                    applied=True,
+                    interface=snap.interface,
+                    dns_servers=snap.dns_servers,
+                    routes=snap.routes,
+                    default_gateway=gateway,
+                    default_gateway_iface=gateway_iface,
+                    prior_resolv_conf=snap.prior_resolv_conf,
+                    prior_resolvectl_dns=dict(snap.prior_resolvectl_dns),
+                )
+                self._persist()
+            else:
+                self._clear_state()
 
     def _has(self, tool: str) -> bool:
         result = self._run(["which", tool])
@@ -209,6 +303,81 @@ class LinuxResolver(_BaseResolver):
             return Path("/etc/resolv.conf").read_text()
         except OSError:
             return None
+
+    def _discover_default_route(self) -> tuple[str | None, str | None]:
+        result = self._run(["ip", "route", "show", "default"])
+        if result.returncode != 0:
+            return (None, None)
+        for line in result.stdout.splitlines():
+            tokens = line.split()
+            if not tokens or tokens[0] != "default":
+                continue
+            gateway = None
+            iface = None
+            for idx, token in enumerate(tokens):
+                if token == "via" and idx + 1 < len(tokens):
+                    gateway = tokens[idx + 1]
+                elif token == "dev" and idx + 1 < len(tokens):
+                    iface = tokens[idx + 1]
+            return (gateway, iface)
+        return (None, None)
+
+    def _ensure_default_route(self) -> tuple[str | None, str | None]:
+        gateway = self._snapshot.default_gateway
+        gateway_iface = self._snapshot.default_gateway_iface
+        if gateway is not None:
+            return (gateway, gateway_iface)
+        gateway, gateway_iface = self._discover_default_route()
+        self._snapshot = ResolverSnapshot(
+            applied=self._snapshot.applied,
+            interface=self._snapshot.interface,
+            dns_servers=self._snapshot.dns_servers,
+            routes=self._snapshot.routes,
+            bypass_hosts=dict(self._snapshot.bypass_hosts),
+            default_gateway=gateway,
+            default_gateway_iface=gateway_iface,
+            prior_resolv_conf=self._snapshot.prior_resolv_conf,
+            prior_resolvectl_dns=dict(self._snapshot.prior_resolvectl_dns),
+        )
+        return (gateway, gateway_iface)
+
+    @staticmethod
+    def _resolve_host_ips(hostname: str) -> tuple[str, ...]:
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
+            if family not in {socket.AF_INET, socket.AF_INET6}:
+                continue
+            ip = sockaddr[0]
+            if ip in seen:
+                continue
+            seen.add(ip)
+            resolved.append(ip)
+        return tuple(resolved)
+
+    def _route_cmd(self, action: str, ip: str, gateway: str, iface: str | None) -> list[str]:
+        cmd = ["ip"]
+        if ":" in ip:
+            cmd.append("-6")
+        cmd.extend(["route", action, ip, "via", gateway])
+        if iface:
+            cmd.extend(["dev", iface])
+        return cmd
+
+    def _remove_bypass_routes(self, ips: tuple[str, ...], gateway: str | None, gateway_iface: str | None) -> None:
+        if gateway is None:
+            return
+        for ip in ips:
+            self._run(self._route_cmd("del", ip, gateway, gateway_iface))
+
+    def _program_bypass_routes(
+        self,
+        ips: tuple[str, ...],
+        gateway: str,
+        gateway_iface: str | None,
+    ) -> None:
+        for ip in ips:
+            self._run(self._route_cmd("replace", ip, gateway, gateway_iface))
 
     @staticmethod
     def _write_resolv_conf(

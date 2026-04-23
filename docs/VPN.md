@@ -70,6 +70,10 @@ sudo ./scripts/vpn-exit-node.sh vpn0 eth0
 The `tunnel exit-node` subcommand runs this second script automatically on
 startup (use `--skip-nat-setup` to disable).
 
+`LiveKitKeepalive` now starts automatically in `tunnel up`, `tunnel exit-node`,
+and `tunnel exit-node-mesh`, so the call path stays warm without any manual
+keepalive step.
+
 ## Manual Tunnel Bring-up
 
 ### Exit node side (start first — it needs to answer the call)
@@ -235,10 +239,11 @@ use a CA override instead of disabling TLS verification.
 - **Tunnel comes up but traffic doesn't flow** — verify both tun
   devices have addresses on the same /24 and MTU matches; `ping`
   between them first, then debug routing.
-- **Call drops after ~30 min** — the keepalive is wired into the VPN
-  entry points now, so this usually points to carrier connectivity or a
-  terminated process rather than a missing keepalive. Check `vpn
-  status`, LiveKit connectivity, and whether the process stayed alive.
+- **Call drops after ~30 min** — keepalive is wired into `tunnel up`,
+  `tunnel exit-node`, and `tunnel exit-node-mesh` via `LiveKitKeepalive`,
+  so this usually points to carrier connectivity or a terminated process
+  rather than a missing keepalive. Check `vpn status`, LiveKit
+  connectivity, and whether the process stayed alive.
 
 ## Self-test (no network)
 
