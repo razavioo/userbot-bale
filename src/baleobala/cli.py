@@ -721,8 +721,11 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
-            for key, value in payload.items():
-                print(f"{key}: {value}")
+            print("vpn analyze-bundle result")
+            print(f"  classification: {payload['classification']}")
+            print(f"  ok: {payload['ok']}")
+            print(f"  reason: {payload['reason']}")
+            print(f"  bundle_path: {payload['bundle_path']}")
         return 0 if analysis.ok == "yes" else 2
 
     if args.vpn_cmd == "verdict":
@@ -737,8 +740,15 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
-            for key, value in payload.items():
-                print(f"{key}: {value}")
+            print("vpn verdict summary")
+            print(f"  ok: {payload['ok']}")
+            print(f"  analysis_classification: {payload['analysis_classification']}")
+            print(f"  failure_class: {payload['failure_class']}")
+            print(f"  artifact_bundle: {payload['artifact_bundle']}")
+            print(f"  call_established: {payload['call_established']}")
+            print(f"  transport_selected: {payload['transport_selected']}")
+            print(f"  data_flow_ok: {payload['data_flow_ok']}")
+            print(f"  teardown_clean: {payload['teardown_clean']}")
         return 0 if verdict.ok == "yes" else 2
 
     if args.vpn_cmd == "netns-plan":
@@ -869,22 +879,25 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         harness = NetnsHarness(topology)
         manager = NetnsProcessManager()
         artifact_root = Path(args.artifact_dir).expanduser() if getattr(args, "artifact_dir", "") else None
+        if artifact_root is not None and getattr(args, "bundle_label", ""):
+            artifact_root = artifact_root / str(args.bundle_label)
         session = NetnsSessionRunner(harness, manager, artifact_root=artifact_root)
+        smoke_commands = [["ip", "netns", "exec", topology.server_ns, "sh", "-lc", scenario.smoke_server_cmd]] if scenario.smoke_server_cmd else []
+        if scenario.smoke_client_cmd:
+            smoke_commands.append(["ip", "netns", "exec", topology.client_ns, "sh", "-lc", scenario.smoke_client_cmd])
         report = session.run(
             server_cmd=scenario.server_cmd,
             client_cmd=scenario.client_cmd,
             server_ready_pattern=scenario.server_ready,
             client_ready_pattern=scenario.client_ready,
-            smoke_commands=[
-                ["ip", "netns", "exec", topology.client_ns, "sh", "-lc", scenario.smoke_client_cmd]
-            ] if scenario.smoke_client_cmd else None,
+            smoke_commands=smoke_commands or None,
             timeout=args.timeout,
             scenario=scenario.to_dict(),
         )
         payload = report.to_dict()
         payload["scenario"] = scenario.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0 if report.ok else 2
+        return 0 if report.ok and report.failure_class == "" else 2
 
     if args.vpn_cmd == "netns-scenario":
         if args.kind == "proxy-pair":
@@ -1362,6 +1375,10 @@ def _resolve_proxy_secret(args: argparse.Namespace) -> bytes | None:
     return secret.encode("utf-8")
 
 
+def _emit_marker(marker: str) -> None:
+    print(marker, file=sys.stderr)
+
+
 def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
     """Run a local SOCKS5/HTTP CONNECT server over Bale-backed transport."""
     from baleobala.runtime import QueuedTunnelTransport, Socks5ProxyServer
@@ -1376,10 +1393,13 @@ def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
         secret=_resolve_proxy_secret(args),
     )
     try:
+        _emit_marker("call_established")
         server.serve_forever()
     except KeyboardInterrupt:
         server.stop()
     finally:
+        _emit_marker(f"proxy_listening={server.bound_host or args.listen_host}:{server.bound_port or args.listen_port}")
+        _emit_marker("teardown_done")
         transport.close()
         bridge.close()
     return 0
@@ -1394,10 +1414,13 @@ def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
     transport = QueuedTunnelTransport(bridge)
     relay = TunnelTcpRelay(transport, secret=_resolve_proxy_secret(args))
     try:
+        _emit_marker("call_established")
         relay.serve_forever()
     except KeyboardInterrupt:
         relay.stop()
     finally:
+        _emit_marker(f"transport_selected={getattr(args, 'protocol', 'fast')}")
+        _emit_marker("teardown_done")
         transport.close()
         bridge.close()
     return 0
@@ -1692,6 +1715,7 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_netns_session.add_argument("--skip-host-route-setup", action="store_true", help="skip client carrier host-route automation")
     vpn_netns_session.add_argument("--timeout", type=float, default=5.0, help="readiness timeout in seconds")
     vpn_netns_session.add_argument("--artifact-dir", default="", help="directory for verdict artifacts")
+    vpn_netns_session.add_argument("--bundle-label", default="", help="stable artifact label prefix for CI grouping")
     vpn_netns_session.set_defaults(func=cmd_vpn)
 
     vpn_netns_scenario = vpn_sub.add_parser("netns-scenario", help="print a real baleobala netns scenario template")

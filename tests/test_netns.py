@@ -137,6 +137,26 @@ class FakeReadyPopen(FakePopen):
             stdout.flush()
 
 
+def test_marker_parser_uses_exact_lines_only() -> None:
+    from baleobala.control.netns import _parse_marker_lines
+
+    text = "noise call_established noise\ncall_established\ntransport_selected=dc\nrandom proxy_listening=1.2.3.4:5 text\nproxy_listening=127.0.0.1:1080\n"
+    markers = _parse_marker_lines(text)
+    assert "call_established" in markers
+    assert "transport_selected=dc" in markers
+    assert "proxy_listening=127.0.0.1:1080" in markers
+    assert all("noise" not in item for item in markers)
+
+
+def test_marker_parser_deduplicates_and_ignores_substrings() -> None:
+    from baleobala.control.netns import _parse_marker_lines
+
+    text = "call_established\ncall_established\nteardown_done\nnot-a-teardown_done-marker\n"
+    markers = _parse_marker_lines(text)
+    assert markers.count("call_established") == 1
+    assert markers.count("teardown_done") == 1
+
+
 def test_netns_process_manager_start_stop_status(tmp_path) -> None:
     manager = NetnsProcessManager(
         state_path=tmp_path / "proc.json",
@@ -182,7 +202,7 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     report = session.run(
         server_cmd=["sh", "-lc", "echo ready"],
         client_cmd=["sh", "-lc", "echo ready"],
-        scenario={"expected_markers": ["call_established", "transport_selected="]},
+        scenario={"required_markers": ["call_established", "transport_selected="], "smoke_kind": "tcp-connect-echo"},
         timeout=0.2,
     )
     assert report.ok
@@ -195,7 +215,6 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     assert report.artifact_bundle
     assert report.run_id
     assert report.failure_code == ""
-    assert any(step["phase"] == "smoke" for step in report.harness_steps)
     assert "call_established" in report.log_tails["server"]
     bundle = next(artifact_root.glob("bb-*"))
     verdict = json.loads((bundle / "verdict.json").read_text(encoding="utf-8"))
@@ -204,8 +223,13 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     assert verdict["failure_code"] == ""
     assert (bundle / "summary.json").exists()
     assert (bundle / "events.jsonl").exists()
+    assert (bundle / "route_snapshot.json").exists()
+    assert (bundle / "dns_snapshot.json").exists()
+    assert (bundle / "command_transcript.json").exists()
     assert (bundle / "server.log").exists()
     assert (bundle / "client.log").exists()
+    summary = json.loads((bundle / "summary.json").read_text(encoding="utf-8"))
+    assert summary["smoke_kind"] == "tcp-connect-echo"
 
 
 def test_netns_session_runner_times_out_when_patterns_never_appear(tmp_path) -> None:
@@ -223,7 +247,7 @@ def test_netns_session_runner_times_out_when_patterns_never_appear(tmp_path) -> 
     report = session.run(
         server_cmd=["sh", "-lc", "echo nope"],
         client_cmd=["sh", "-lc", "echo nope"],
-        scenario={"expected_markers": ["call_established"]},
+        scenario={"required_markers": ["call_established"]},
         timeout=0.1,
     )
     assert not report.ok
@@ -249,12 +273,12 @@ def test_netns_session_runner_uses_custom_smoke_commands(tmp_path) -> None:
     report = session.run(
         server_cmd=["sh", "-lc", "echo ready"],
         client_cmd=["sh", "-lc", "echo ready"],
-        scenario={"expected_markers": ["call_established"]},
+        scenario={"required_markers": ["call_established"]},
         smoke_commands=[["ip", "netns", "exec", "bb-client", "sh", "-lc", "echo smoke"]],
         timeout=0.2,
     )
     assert report.ok
-    assert any(step["phase"] == "smoke-custom" for step in report.harness_steps)
+    assert any(step["phase"] == "smoke" for step in report.harness_steps)
 
 
 def test_netns_scenario_includes_verdict_markers() -> None:
@@ -265,8 +289,21 @@ def test_netns_scenario_includes_verdict_markers() -> None:
         proxy_secret="secret",
     )
     payload = scenario.to_dict()
-    assert "expected_markers" in payload
+    assert "required_markers" in payload
     assert "smoke_kind" in payload
+    assert "smoke_server_cmd" in payload
+
+
+def test_proxy_scenario_uses_real_socks_smoke_commands() -> None:
+    scenario = build_proxy_pair_scenario(
+        server_jwt_file="/tmp/server.jwt",
+        client_jwt_file="/tmp/client.jwt",
+        peer_id=7,
+        proxy_secret="secret",
+    )
+    assert "listener.bind(('0.0.0.0', 18080))" in scenario.smoke_server_cmd
+    assert "proxy.sendall(b'\\x05\\x01\\x00')" in scenario.smoke_client_cmd
+    assert "transport_selected=" not in scenario.smoke_client_cmd
 
 
 def test_netns_session_runner_applies_tunnel_network_plan(tmp_path) -> None:
@@ -287,7 +324,8 @@ def test_netns_session_runner_applies_tunnel_network_plan(tmp_path) -> None:
         client_cmd=["sh", "-lc", "echo ready"],
         scenario={
             "kind": "tunnel-pair",
-            "expected_markers": ["call_established", "transport_selected=", "tunnel_up="],
+            "smoke_kind": "tunnel-payload",
+            "required_markers": ["call_established", "transport_selected=", "tunnel_up="],
             "network_plan": {
                 "full_device": True,
                 "dns_servers": ["1.1.1.1"],
@@ -326,6 +364,13 @@ def test_netns_session_runner_applies_tunnel_network_plan(tmp_path) -> None:
     assert any("ip netns exec bb-client ip route replace next-ws.bale.ai via 172.29.0.2 dev bb-vc" in cmd for cmd in commands)
     assert any("ip netns exec bb-client ip route replace default via 10.77.0.1 dev vpn0 metric 50" in cmd for cmd in commands)
     assert any("mkdir -p /etc/netns/bb-client" in cmd for cmd in commands)
+    bundle = next((tmp_path / "artifacts").glob("bb-*"))
+    summary = json.loads((bundle / "summary.json").read_text(encoding="utf-8"))
+    snapshots = json.loads((bundle / "route_snapshot.json").read_text(encoding="utf-8"))
+    dns_snapshots = json.loads((bundle / "dns_snapshot.json").read_text(encoding="utf-8"))
+    assert summary["smoke_kind"] == "tunnel-payload"
+    assert "client" in snapshots
+    assert "client" in dns_snapshots
 
 
 def test_netns_session_runner_classifies_nat_setup_failures(tmp_path) -> None:
@@ -346,7 +391,7 @@ def test_netns_session_runner_classifies_nat_setup_failures(tmp_path) -> None:
         client_cmd=["sh", "-lc", "echo ready"],
         scenario={
             "kind": "tunnel-pair",
-            "expected_markers": ["call_established"],
+            "required_markers": ["call_established"],
             "network_plan": {
                 "full_device": True,
                 "dns_servers": ["1.1.1.1"],
@@ -370,5 +415,5 @@ def test_netns_session_runner_classifies_nat_setup_failures(tmp_path) -> None:
         timeout=0.2,
     )
     assert report.ok is False
-    assert report.failure_class == "environment"
+    assert report.failure_class == "infra"
     assert report.failure_code == "nat_setup_failed"
