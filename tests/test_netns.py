@@ -219,6 +219,11 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     bundle = next(artifact_root.glob("bb-*"))
     verdict = json.loads((bundle / "verdict.json").read_text(encoding="utf-8"))
     assert "transport_selected=dc" in verdict["markers"]
+    assert verdict["call_established"] == "yes"
+    assert verdict["transport_selected"] == "dc"
+    assert verdict["data_flow_ok"] == "yes"
+    assert verdict["teardown_clean"] == "yes"
+    assert verdict["artifact_bundle"] == str(bundle)
     assert verdict["failure_class"] == ""
     assert verdict["failure_code"] == ""
     assert (bundle / "summary.json").exists()
