@@ -33,6 +33,8 @@ import logging
 import queue
 from typing import Optional
 
+from baleobala.bale.messaging_backend import MessagingBackend
+
 log = logging.getLogger(__name__)
 
 # Prefix so plain text messages from the peer don't get confused with
@@ -49,7 +51,7 @@ class RpcTransport:
     MTU = 3 * 1024  # conservative below Bale's message length cap
     RATE_HINT = 4_000.0  # bytes/s; store-and-forward, high latency
 
-    def __init__(self, api_client, peer_id: int) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, api_client: MessagingBackend, peer_id: int) -> None:
         self.mtu = self.MTU
         self.rate_hint = self.RATE_HINT
         self._client = api_client

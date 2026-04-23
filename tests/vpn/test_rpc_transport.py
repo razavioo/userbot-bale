@@ -1,7 +1,4 @@
-"""
-RpcTransport with a stub BaleApiClient. Verifies the framing +
-dispatch logic works once the two hooks on the real client exist.
-"""
+"""RpcTransport over any Bale messaging backend."""
 
 from __future__ import annotations
 
@@ -58,3 +55,11 @@ def test_raises_when_send_unimplemented():
     t = RpcTransport(Bare(), peer_id=1)
     with pytest.raises(RpcTransportNotReady):
         t.send_bytes(b"x")
+
+
+def test_close_is_idempotent() -> None:
+    api = _StubApi()
+    t = RpcTransport(api, peer_id=1)
+    t.close()
+    t.close()
+    assert t.recv_bytes(timeout=0.01) is None
