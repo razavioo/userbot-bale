@@ -746,6 +746,11 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 server_wan=args.server_wan,
                 transport=args.transport,
                 psk_file=args.psk_file,
+                full_device=args.full_device,
+                dns_servers=tuple(args.dns_server or ("1.1.1.1", "9.9.9.9")),
+                carrier_hosts=tuple(args.carrier_host or ("next-ws.bale.ai",)),
+                skip_nat_setup=args.skip_nat_setup,
+                skip_host_route_setup=args.skip_host_route_setup,
             )
         topology = NetnsTopology.with_prefix(args.prefix)
         harness = NetnsHarness(topology)
@@ -787,6 +792,11 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 server_wan=args.server_wan,
                 transport=args.transport,
                 psk_file=args.psk_file,
+                full_device=args.full_device,
+                dns_servers=tuple(args.dns_server or ("1.1.1.1", "9.9.9.9")),
+                carrier_hosts=tuple(args.carrier_host or ("next-ws.bale.ai",)),
+                skip_nat_setup=args.skip_nat_setup,
+                skip_host_route_setup=args.skip_host_route_setup,
             )
         print(json.dumps(scenario.to_dict(), indent=2, sort_keys=True))
         return 0
@@ -1515,6 +1525,12 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_netns_session.add_argument("--server-wan", default="eth0")
     vpn_netns_session.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc"], default="auto")
     vpn_netns_session.add_argument("--psk-file", default="")
+    vpn_netns_session.add_argument("--full-device", dest="full_device", action="store_true", default=True, help="enable client default-route, DNS, and egress automation")
+    vpn_netns_session.add_argument("--tunnel-only", dest="full_device", action="store_false", help="disable default-route, DNS, and egress automation for tunnel-pair")
+    vpn_netns_session.add_argument("--dns-server", action="append", default=[], help="DNS server to configure inside the client namespace")
+    vpn_netns_session.add_argument("--carrier-host", action="append", default=[], help="carrier host that should bypass the tunnel")
+    vpn_netns_session.add_argument("--skip-nat-setup", action="store_true", help="skip server NAT/forwarding automation")
+    vpn_netns_session.add_argument("--skip-host-route-setup", action="store_true", help="skip client carrier host-route automation")
     vpn_netns_session.add_argument("--timeout", type=float, default=5.0, help="readiness timeout in seconds")
     vpn_netns_session.add_argument("--artifact-dir", default="", help="directory for verdict artifacts")
     vpn_netns_session.set_defaults(func=cmd_vpn)
@@ -1531,6 +1547,12 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_netns_scenario.add_argument("--server-wan", default="eth0")
     vpn_netns_scenario.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc"], default="auto")
     vpn_netns_scenario.add_argument("--psk-file", default="")
+    vpn_netns_scenario.add_argument("--full-device", dest="full_device", action="store_true", default=True)
+    vpn_netns_scenario.add_argument("--tunnel-only", dest="full_device", action="store_false")
+    vpn_netns_scenario.add_argument("--dns-server", action="append", default=[])
+    vpn_netns_scenario.add_argument("--carrier-host", action="append", default=[])
+    vpn_netns_scenario.add_argument("--skip-nat-setup", action="store_true")
+    vpn_netns_scenario.add_argument("--skip-host-route-setup", action="store_true")
     vpn_netns_scenario.set_defaults(func=cmd_vpn)
 
     vpn_plan = vpn_sub.add_parser("plan", help="print the system VPN delivery plan")

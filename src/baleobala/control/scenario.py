@@ -17,6 +17,7 @@ class NetnsScenario:
     expected_markers: list[str] = field(default_factory=list)
     smoke_kind: str = ""
     notes: list[str] = field(default_factory=list)
+    network_plan: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -29,6 +30,7 @@ class NetnsScenario:
             "expected_markers": self.expected_markers,
             "smoke_kind": self.smoke_kind,
             "notes": self.notes,
+            "network_plan": self.network_plan,
         }
 
 
@@ -105,6 +107,11 @@ def build_tunnel_pair_scenario(
     transport: str = "auto",
     psk_file: str = "",
     identity_prefix: str = "baleobala",
+    full_device: bool = True,
+    dns_servers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9"),
+    carrier_hosts: tuple[str, ...] = ("next-ws.bale.ai",),
+    skip_nat_setup: bool = False,
+    skip_host_route_setup: bool = False,
 ) -> NetnsScenario:
     python = sys.executable
     server_cmd = [
@@ -127,6 +134,31 @@ def build_tunnel_pair_scenario(
     if psk_file:
         server_cmd.extend(["--psk-file", psk_file])
         client_cmd.extend(["--psk-file", psk_file])
+    smoke_lines = [
+        "ping -c 1 10.77.0.1",
+        f"{python} - <<'PY'",
+        "import socket",
+    ]
+    if full_device:
+        smoke_lines.extend(
+            [
+                "socket.gethostbyname('example.com')",
+                "s = socket.create_connection(('1.1.1.1', 53), timeout=3)",
+                "s.close()",
+            ]
+        )
+    smoke_lines.extend(
+        [
+            "print('tunnel-flow-ok')",
+            "PY",
+        ]
+    )
+    smoke_client_cmd = " && ".join(
+        [
+            smoke_lines[0],
+            "\n".join(smoke_lines[1:]),
+        ]
+    )
     return NetnsScenario(
         kind="tunnel-pair",
         server_cmd=server_cmd,
@@ -137,10 +169,34 @@ def build_tunnel_pair_scenario(
             "tunnel_up=",
             "teardown_done",
         ],
+        smoke_client_cmd=smoke_client_cmd,
         smoke_kind="tunnel-payload",
         notes=[
-            "Both namespaces must already have TUN devices set up with matching names.",
-            "Server namespace also needs NAT prerequisites if full egress is part of the test.",
-            "Smoke is expected to verify payload flow through the tunnel rather than a template-level command.",
+            "The session runner is expected to create/configure both TUN devices when automation is enabled.",
+            "Server-side NAT and client-side default-route/DNS setup are part of the session orchestration.",
+            "Smoke is expected to verify payload flow through the tunnel plus DNS and egress probes in full-device mode.",
         ],
+        network_plan={
+            "mode": "linux-full-device" if full_device else "linux-tunnel-only",
+            "full_device": full_device,
+            "dns_servers": list(dns_servers),
+            "client": {
+                "tun": client_tun,
+                "address": "10.77.0.2/24",
+                "mtu": 1400,
+                "routes": ["0.0.0.0/1", "128.0.0.0/1"] if full_device else [],
+            },
+            "server": {
+                "tun": server_tun,
+                "address": "10.77.0.1/24",
+                "mtu": 1400,
+                "wan": server_wan,
+                "enable_nat": not skip_nat_setup,
+            },
+            "carrier_hosts": list(carrier_hosts),
+            "setup_host_routes": not skip_host_route_setup,
+            "dns_probe_host": "example.com" if full_device else "",
+            "egress_probe_host": "1.1.1.1" if full_device else "",
+            "egress_probe_port": 53 if full_device else 0,
+        },
     )

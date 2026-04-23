@@ -133,7 +133,7 @@ class FakeReadyPopen(FakePopen):
     def __init__(self, cmd, stdout=None, stderr=None):  # noqa: ARG002
         super().__init__(cmd, stdout=stdout, stderr=stderr)
         if stdout is not None:
-            stdout.write(b"call_established\ntransport_selected=dc\nproxy_listening=127.0.0.1:1080\nteardown_done\n")
+            stdout.write(b"call_established\ntransport_selected=dc\nproxy_listening=127.0.0.1:1080\ntunnel_up=vpn0\nteardown_done\n")
             stdout.flush()
 
 
@@ -191,6 +191,7 @@ def test_netns_session_runner_full_success(tmp_path) -> None:
     assert report.transport_selected == "dc"
     assert report.data_flow_ok == "yes"
     assert report.teardown_clean == "yes"
+    assert report.tun_created == "no"
     assert report.artifact_bundle
     assert report.run_id
     assert report.failure_code == ""
@@ -266,3 +267,108 @@ def test_netns_scenario_includes_verdict_markers() -> None:
     payload = scenario.to_dict()
     assert "expected_markers" in payload
     assert "smoke_kind" in payload
+
+
+def test_netns_session_runner_applies_tunnel_network_plan(tmp_path) -> None:
+    runner = FakeNetnsRunner()
+    harness = NetnsHarness(
+        NetnsTopology.with_prefix("bb"),
+        runner=runner,
+        state_path=tmp_path / "netns.json",
+        logs_dir=tmp_path / "logs",
+    )
+    manager = NetnsProcessManager(
+        state_path=tmp_path / "proc.json",
+        popen_factory=FakeReadyPopen,
+    )
+    session = NetnsSessionRunner(harness, manager, artifact_root=tmp_path / "artifacts")
+    report = session.run(
+        server_cmd=["sh", "-lc", "echo ready"],
+        client_cmd=["sh", "-lc", "echo ready"],
+        scenario={
+            "kind": "tunnel-pair",
+            "expected_markers": ["call_established", "transport_selected=", "tunnel_up="],
+            "network_plan": {
+                "full_device": True,
+                "dns_servers": ["1.1.1.1"],
+                "carrier_hosts": ["next-ws.bale.ai"],
+                "setup_host_routes": True,
+                "client": {
+                    "tun": "vpn0",
+                    "address": "10.77.0.2/24",
+                    "mtu": 1400,
+                    "routes": ["0.0.0.0/1", "128.0.0.0/1"],
+                },
+                "server": {
+                    "tun": "vpn0",
+                    "address": "10.77.0.1/24",
+                    "mtu": 1400,
+                    "wan": "eth0",
+                    "enable_nat": True,
+                },
+            },
+        },
+        smoke_commands=[["ip", "netns", "exec", "bb-client", "sh", "-lc", "echo tunnel-smoke"]],
+        timeout=0.2,
+    )
+    assert report.ok
+    assert report.tun_created == "yes"
+    assert report.routes_programmed == "yes"
+    assert report.dns_configured == "yes"
+    assert report.nat_configured == "yes"
+    assert report.carrier_bypass_configured == "yes"
+    assert report.default_route_active == "yes"
+    assert report.dns_probe_ok == "yes"
+    assert report.egress_probe_ok == "yes"
+    commands = [" ".join(cmd) for cmd in runner.calls]
+    assert any("ip netns exec bb-client ip tuntap add dev vpn0 mode tun" in cmd for cmd in commands)
+    assert any("ip netns exec bb-server iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE" in cmd for cmd in commands)
+    assert any("ip netns exec bb-client ip route replace next-ws.bale.ai via 172.29.0.2 dev bb-vc" in cmd for cmd in commands)
+    assert any("ip netns exec bb-client ip route replace default via 10.77.0.1 dev vpn0 metric 50" in cmd for cmd in commands)
+    assert any("mkdir -p /etc/netns/bb-client" in cmd for cmd in commands)
+
+
+def test_netns_session_runner_classifies_nat_setup_failures(tmp_path) -> None:
+    runner = FakeNetnsRunner(fail_on=("iptables -t nat -A POSTROUTING",))
+    harness = NetnsHarness(
+        NetnsTopology.with_prefix("bb"),
+        runner=runner,
+        state_path=tmp_path / "netns.json",
+        logs_dir=tmp_path / "logs",
+    )
+    manager = NetnsProcessManager(
+        state_path=tmp_path / "proc.json",
+        popen_factory=FakeReadyPopen,
+    )
+    session = NetnsSessionRunner(harness, manager)
+    report = session.run(
+        server_cmd=["sh", "-lc", "echo ready"],
+        client_cmd=["sh", "-lc", "echo ready"],
+        scenario={
+            "kind": "tunnel-pair",
+            "expected_markers": ["call_established"],
+            "network_plan": {
+                "full_device": True,
+                "dns_servers": ["1.1.1.1"],
+                "carrier_hosts": ["next-ws.bale.ai"],
+                "setup_host_routes": True,
+                "client": {
+                    "tun": "vpn0",
+                    "address": "10.77.0.2/24",
+                    "mtu": 1400,
+                    "routes": ["0.0.0.0/1"],
+                },
+                "server": {
+                    "tun": "vpn0",
+                    "address": "10.77.0.1/24",
+                    "mtu": 1400,
+                    "wan": "eth0",
+                    "enable_nat": True,
+                },
+            },
+        },
+        timeout=0.2,
+    )
+    assert report.ok is False
+    assert report.failure_class == "environment"
+    assert report.failure_code == "nat_setup_failed"

@@ -1,5 +1,7 @@
 # VPN over Bale
 
+For the main product experience, start with `baleobala doctor`, sign in with `auth bale-login`, create or accept a relay pairing, then use `vpn up` or `gui`. The lower-level tunnel flows in this document remain important for Linux tunnel validation and recovery, but they are not the primary first-run story.
+
 Run a full Linux IP tunnel over a Bale voice call. One side (client)
 routes traffic from a `tun0` device through Bale to the exit node (a
 VPS running a second Bale account), which MASQUERADEs the packets onto
@@ -17,7 +19,36 @@ the public internet.
   file (see [BALE_HEADLESS.md](./BALE_HEADLESS.md) for capturing one).
 - On the exit node: know your public interface name (`ip route show default`).
 
-## One-time setup
+## Normal Linux Session Runner Flow
+
+For product-like Linux validation, prefer the session runner. It now owns
+the TUN, route, DNS, NAT, and Bale carrier bypass setup for tunnel
+scenarios:
+
+```bash
+baleobala vpn netns-session \
+  --kind tunnel-pair \
+  --server-jwt-file /etc/baleobala/jwt.txt \
+  --client-jwt-file ~/.bale_jwt \
+  --peer-id 123456789 \
+  --server-wan eth0 \
+  --artifact-dir ./artifacts
+```
+
+That path is the source of truth for Linux full-device orchestration. The
+manual commands below remain as debug and recovery references.
+
+Useful toggles:
+
+- `--tunnel-only` disables default-route, DNS, and egress automation.
+- `--dns-server <ip>` overrides the per-namespace resolver file used by
+  `ip netns exec`.
+- `--carrier-host <host>` adds a Bale bypass host-route over the namespace
+  uplink so the tunnel does not consume its own carrier.
+- `--skip-nat-setup` and `--skip-host-route-setup` keep the old manual
+  steps available for investigation.
+
+## Manual One-time setup
 
 ### Client
 
@@ -39,7 +70,7 @@ sudo ./scripts/vpn-exit-node.sh vpn0 eth0
 The `tunnel exit-node` subcommand runs this second script automatically on
 startup (use `--skip-nat-setup` to disable).
 
-## Bringing the tunnel up
+## Manual Tunnel Bring-up
 
 ### Exit node side (start first — it needs to answer the call)
 
@@ -69,7 +100,7 @@ curl https://ifconfig.me           # should show VPS IP
 ```
 
 Remember a host-route for Bale's carrier so the tunnel doesn't swallow
-its own connection:
+its own connection when you are debugging outside the session runner:
 
 ```bash
 # look up the real gateway first

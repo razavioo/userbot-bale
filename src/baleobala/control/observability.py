@@ -86,6 +86,11 @@ def classify_failure(
         "permission_denied": FailureInfo("environment", "permission_denied"),
         "missing_tun": FailureInfo("environment", "missing_tun"),
         "missing_iproute": FailureInfo("environment", "missing_iproute"),
+        "missing_iptables": FailureInfo("environment", "missing_iptables"),
+        "route_program_failed": FailureInfo("environment", "route_program_failed"),
+        "dns_config_failed": FailureInfo("environment", "dns_config_failed"),
+        "nat_setup_failed": FailureInfo("environment", "nat_setup_failed"),
+        "host_route_failed": FailureInfo("environment", "host_route_failed"),
         "carrier_instability": FailureInfo("call_setup", "carrier_negotiation_failed"),
         "infra_flake": FailureInfo("infra", "artifact_incomplete"),
         "product_bug": FailureInfo("payload_flow", "payload_probe_failed"),
@@ -101,6 +106,16 @@ def classify_failure(
         return FailureInfo("environment", "missing_tun")
     if _contains_any(text, "ip: not found", "missing_iproute", "iproute"):
         return FailureInfo("environment", "missing_iproute")
+    if _contains_any(text, "iptables: not found", "missing_iptables"):
+        return FailureInfo("environment", "missing_iptables")
+    if _contains_any(text, "route_program_failed"):
+        return FailureInfo("environment", "route_program_failed")
+    if _contains_any(text, "dns_config_failed"):
+        return FailureInfo("environment", "dns_config_failed")
+    if _contains_any(text, "nat_setup_failed"):
+        return FailureInfo("environment", "nat_setup_failed")
+    if _contains_any(text, "host_route_failed"):
+        return FailureInfo("environment", "host_route_failed")
     if _contains_any(text, "no contacts match", "peer lookup", "peer_id", "peer"):
         return FailureInfo("call_setup", "peer_lookup_failed")
     if _contains_any(text, "livekit credentials", "no inline credentials", "creds"):
