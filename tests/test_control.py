@@ -87,6 +87,49 @@ def test_pairing_store_begin_accept(tmp_path, monkeypatch) -> None:
     assert store.active() == accepted
 
 
+def test_relay_directory_register_lookup_remove(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import RelayDirectory, RelayDirectoryEntry
+
+    directory = RelayDirectory()
+    entry = directory.register(
+        RelayDirectoryEntry(
+            relay_id="relay.home.1",
+            name="home-vpn",
+            peer_id=77,
+            owner="operator",
+            transport_preference="auto",
+            backend_preference="proxy",
+            endpoint_hint="10.0.0.1:1080",
+        )
+    )
+
+    assert directory.lookup("home-vpn") == entry
+    assert directory.get("relay.home.1") == entry
+    assert directory.list()[0] == entry
+    removed = directory.remove("home-vpn")
+    assert removed == entry
+    assert directory.lookup("home-vpn") is None
+
+
+def test_pairing_store_invite_link_roundtrip(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    from baleobala.control import PairingStore
+
+    store = PairingStore()
+    pending = store.begin("relay-a", role="client", peer_id=7)
+    link = store.export_invite_link(pending.profile_id)
+
+    importer = PairingStore(path=tmp_path / "imported.json")
+    record = importer.import_invite_link(link)
+
+    assert record.profile_id == pending.profile_id
+    assert record.status == "paired"
+    assert record.peer_id == 7
+    assert record.name == "relay-a"
+
+
 def test_pairing_exchange_request_response_roundtrip(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
@@ -252,21 +295,66 @@ def test_control_service_revoked_pairing_is_not_connectable(tmp_path, monkeypatc
 
 def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import VpnProfile
+    from baleobala.control import TunnelServiceState, VpnProfile
     from baleobala.control.backend import MacOSPacketTunnelBackend
 
-    backend = MacOSPacketTunnelBackend()
+    class FakeService:
+        def __init__(self) -> None:
+            self.started = False
+            self._state_store = type("Store", (), {"save": lambda self, payload: None})()
+
+        def start(self, *, profile_id: str, backend: str, pairing_id: str | None = None):  # noqa: ANN001
+            self.started = True
+            return TunnelServiceState(
+                state="running",
+                endpoint="unix:///tmp/packet-tunnel.sock",
+                profile_id=profile_id,
+                backend=backend,
+                pairing_id=pairing_id,
+            )
+
+        def status(self):
+            return TunnelServiceState(
+                state="running" if self.started else "stopped",
+                endpoint="unix:///tmp/packet-tunnel.sock" if self.started else None,
+            )
+
+        def stop(self):
+            self.started = False
+
+    backend = MacOSPacketTunnelBackend(service=FakeService())
     profile = VpnProfile(profile_id="p1", name="client", backend="packet-tunnel")
 
     status = backend.up(profile)
     assert status["backend"] == "packet-tunnel"
     assert status["state"] == "running"
-    assert status["transport_ready"] == "no"
-    assert status["call_established"] == "no"
-    assert status["teardown_clean"] == "no"
+    assert status["transport_selected"] == "packet-tunnel"
+    assert status["call_established"] == "yes"
+    assert status["data_flow_ok"] == "yes"
+    assert status["route_ready"] == "yes"
+    assert status["dns_ready"] == "yes"
     assert status["profile_id"] == "p1"
     backend.down()
     assert backend.status()["state"] == "stopped"
+
+
+def test_macos_install_tunnel_profile_writes_shared_container(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.macos import (
+        install_tunnel_profile,
+        load_tunnel_profile,
+        packet_tunnel_configuration,
+        tunnel_profile_installed,
+        tunnel_profile_path,
+    )
+    from baleobala.control.vpn import VpnProfile
+
+    payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="baleobala"))
+    result = install_tunnel_profile(payload)
+    assert result["state"] == "installed"
+    assert tunnel_profile_path().exists()
+    assert load_tunnel_profile() == payload
+    assert tunnel_profile_installed(payload) is True
 
 
 def test_pairing_store_tracks_managed_provisioning_metadata(tmp_path, monkeypatch) -> None:
@@ -336,6 +424,31 @@ def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -
     from baleobala.control import AuthStore, ControlService, PairingStore, VpnStore
     from baleobala.control.vpn import VpnProfile
 
+    class Bridge:
+        def start(self):
+            pass
+
+        def send(self, data):  # noqa: ANN001
+            return len(data)
+
+        def recv(self, timeout=None):  # noqa: ANN001
+            return None
+
+        def close(self):
+            pass
+
+        @property
+        def closed(self):
+            return False
+
+    monkeypatch.setattr("baleobala.control.macos.tunnel_profile_installed", lambda config: True)
+    monkeypatch.setattr(
+        "baleobala.control.backend._build_packet_tunnel_service",
+        lambda profile, auth_record, pairing: __import__(
+            "baleobala.control.tunnel_service", fromlist=["CarrierTunnelService"]
+        ).CarrierTunnelService(Bridge(), socket_path=tmp_path / "carrier.sock", manage_bridge=False),
+    )
+
     AuthStore().save_jwt("jwt-token", user_id=42, phone="+989")
     pairing = PairingStore().begin("relay-a", role="client", peer_id=7, relay_mode="packet-tunnel")
     pairing = PairingStore().accept(pairing.pair_code, validate=True)
@@ -354,7 +467,7 @@ def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -
     snapshot = service.start_connection()
     assert snapshot.backend["state"] == "running"
 
-    runtime_file = tmp_path / "tunnel_service.json"
+    runtime_file = tmp_path / "carrier_tunnel_service.json"
     assert runtime_file.exists()
     payload = json.loads(runtime_file.read_text(encoding="utf-8"))
     payload["endpoint"] = "unix:///tmp/does-not-exist.sock"
@@ -974,6 +1087,17 @@ def test_build_parser_exposes_control_plane_commands() -> None:
     relay_subcommands = _subparser_choices(relay_parser)
     relay_enable_parser = relay_subcommands["enable"]
     assert "linux-tun" in _arg_choices(relay_enable_parser, "backend")
+    assert "publish" in relay_subcommands
+    assert "list" in relay_subcommands
+    assert "remove" in relay_subcommands
+
+    pair_parser = subcommands["pair"]
+    pair_subcommands = _subparser_choices(pair_parser)
+    assert "invite" in pair_subcommands
+    assert "join" in pair_subcommands
+    assert "relay" in {action.dest for action in pair_subcommands["start"]._actions}
+    assert "relay" in {action.dest for action in pair_subcommands["enroll"]._actions}
+    assert "relay" in {action.dest for action in vpn_up_parser._actions}
 
     tunnel_parser = subcommands["tunnel"]
     tunnel_subcommands = _subparser_choices(tunnel_parser)

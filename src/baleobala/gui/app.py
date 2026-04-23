@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -39,6 +40,7 @@ from baleobala.gui.workers import (
     QtLogHandler,
     StartSmsWorker,
     ValidateCodeWorker,
+    StatusPoller,
     run_in_thread,
 )
 from baleobala.presentation import (
@@ -98,6 +100,198 @@ def _section(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("section")
     return label
+
+
+def _build_qr_pixmap(data: str, size: int = 220) -> QPixmap | None:
+    try:
+        import qrcode
+    except Exception:
+        return None
+
+    image = qrcode.make(data).convert("RGB")
+    width, height = image.size
+    bytes_per_line = 3 * width
+    qimage = QImage(image.tobytes(), width, height, bytes_per_line, QImage.Format.Format_RGB888).copy()
+    pixmap = QPixmap.fromImage(qimage)
+    return pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+def _humanize_transport(value: str) -> str:
+    normalized = value.strip().lower()
+    mapping = {
+        "dc": "DC",
+        "datachannel": "DC",
+        "audio": "audio",
+        "qr": "QR",
+        "rpc": "RPC",
+        "mtproto_rpc": "RPC",
+        "saved transport": "saved transport",
+    }
+    return mapping.get(normalized, value or "unknown")
+
+
+def _humanize_state(value: str) -> str:
+    normalized = value.strip().lower()
+    mapping = {
+        "running": "connected",
+        "ready": "connected",
+        "connecting": "connecting",
+        "recovering": "recovering",
+        "stopping": "recovering",
+        "stopped": "disconnected",
+        "idle": "disconnected",
+        "degraded": "recovering",
+        "blocked": "disconnected",
+    }
+    return mapping.get(normalized, normalized or "disconnected")
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "n/a"
+    seconds = int(round(seconds))
+    if seconds <= 0:
+        return "expired"
+    minutes, rem = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if rem or not parts:
+        parts.append(f"{rem}s")
+    return "in " + " ".join(parts)
+
+
+def _format_countdown(expires_at: str | float | None) -> str:
+    if expires_at in {None, "", "none"}:
+        return "n/a"
+    try:
+        remaining = float(expires_at) - time.time()
+    except (TypeError, ValueError):
+        return "n/a"
+    return _format_duration(remaining)
+
+
+def _gate_action_text(code: str) -> str:
+    mapping = {
+        "auth_expired": "Sign in again",
+        "auth_missing": "Sign in again",
+        "pairing_missing": "Create pairing",
+        "credentials_expired": "Refresh credentials",
+        "credentials_missing": "Sync credentials",
+        "access_revoked": "Open pairing setup",
+        "access_rejected": "Open pairing setup",
+        "provisioning_pending": "Open pairing setup",
+        "provisioning_missing": "Open pairing setup",
+        "peer_assignment_missing": "Sync pairing",
+    }
+    return mapping.get(code, "Retry connect")
+
+
+class ConnectionDashboard(QFrame):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("dashboard-panel")
+        layout = QFormLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setHorizontalSpacing(18)
+        layout.setVerticalSpacing(8)
+
+        self.connection_state = QLabel("disconnected")
+        self.transport = QLabel("n/a")
+        self.failover = QLabel("0")
+        self.recovery = QLabel("n/a")
+        self.session_id = QLabel("n/a")
+        self.latency = QLabel("n/a")
+        self.credential_expiry = QLabel("n/a")
+
+        for label in (
+            self.connection_state,
+            self.transport,
+            self.failover,
+            self.recovery,
+            self.session_id,
+            self.latency,
+            self.credential_expiry,
+        ):
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        layout.addRow("Connection state", self.connection_state)
+        layout.addRow("Selected transport", self.transport)
+        layout.addRow("Failover count", self.failover)
+        layout.addRow("Recovery state", self.recovery)
+        layout.addRow("Carrier session ID", self.session_id)
+        layout.addRow("Latency hint", self.latency)
+        layout.addRow("Credential expiry", self.credential_expiry)
+
+    def set_snapshot(self, snapshot: dict) -> None:
+        backend = snapshot.get("backend") or {}
+        pairing = snapshot.get("pairing") or {}
+        connection = snapshot.get("connection") or {}
+        phase = snapshot.get("phase", "")
+        connection_state = _humanize_state(
+            str(
+                backend.get("state")
+                or connection.get("state")
+                or phase
+                or "disconnected"
+            )
+        )
+        if connection.get("state") == "blocked" and phase in {"connecting", "stopping"}:
+            connection_state = "connecting"
+        elif str(backend.get("recovery_state", "")).lower() == "recovering":
+            connection_state = "recovering"
+        elif phase in {"connecting", "stopping"}:
+            connection_state = "connecting"
+        elif backend.get("state") == "running" or connection.get("state") == "ready":
+            connection_state = "connected"
+        self.connection_state.setText(connection_state)
+        self.transport.setText(_humanize_transport(str(backend.get("transport_selected", "") or "n/a")))
+        self.failover.setText(str(backend.get("failover_count", "0") or "0"))
+        recovery = str(backend.get("recovery_state", "") or "n/a")
+        if backend.get("transport_previous"):
+            recovery += f" (previous: {_humanize_transport(str(backend.get('transport_previous', '')))} )"
+        self.recovery.setText(recovery.replace(" )", ")"))
+        self.session_id.setText(str(backend.get("carrier_session_id", "") or "n/a"))
+        latency = str(backend.get("carrier_latency_ms", "") or "")
+        self.latency.setText(f"{latency} ms" if latency and latency not in {"0", "0.0"} else ("0 ms" if latency == "0" else "n/a"))
+        self.credential_expiry.setText(_format_countdown(pairing.get("credential_expires_at")))
+
+
+class GatePanel(QFrame):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("gate-panel")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        self.title = QLabel("Connection gate")
+        self.title.setObjectName("banner-title")
+        self.body = QLabel()
+        self.body.setWordWrap(True)
+        self.next_step = QLabel()
+        self.next_step.setWordWrap(True)
+        self.next_step.setObjectName("summary")
+        self.action = QPushButton("Retry connect")
+        self.action.setObjectName("primary")
+        layout.addWidget(self.title)
+        layout.addWidget(self.body)
+        layout.addWidget(self.next_step)
+        layout.addWidget(self.action, 0, Qt.AlignmentFlag.AlignLeft)
+        self.hide()
+
+    def set_gate(self, gate: dict) -> None:
+        state = str(gate.get("state", "ready"))
+        if state != "blocked":
+            self.hide()
+            return
+        self.title.setText(str(gate.get("title") or "Connection blocked"))
+        self.body.setText(str(gate.get("message") or "Connection is not ready yet."))
+        self.next_step.setText(str(gate.get("next_step") or ""))
+        self.action.setText(_gate_action_text(str(gate.get("code", ""))))
+        self.show()
 
 
 class AccentPanel(QFrame):
@@ -365,6 +559,11 @@ class ConnectView(QWidget):
         self.readiness = ReadinessWidget()
         self.account_summary = QLabel()
         self.account_summary.setObjectName("summary")
+        self.dashboard = ConnectionDashboard()
+        self.gate_panel = GatePanel()
+        self.gate_panel.action.clicked.connect(self._on_gate_action_clicked)
+        self._latest_snapshot: dict = {}
+        self._manual_detail = ""
 
         root.addWidget(title)
         root.addWidget(subtitle)
@@ -373,6 +572,9 @@ class ConnectView(QWidget):
         root.addWidget(_section("Readiness"))
         root.addWidget(self.readiness)
         root.addWidget(self.account_summary)
+        root.addWidget(_section("Connection Status"))
+        root.addWidget(self.dashboard)
+        root.addWidget(self.gate_panel)
 
         callouts = QHBoxLayout()
         callouts.setSpacing(10)
@@ -390,8 +592,25 @@ class ConnectView(QWidget):
         )
         root.addLayout(callouts)
 
-        quick_start = QGroupBox("Quick Start")
-        quick_layout = QFormLayout(quick_start)
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.setObjectName("hero-action")
+        self.connect_btn.setMinimumHeight(58)
+        self.connect_btn.setMinimumWidth(300)
+        self.connect_btn.clicked.connect(self._on_primary_clicked)
+
+        quick_row = QHBoxLayout()
+        quick_row.addStretch(1)
+        quick_row.addWidget(self.connect_btn)
+        quick_row.addStretch(1)
+
+        self.setup_toggle = QToolButton()
+        self.setup_toggle.setText("Show setup options")
+        self.setup_toggle.setCheckable(True)
+        self.setup_toggle.toggled.connect(self._toggle_setup)
+
+        self.quick_start = QGroupBox("Quick Start")
+        self.quick_start.setObjectName("quick-start")
+        quick_layout = QFormLayout(self.quick_start)
         quick_layout.setHorizontalSpacing(14)
         quick_layout.setVerticalSpacing(10)
 
@@ -409,22 +628,54 @@ class ConnectView(QWidget):
         quick_layout.addRow("Device role", self.role)
         quick_layout.addRow("Relay name", self.pair_name)
         quick_layout.addRow("Pairing code", self.pair_code)
-
-        self.connect_btn = QPushButton("Start Secure Connection")
-        self.connect_btn.setObjectName("primary")
-        self.connect_btn.clicked.connect(self._on_primary_clicked)
+        self.quick_start.setVisible(False)
 
         self.state_label = QLabel()
         self.state_label.setObjectName("status-info")
         self.state_label.setWordWrap(True)
         self.phase_detail = self.state_label
+        self.state_label.setVisible(False)
 
-        quick_row = QHBoxLayout()
-        quick_row.addWidget(self.connect_btn)
-        quick_row.addStretch(1)
+        self.sharing = QGroupBox("Invite / Join")
+        self.sharing.setObjectName("invite-join")
+        sharing_layout = QVBoxLayout(self.sharing)
+        sharing_layout.setSpacing(10)
 
-        advanced = QGroupBox("Advanced Settings")
-        advanced_layout = QFormLayout(advanced)
+        self.invite_btn = QPushButton("Invite")
+        self.invite_btn.clicked.connect(self._on_invite_clicked)
+
+        self.invite_link = QLineEdit()
+        self.invite_link.setReadOnly(True)
+        self.invite_link.setPlaceholderText("Invite link will appear here")
+        self.invite_link.setClearButtonEnabled(True)
+
+        self.invite_qr = QLabel("Invite QR will appear here")
+        self.invite_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.invite_qr.setMinimumSize(240, 240)
+        self.invite_qr.setObjectName("invite-qr")
+        self.invite_qr.setWordWrap(True)
+
+        self.join_link = QLineEdit()
+        self.join_link.setPlaceholderText("Paste baleobala://pair?... invite link")
+        self.join_link.setClearButtonEnabled(True)
+
+        self.join_btn = QPushButton("Join Invite")
+        self.join_btn.clicked.connect(self._on_join_clicked)
+
+        sharing_top = QHBoxLayout()
+        sharing_top.addWidget(self.invite_btn)
+        sharing_top.addWidget(self.join_btn)
+        sharing_top.addStretch(1)
+
+        sharing_layout.addLayout(sharing_top)
+        sharing_layout.addWidget(self.invite_link)
+        sharing_layout.addWidget(self.invite_qr)
+        sharing_layout.addWidget(self.join_link)
+        self.sharing.setVisible(False)
+
+        self.advanced = QGroupBox("Advanced Settings")
+        self.advanced.setObjectName("advanced-settings")
+        advanced_layout = QFormLayout(self.advanced)
         advanced_layout.setHorizontalSpacing(14)
         advanced_layout.setVerticalSpacing(10)
 
@@ -446,6 +697,7 @@ class ConnectView(QWidget):
         advanced_layout.addRow("Connection backend", self.backend)
         advanced_layout.addRow("Shared secret", self.proxy_secret)
         advanced_layout.addRow("Local SOCKS5 port", self.listen_port)
+        self.advanced.setVisible(False)
 
         self.logs_toggle = QToolButton()
         self.logs_toggle.setText("Show Connection Log")
@@ -458,17 +710,27 @@ class ConnectView(QWidget):
         self.logs.setPlaceholderText("Connection details will appear here when needed.")
         self.logs.setVisible(False)
 
-        root.addWidget(_section("Connection"))
-        root.addWidget(quick_start)
         root.addLayout(quick_row)
+        root.addWidget(self.setup_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(self.quick_start)
+        root.addWidget(self.sharing)
         root.addWidget(self.state_label)
-        root.addWidget(_section("Advanced"))
-        root.addWidget(advanced)
+        self.advanced_section = _section("Advanced")
+        self.advanced_section.setVisible(False)
+        root.addWidget(self.advanced_section)
+        root.addWidget(self.advanced)
         root.addWidget(self.logs_toggle)
         root.addWidget(self.logs, 1)
 
         self._refresh_enabled()
         self._refresh_status()
+
+    def _toggle_setup(self, open_: bool) -> None:
+        self.setup_toggle.setText("Hide setup options" if open_ else "Show setup options")
+        self.quick_start.setVisible(open_)
+        self.sharing.setVisible(open_)
+        self.advanced_section.setVisible(open_)
+        self.advanced.setVisible(open_)
 
     def _toggle_logs(self, open_: bool) -> None:
         self._logs_open = open_
@@ -477,30 +739,95 @@ class ConnectView(QWidget):
 
     def _refresh_enabled(self) -> None:
         is_client = self.role.currentData() == "client"
-        self.listen_port.setEnabled(is_client and self._phase not in {"connecting", "connected", "stopping"})
         editable = self._phase not in {"connecting", "connected", "stopping"}
+        self.listen_port.setEnabled(is_client and editable)
         for widget in (self.role, self.pair_name, self.pair_code, self.backend, self.proxy_secret):
             widget.setEnabled(editable)
-        self.connect_btn.setText("Disconnect" if self._phase in {"connecting", "connected", "stopping"} else "Start Secure Connection")
-        self.connect_btn.setObjectName("danger" if self._phase in {"connecting", "connected", "stopping"} else "primary")
+        for widget in (self.invite_btn, self.join_btn, self.join_link):
+            widget.setEnabled(editable)
+        self.connect_btn.setText("Disconnect" if self._phase in {"connecting", "connected"} else "Connect")
         self.connect_btn.style().unpolish(self.connect_btn)
         self.connect_btn.style().polish(self.connect_btn)
-        self.connect_btn.setEnabled(True)
 
     def _refresh_status(self, detail: str = "") -> None:
-        signed_in = bool(self._main.jwt)
-        pairing = self._main.service.load_pairing()
-        paired = pairing is not None and pairing.status in {"paired", "accepted"}
-        saved_profile = self._main.service.load_profile() is not None
+        if detail:
+            self._manual_detail = detail
+        snapshot_obj = self._latest_snapshot or self._main.service.status()
+        if hasattr(snapshot_obj, "__dataclass_fields__"):
+            from dataclasses import asdict
+
+            snapshot = asdict(snapshot_obj)
+        elif isinstance(snapshot_obj, dict):
+            snapshot = dict(snapshot_obj)
+        elif hasattr(snapshot_obj, "__dict__"):
+            snapshot = dict(snapshot_obj.__dict__)
+        else:
+            snapshot = {"auth": {}, "pairing": {}, "backend": {}, "vpn": {}, "connection": {}}
+        self._latest_snapshot = snapshot
+        connection = snapshot.get("connection", {})
+        signed_in = snapshot.get("auth", {}).get("state") == "configured"
+        auth_state = snapshot.get("auth", {}).get("state", "empty")
+        pairing = snapshot.get("pairing", {})
+        pairing_state = pairing.get("state", "empty")
+        pairing_authorization = pairing.get("authorization_status", "")
+        pairing_provisioning = pairing.get("provisioning_status", "")
+        pairing_revoked = pairing.get("revoked_at", "") not in {"", "none"} or pairing_authorization == "revoked" or pairing_provisioning == "revoked"
+        pairing_rejected = pairing_authorization == "rejected" or pairing_provisioning == "rejected"
+        pairing_ready = pairing_state in {"paired", "accepted", "complete"} and pairing_provisioning in {"complete", "accepted"} and not pairing_revoked and not pairing_rejected
+        backend = snapshot.get("backend", {})
+        backend_name = backend.get("backend", "")
+        direct_ready = backend_name == "direct" and connection.get("state") == "ready"
+        paired = pairing_ready or direct_ready
+        saved_profile = snapshot.get("vpn", {}).get("state") == "configured"
         phase = "authenticated" if signed_in and not paired and self._phase == "idle" else self._phase
-        banner = connect_banner(signed_in=signed_in, paired=paired, phase=phase, detail=detail)
+        banner = connect_banner(
+            signed_in=signed_in,
+            paired=paired,
+            phase=phase,
+            detail=self._manual_detail or connection.get("message", ""),
+            auth_state=auth_state,
+            connection=connection,
+        )
         self.banner.set_banner(banner)
         self.timeline.set_steps(connect_timeline(signed_in=signed_in, paired=paired, phase=phase))
-        self.readiness.set_items(connect_readiness(signed_in=signed_in, paired=paired, saved_profile=saved_profile, phase=phase))
+        self.readiness.set_items(
+            connect_readiness(
+                signed_in=signed_in,
+                paired=paired,
+                saved_profile=saved_profile,
+                phase=phase,
+                auth_state=auth_state,
+                pairing_state=pairing_state,
+                connection=connection,
+            )
+        )
         account_text = "Signed in account: " + (("+" + self._main.phone) if self._main.phone else "saved Bale account") if signed_in else "Signed in account: none"
-        pairing_text = f"Relay pairing: {pairing.name}" if paired and pairing is not None else "Relay pairing: not ready yet"
+        if pairing_ready:
+            pairing_text = f"Relay pairing: {pairing.get('name', 'saved relay')}"
+        elif pairing_revoked:
+            pairing_text = f"Relay pairing: revoked ({pairing.get('name', 'saved relay')})"
+        elif pairing_rejected:
+            pairing_text = f"Relay pairing: rejected ({pairing.get('name', 'saved relay')})"
+        elif connection.get("backend") == "direct" and connection.get("state") == "ready":
+            pairing_text = "Relay pairing: not required for direct proxy debug path."
+        else:
+            pairing_text = "Relay pairing: not ready yet"
         self.account_summary.setText(f"{account_text}  |  {pairing_text}")
-        self.state_label.setText(detail or banner.body)
+        self.dashboard.set_snapshot(
+            {
+                "backend": backend,
+                "pairing": pairing,
+                "connection": connection,
+                "phase": phase,
+                "auth": snapshot.get("auth", {}),
+            }
+        )
+        self.gate_panel.set_gate(connection)
+        self.state_label.setText(detail or self._manual_detail or banner.body)
+        busy = self._phase in {"connecting", "connected", "stopping"}
+        self.connect_btn.setEnabled(
+            (self._phase in {"connecting", "connected"}) or (not busy and connection.get("state") != "blocked" and signed_in and paired)
+        )
 
     def _set_phase(self, phase: str, detail: str = "") -> None:
         self._phase = phase
@@ -511,21 +838,114 @@ class ConnectView(QWidget):
         safe_line = line.replace(self.proxy_secret.text().strip(), "<redacted>") if self.proxy_secret.text().strip() else line
         self.logs.appendPlainText(safe_line)
 
+    def _refresh_invite_preview(self, link: str) -> None:
+        self.invite_link.setText(link)
+        pixmap = _build_qr_pixmap(link)
+        if pixmap is None:
+            self.invite_qr.setPixmap(QPixmap())
+            self.invite_qr.setText("QR preview unavailable. Install qrcode to render the invite as an image.")
+            return
+        self.invite_qr.setPixmap(pixmap)
+        self.invite_qr.setText("")
+
     def _on_primary_clicked(self) -> None:
         if self._phase in {"connecting", "connected"}:
             self._stop_session()
         else:
             self._start_session()
 
+    def _on_gate_action_clicked(self) -> None:
+        snapshot = self._latest_snapshot or self._main.service.status()
+        if hasattr(snapshot, "__dataclass_fields__"):
+            from dataclasses import asdict
+
+            snapshot = asdict(snapshot)
+        connection = snapshot.get("connection", {})
+        pairing = snapshot.get("pairing", {})
+        code = str(connection.get("code", ""))
+        profile_id = str(pairing.get("profile_id", "") or "")
+        if code in {"auth_missing", "auth_expired"}:
+            self._main.show_login_view()
+            return
+        if code == "pairing_missing":
+            pair_name = self.pair_name.text().strip() or "home-relay"
+            role = self.role.currentData()
+            backend = self.backend.currentData() or "packet-tunnel"
+            created = self._ensure_pairing(pair_name=pair_name, pair_code="", role=role)
+            self._persist_profile_defaults(pair_name=pair_name, role=role, backend=backend)
+            self.setup_toggle.setChecked(True)
+            if created is not None:
+                self._set_phase("authenticated", f"Created pairing {created.profile_id}.")
+            else:
+                self._set_phase("authenticated", "Pairing setup is ready.")
+            return
+        if code == "credentials_expired" and profile_id:
+            self._main.service.refresh_pairing_credentials(profile_id)
+            self._set_phase("authenticated", "Credential bundle refreshed.")
+            return
+        if code in {"credentials_missing", "peer_assignment_missing"} and profile_id:
+            self._main.service.sync_pairing(profile_id)
+            self._set_phase("authenticated", "Pairing synchronized.")
+            return
+        if code in {"access_revoked", "access_rejected", "provisioning_pending", "provisioning_missing"}:
+            self.setup_toggle.setChecked(True)
+            self._set_phase("authenticated", "Pairing needs attention before the connection can start.")
+            return
+        self._start_session()
+
+    def _on_invite_clicked(self) -> None:
+        issues = self._preflight()
+        if issues:
+            self._set_phase("error", " ".join(issues))
+            return
+        pair_name = self.pair_name.text().strip() or "home-relay"
+        role = self.role.currentData()
+        if self.backend.currentData() != "direct":
+            self._ensure_pairing(pair_name=pair_name, pair_code=self.pair_code.text().strip(), role=role)
+        else:
+            self._persist_profile_defaults(pair_name=pair_name or "direct-proxy", role=role, backend="direct")
+        pairing = self._main.service.load_pairing()
+        if pairing is None:
+            self._set_phase("error", "Create or join a pairing before generating an invite.")
+            return
+        try:
+            link = self._main.service.export_pairing_invite(pairing.profile_id)
+        except Exception as exc:
+            self._set_phase("error", friendly_error_message(str(exc), context="connect"))
+            return
+        self._refresh_invite_preview(link)
+        self._set_phase("authenticated", "Invite ready. Share the link or let the other device scan the QR code.")
+
+    def _on_join_clicked(self) -> None:
+        link = self.join_link.text().strip()
+        if not link:
+            self._set_phase("error", "Paste a baleobala://pair invite link first.")
+            return
+        try:
+            record = self._main.service.import_pairing_invite(link)
+        except Exception as exc:
+            self._set_phase("error", friendly_error_message(str(exc), context="connect"))
+            return
+        self.pair_name.setText(record.name)
+        if record.role == "relay":
+            self.role.setCurrentIndex(1)
+        else:
+            self.role.setCurrentIndex(0)
+        self.pair_code.setText("")
+        self._persist_profile_defaults(pair_name=record.name, role=record.role, backend=self.backend.currentData() or record.backend_preference)
+        self._set_phase("authenticated", f"Joined invite for {record.name}. You can start the secure connection now.")
+
     def _preflight(self) -> list[str]:
         issues: list[str] = []
         if not self._main.jwt:
             issues.append("Sign in with your Bale phone number first.")
-        if not self.pair_name.text().strip() and not self._main.service.load_pairing() and not self.pair_code.text().strip():
+        if self.backend.currentData() != "direct" and not self.pair_name.text().strip() and not self._main.service.load_pairing() and not self.pair_code.text().strip():
             issues.append("Enter a relay name or provide an existing pairing code.")
         return issues
 
-    def _ensure_pairing(self, *, pair_name: str, pair_code: str, role: str) -> None:
+    def _ensure_pairing(self, *, pair_name: str, pair_code: str, role: str):
+        if self.backend.currentData() == "direct" and not pair_code and not pair_name and self._main.service.load_pairing() is None:
+            return None
         pairing = self._main.service.load_pairing()
         if pair_code:
             pairing = self._main.service.accept_pairing(pair_code, name=pair_name)
@@ -538,6 +958,7 @@ class ConnectView(QWidget):
                 backend_preference=self.backend.currentData() or "",
             )
             self._append_log(f"created pairing {pairing.profile_id}")
+        return pairing
 
     def _persist_profile_defaults(self, *, pair_name: str, role: str, backend: str) -> None:
         profile = self._main.service.ensure_profile()
@@ -566,11 +987,15 @@ class ConnectView(QWidget):
         if issues:
             self._set_phase("error", " ".join(issues))
             return
-        pair_name = self.pair_name.text().strip() or "home-relay"
+        pair_name = self.pair_name.text().strip()
         pair_code = self.pair_code.text().strip()
         role = self.role.currentData()
         backend = self.backend.currentData()
-        self._ensure_pairing(pair_name=pair_name, pair_code=pair_code, role=role)
+        if backend != "direct":
+            pair_name = pair_name or "home-relay"
+            self._ensure_pairing(pair_name=pair_name, pair_code=pair_code, role=role)
+        else:
+            pair_name = pair_name or "direct-proxy"
         self._persist_profile_defaults(pair_name=pair_name, role=role, backend=backend)
         self.logs.clear()
         worker = ControlPlaneConnectWorker(self._main.service)
@@ -652,6 +1077,9 @@ class MainWindow(QMainWindow):
         self._service = ControlService()
         self.jwt: Optional[str] = None
         self.phone: Optional[str] = None
+        self._status_worker = None
+        self._status_thread: Optional[QThread] = None
+        self._status_snapshot: dict = {}
 
         container = QWidget(objectName="container")
         layout = QVBoxLayout(container)
@@ -683,6 +1111,7 @@ class MainWindow(QMainWindow):
         else:
             self.show_login_view()
         self._update_status()
+        self._start_status_polling()
 
         handler = QtLogHandler(level=logging.INFO)
         handler.line.connect(self.connect_view._append_log)
@@ -696,12 +1125,16 @@ class MainWindow(QMainWindow):
         self.jwt = jwt
         self.phone = phone
         self._update_status()
+        if self._status_snapshot:
+            self.connect_view._latest_snapshot = self._status_snapshot
         self.connect_view._refresh_status()
 
     def show_connect_view(self) -> None:
         self.login_view.setVisible(False)
         self.connect_view.setVisible(True)
         self._logout_action.setVisible(True)
+        if self._status_snapshot:
+            self.connect_view._latest_snapshot = self._status_snapshot
         self.connect_view._refresh_status()
 
     def show_login_view(self) -> None:
@@ -725,7 +1158,37 @@ class MainWindow(QMainWindow):
         self.phone = None
         self._update_status()
         self.show_login_view()
+        if self._status_snapshot:
+            self.connect_view._latest_snapshot = self._status_snapshot
         self.connect_view._set_phase("idle", "Sign in again to create or reuse a relay pairing.")
+
+    def _start_status_polling(self) -> None:
+        if self._status_worker is not None:
+            return
+        worker = StatusPoller(self._service, interval_seconds=2.0)
+        worker.snapshot.connect(self._on_status_snapshot)
+        worker.failed.connect(lambda msg: log.warning("status poll failed: %s", msg))
+        self._status_worker = worker
+        self._status_thread = run_in_thread(worker)
+
+    def _on_status_snapshot(self, snapshot: dict) -> None:
+        self._status_snapshot = snapshot
+        if self.connect_view.isVisible():
+            self.connect_view._latest_snapshot = snapshot
+            self.connect_view._refresh_status()
+
+    def closeEvent(self, event) -> None:  # noqa: ANN001
+        worker = self._status_worker
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception:
+                pass
+        thread = self._status_thread
+        if thread is not None:
+            thread.quit()
+            thread.wait(2500)
+        super().closeEvent(event)
 
 
 def run(argv: Optional[list[str]] = None) -> int:

@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import time
 from typing import Callable
 
 from baleobala.control.auth import AuthRecord, AuthStore
-from baleobala.control.backend import MacOSPacketTunnelBackend, VpnBackend, backend_for_profile
+from baleobala.control.backend import VpnBackend, backend_for_profile
+import baleobala.control.macos as macos
+from baleobala.control.credential_watcher import CredentialWatcher
 from baleobala.control.mesh import MeshProvisionRecord, MeshProvisionStore
 from baleobala.control.probe import ProbeResult
 from baleobala.control.pairing import PairingExchange, PairingRecord, PairingStore
+from baleobala.control.relay_directory import RelayDirectory, RelayDirectoryEntry, relay_id_for_name
 from baleobala.control.provisioning import (
     DeviceAuthorization,
     ProvisioningService,
     RelayEnrollment,
 )
-from baleobala.control.tunnel_service import LocalTunnelService
 from baleobala.control.vpn import VpnProfile, VpnStore
 
 
@@ -29,6 +32,7 @@ class ControlSnapshot:
     pairing: dict[str, str]
     mesh: dict[str, str]
     backend: dict[str, str]
+    connection: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,7 @@ class ConnectionSnapshot:
     pairing: PairingRecord | None
     backend: dict[str, str]
     probe: dict[str, str]
+    connection: dict[str, str] = field(default_factory=dict)
 
 
 class ControlService:
@@ -58,6 +63,230 @@ class ControlService:
         self.provisioning = provisioning or ProvisioningService()
         self.vpn_store = vpn_store or VpnStore()
         self._backend_factory = backend_factory or backend_for_profile
+        self.relay_directory = RelayDirectory()
+        self._active_backend: VpnBackend | None = None
+        self._active_profile_id: str | None = None
+        self._credential_watcher: CredentialWatcher | None = None
+
+    def _profile_from_pairing(self, profile: VpnProfile, pairing: PairingRecord) -> VpnProfile:
+        return VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend=pairing.backend_preference or profile.backend,
+            role=pairing.role,
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+            answer=pairing.role == "relay",
+            auto_start=profile.auto_start,
+            listen_host=profile.listen_host,
+            listen_port=profile.listen_port,
+            protocol=profile.protocol,
+            volume=profile.volume,
+            proxy_secret=profile.proxy_secret,
+        )
+
+    def _runtime_profile(self, profile_id: str | None = None) -> VpnProfile:
+        profile = self.vpn_store.load() or self.vpn_store.ensure_default()
+        if profile_id is None or profile.profile_id == profile_id:
+            return profile
+        pairing = self.pairing_store.get(profile_id)
+        if pairing is not None:
+            return self._profile_from_pairing(profile, pairing)
+        return profile
+
+    def _pairing_for_profile(self, profile: VpnProfile) -> PairingRecord | None:
+        if profile.pairing_id:
+            return self.pairing_store.get(profile.pairing_id)
+        return self.pairing_store.active()
+
+    def _connection_gate(
+        self,
+        profile: VpnProfile,
+        pairing: PairingRecord | None,
+        *,
+        auth_status: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        auth_status = auth_status or self.auth_store.status()
+        gate: dict[str, str] = {
+            "state": "ready",
+            "code": "",
+            "title": "",
+            "message": "",
+            "next_step": f"run `baleobala vpn up` or open `baleobala gui`.",
+            "backend": profile.backend,
+            "profile_id": profile.profile_id,
+            "pairing_id": pairing.profile_id if pairing is not None else "",
+            "auth_state": auth_status.get("state", "empty"),
+            "pairing_state": pairing.status if pairing is not None else "empty",
+            "authorization_status": pairing.authorization_status if pairing is not None else "",
+            "provisioning_status": pairing.provisioning_status if pairing is not None else "",
+        }
+
+        if profile.backend in {"direct", "proxy", "packet-tunnel"}:
+            gate["title"] = "Direct proxy ready"
+            gate["message"] = "This backend does not require relay provisioning."
+            return gate
+
+        if pairing is None:
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "pairing_missing",
+                    "title": "Relay pairing needed",
+                    "message": "No relay pairing is ready yet. Create or accept a pairing first.",
+                    "next_step": "run `baleobala pair enroll --name home-relay`.",
+                }
+            )
+            return gate
+
+        revoked = pairing.revoked_at is not None or pairing.authorization_status == "revoked" or pairing.provisioning_status == "revoked" or pairing.status == "revoked"
+        rejected = pairing.authorization_status == "rejected" or pairing.provisioning_status == "rejected" or pairing.status == "rejected"
+        pending = pairing.authorization_status in {"pending", "none"} or pairing.provisioning_status in {"pending", "enrolled"}
+        incomplete = pairing.provisioning_status not in {"complete", "accepted", "paired"}
+
+        if pairing.relay_id:
+            if auth_status.get("state") == "expired":
+                gate.update(
+                    {
+                        "state": "blocked",
+                        "code": "auth_expired",
+                        "title": "Session expired",
+                        "message": "Saved Bale session expired. Sign in again to refresh relay provisioning.",
+                        "next_step": "run `baleobala auth bale-login --phone +98912xxxxxxx --save`.",
+                    }
+                )
+                return gate
+            if auth_status.get("state") in {"empty", "missing-secret"}:
+                gate.update(
+                    {
+                        "state": "blocked",
+                        "code": "auth_missing",
+                        "title": "Sign in again",
+                        "message": "No saved Bale session is available. Sign in before requesting or refreshing relay access.",
+                        "next_step": "run `baleobala auth bale-login --phone +98912xxxxxxx --save`.",
+                    }
+                )
+                return gate
+
+        if revoked:
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "access_revoked",
+                    "title": "Relay access revoked",
+                    "message": "Relay access was revoked for this device. Ask the relay owner to approve it again.",
+                    "next_step": f"run `baleobala pair sync --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        if rejected:
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "access_rejected",
+                    "title": "Relay request rejected",
+                    "message": "Relay access was rejected. Ask the relay owner to approve the request again.",
+                    "next_step": f"run `baleobala pair request-access --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        if pending:
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "provisioning_pending",
+                    "title": "Relay approval pending",
+                    "message": "Relay provisioning is still pending approval. Request access, approve it, then sync credentials.",
+                    "next_step": f"run `baleobala pair request-access --profile-id {pairing.profile_id}`, then `baleobala pair approve --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        if incomplete:
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "provisioning_missing",
+                    "title": "Relay provisioning incomplete",
+                    "message": "Relay provisioning is incomplete. Request access, approve it, and sync credentials.",
+                    "next_step": f"run `baleobala pair sync --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        if pairing.credential_expires_at is not None and pairing.credential_expires_at <= time.time():
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "credentials_expired",
+                    "title": "Relay credentials expired",
+                    "message": "Relay credentials expired. Refresh the pairing credentials.",
+                    "next_step": f"run `baleobala pair sync --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        if pairing.secret_name and self.pairing_store.load_secret(pairing.profile_id) is None:
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "credentials_missing",
+                    "title": "Relay credentials missing",
+                    "message": "Relay credentials are missing from the secret store. Sync the pairing again.",
+                    "next_step": f"run `baleobala pair sync --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        if pairing.peer_id is None and pairing.role != "relay":
+            gate.update(
+                {
+                    "state": "blocked",
+                    "code": "peer_assignment_missing",
+                    "title": "Relay peer missing",
+                    "message": "Relay provisioning has not assigned a peer yet. Sync the pairing again after approval.",
+                    "next_step": f"run `baleobala pair sync --profile-id {pairing.profile_id}`.",
+                }
+            )
+            return gate
+
+        return gate
+
+    def _clear_active_backend(self) -> None:
+        self._stop_credential_watcher()
+        backend = self._active_backend
+        self._active_backend = None
+        self._active_profile_id = None
+        if backend is not None:
+            try:
+                backend.down()
+            except Exception:
+                pass
+
+    def _start_credential_watcher(self, profile: VpnProfile, pairing: PairingRecord | None, backend: VpnBackend) -> None:
+        if pairing is None:
+            return
+        if profile.backend == "linux-tun" and hasattr(backend, "set_credential_refresh_context"):
+            return
+        if profile.backend != "packet-tunnel":
+            return
+        self._stop_credential_watcher()
+        self._credential_watcher = CredentialWatcher(
+            self.pairing_store,
+            self,
+            pairing.profile_id,
+            lambda _record: None,
+        )
+        self._credential_watcher.start()
+
+    def _stop_credential_watcher(self) -> None:
+        if self._credential_watcher is None:
+            return
+        self._credential_watcher.stop()
+        self._credential_watcher = None
 
     def load_auth(self) -> AuthRecord | None:
         return self.auth_store.load()
@@ -138,16 +367,18 @@ class ControlService:
         role: str = "client",
         peer_id: int | None = None,
         peer_name: str | None = None,
+        relay_name: str | None = None,
         relay_mode: str = "proxy",
         backend_preference: str | None = None,
         transport_preference: str = "auto",
         secret_name: str | None = None,
-        ) -> PairingRecord:
+    ) -> PairingRecord:
         return self.pairing_store.begin(
             name,
             role=role,
             peer_id=peer_id,
             peer_name=peer_name,
+            relay_name=relay_name,
             relay_mode=relay_mode,
             backend_preference=backend_preference,
             transport_preference=transport_preference,
@@ -161,6 +392,7 @@ class ControlService:
         role: str = "client",
         peer_id: int | None = None,
         peer_name: str | None = None,
+        relay_name: str | None = None,
         relay_mode: str = "proxy",
         backend_preference: str | None = None,
         transport_preference: str = "auto",
@@ -170,6 +402,7 @@ class ControlService:
             role=role,
             peer_id=peer_id,
             peer_name=peer_name,
+            relay_name=relay_name,
             relay_mode=relay_mode,
             backend_preference=backend_preference,
             transport_preference=transport_preference,
@@ -321,6 +554,7 @@ class ControlService:
         name: str | None = None,
         peer_id: int | None = None,
         peer_name: str | None = None,
+        relay_name: str | None = None,
     ) -> PairingRecord:
         return self.pairing_store.accept(
             code,
@@ -332,6 +566,12 @@ class ControlService:
 
     def export_pairing_request(self, profile_id: str) -> PairingExchange:
         return self.pairing_store.export_request(profile_id)
+
+    def export_pairing_invite(self, profile_id: str) -> str:
+        return self.pairing_store.export_invite_link(profile_id)
+
+    def import_pairing_invite(self, link: str) -> PairingRecord:
+        return self.pairing_store.import_invite_link(link)
 
     def accept_pairing_request(
         self,
@@ -355,16 +595,63 @@ class ControlService:
     def apply_pairing_response(self, exchange: PairingExchange) -> PairingRecord:
         return self.pairing_store.apply_response(exchange)
 
+    def lookup_relay(self, name: str) -> RelayDirectoryEntry | None:
+        return self.relay_directory.lookup(name)
+
+    def list_relays(self) -> list[RelayDirectoryEntry]:
+        return self.relay_directory.list()
+
+    def publish_relay(
+        self,
+        name: str,
+        *,
+        profile_id: str | None = None,
+        peer_id: int | None = None,
+        owner: str = "",
+        transport_preference: str = "auto",
+        backend_preference: str = "proxy",
+        endpoint_hint: str = "",
+    ) -> RelayDirectoryEntry:
+        auth = self.load_auth()
+        profile = self.vpn_store.load() or self.vpn_store.ensure_default()
+        pairing = self.pairing_store.get(profile_id) if profile_id else None
+        if pairing is None:
+            pairing = self.pairing_store.active() or self.pairing_store.connectable()
+        if peer_id is None:
+            if pairing is not None and pairing.peer_id is not None:
+                peer_id = pairing.peer_id
+            elif profile.peer_id is not None:
+                peer_id = profile.peer_id
+        if peer_id is None:
+            raise ValueError("relay publish needs a peer_id or a paired relay profile")
+        if not owner:
+            if auth is not None and auth.phone:
+                owner = auth.phone
+            elif auth is not None and auth.user_id is not None:
+                owner = f"user-{auth.user_id}"
+            else:
+                owner = "local-user"
+        if not backend_preference:
+            backend_preference = profile.backend
+        if not endpoint_hint:
+            endpoint_hint = f"{profile.listen_host}:{profile.listen_port}"
+        entry = RelayDirectoryEntry(
+            relay_id=relay_id_for_name(name),
+            name=name,
+            peer_id=peer_id,
+            owner=owner,
+            transport_preference=transport_preference,
+            backend_preference=backend_preference,
+            endpoint_hint=endpoint_hint,
+        )
+        return self.relay_directory.register(entry)
+
+    def remove_relay(self, identifier: str) -> RelayDirectoryEntry | None:
+        return self.relay_directory.remove(identifier)
+
     def backend(self, profile: VpnProfile | None = None) -> VpnBackend:
         active_profile = profile or self.vpn_store.load() or self.vpn_store.ensure_default()
-        backend = self._backend_factory(active_profile)
-        if (
-            active_profile.backend == "packet-tunnel"
-            and isinstance(backend, MacOSPacketTunnelBackend)
-            and getattr(backend, "_service", None) is None
-        ):
-            return MacOSPacketTunnelBackend(service=LocalTunnelService())
-        return backend
+        return self._backend_factory(active_profile)
 
     def resolve_profile(self, profile_id: str | None = None) -> VpnProfile:
         profile = self.vpn_store.load() or self.vpn_store.ensure_default()
@@ -398,12 +685,69 @@ class ControlService:
         self.pairing_store.touch(pairing.profile_id)
         return resolved
 
+    def resolve_relay_pairing(self, relay_name: str, *, pair_name: str | None = None) -> PairingRecord:
+        relay = self.relay_directory.lookup(relay_name)
+        if relay is None:
+            raise LookupError(f"no relay {relay_name!r} found")
+        pairing = next(
+            (
+                item
+                for item in self.pairing_store.list()
+                if item.peer_id == relay.peer_id or item.name == relay.name
+            ),
+            None,
+        )
+        if pairing is not None:
+            return pairing
+        return self.begin_pairing(
+            pair_name or relay.name,
+            role="client",
+            peer_id=relay.peer_id,
+            peer_name=relay.name,
+            relay_name=relay.name,
+            backend_preference=relay.backend_preference,
+            transport_preference=relay.transport_preference,
+        )
+
     def start_connection(self, profile_id: str | None = None) -> ConnectionSnapshot:
-        profile = self.resolve_profile(profile_id)
+        profile = self._runtime_profile(profile_id)
+        auth_status = self.auth_store.status()
+        pairing = self._pairing_for_profile(profile)
+        gate = self._connection_gate(profile, pairing, auth_status=auth_status)
+        if gate["state"] == "blocked":
+            raise RuntimeError(gate["message"])
+
+        if profile.backend == "linux-tun":
+            target_pairing_id = profile.pairing_id or (pairing.profile_id if pairing is not None else None)
+            if target_pairing_id is not None:
+                profile = self.resolve_profile(target_pairing_id)
+            else:
+                profile = self.resolve_profile()
+            pairing = self.pairing_store.connectable(profile.pairing_id)
+            gate = self._connection_gate(profile, pairing, auth_status=auth_status)
+            if gate["state"] == "blocked":
+                raise RuntimeError(gate["message"])
+
+        if profile.backend == "packet-tunnel":
+            tunnel_config = macos.packet_tunnel_configuration(profile, pairing)
+            if not macos.tunnel_profile_installed(tunnel_config):
+                macos.install_tunnel_profile(tunnel_config)
         auth = self.load_auth()
         backend = self.backend(profile)
-        pairing = self.pairing_store.connectable(profile.pairing_id)
-        status = backend.up(profile, auth, pairing)
+        if hasattr(backend, "set_credential_refresh_context"):
+            backend.set_credential_refresh_context(self.pairing_store, self.refresh_pairing_credentials)  # type: ignore[attr-defined]
+        self._clear_active_backend()
+        try:
+            status = backend.up(profile, auth, pairing)
+        except Exception:
+            try:
+                backend.down()
+            except Exception:
+                pass
+            raise
+        self._active_backend = backend
+        self._active_profile_id = profile.profile_id
+        self._start_credential_watcher(profile, pairing, backend)
         if pairing is not None:
             self.pairing_store.update_runtime_metadata(
                 pairing.profile_id,
@@ -412,31 +756,47 @@ class ControlService:
                 validation_error=status.get("last_error", ""),
             )
         probe = backend.probe().to_dict()
-        return ConnectionSnapshot(profile=profile, pairing=pairing, backend=status, probe=probe)
+        return ConnectionSnapshot(profile=profile, pairing=pairing, backend=status, probe=probe, connection=gate)
 
     def stop_connection(self, profile_id: str | None = None) -> ConnectionSnapshot:
-        profile = self.resolve_profile(profile_id)
-        backend = self.backend(profile)
-        backend.down()
+        profile = self._runtime_profile(profile_id)
+        pairing = self._pairing_for_profile(profile)
+        gate = self._connection_gate(profile, pairing)
+        backend = self._active_backend or self.backend(profile)
+        self._stop_credential_watcher()
+        try:
+            backend.down()
+        finally:
+            if self._active_backend is backend:
+                self._clear_active_backend()
+            elif self._active_backend is not None and self._active_profile_id in {None, profile.profile_id}:
+                self._clear_active_backend()
         return ConnectionSnapshot(
             profile=profile,
-            pairing=self.pairing_store.get(profile.pairing_id or profile.profile_id),
+            pairing=pairing,
             backend=backend.status(),
             probe=backend.probe().to_dict(),
+            connection=gate,
         )
 
     def probe_connection(self, profile_id: str | None = None) -> ProbeResult:
-        profile = self.resolve_profile(profile_id)
-        return self.backend(profile).probe()
+        profile = self._runtime_profile(profile_id)
+        backend = self._active_backend or self.backend(profile)
+        return backend.probe()
 
     def reconcile_runtime(self) -> ConnectionSnapshot:
-        profile = self.vpn_store.load() or self.vpn_store.ensure_default()
-        pairing = self.pairing_store.get(profile.pairing_id) if profile.pairing_id else None
-        backend = self.backend(profile)
+        profile = self._runtime_profile()
+        pairing = self._pairing_for_profile(profile)
+        gate = self._connection_gate(profile, pairing)
+        backend = self._active_backend or self.backend(profile)
         status = backend.status()
         probe = backend.probe().to_dict()
+        if self._active_backend is backend and status.get("state") != "running":
+            self._clear_active_backend()
         if status.get("state") == "running" and probe.get("ok") == "no":
             backend.down()
+            if self._active_backend is backend or self._active_backend is not None:
+                self._clear_active_backend()
             status = backend.status()
             status["state"] = "degraded"
             status["last_error"] = probe.get("detail", status.get("last_error", ""))
@@ -447,16 +807,22 @@ class ControlService:
                     transport=status.get("transport_selected"),
                     validation_error=status.get("last_error", ""),
                 )
-        return ConnectionSnapshot(profile=profile, pairing=pairing, backend=status, probe=probe)
+        return ConnectionSnapshot(profile=profile, pairing=pairing, backend=status, probe=probe, connection=gate)
 
     def status(self) -> ControlSnapshot:
-        profile = self.resolve_profile()
-        backend = self._backend_factory(profile)
-        pairing = self.pairing_store.connectable(profile.pairing_id) or self.pairing_store.active()
+        profile = self._runtime_profile()
+        pairing = self._pairing_for_profile(profile)
+        backend = self._active_backend or self._backend_factory(profile)
+        gate = self._connection_gate(profile, pairing)
+        auth_status = self.auth_store.status()
         return ControlSnapshot(
-            auth=self.auth_store.status(),
+            auth=auth_status,
             vpn=self.vpn_store.status(),
-            pairing={"state": "empty"} if pairing is None else {
+            pairing={
+                "state": "empty",
+            }
+            if pairing is None
+            else {
                 "state": pairing.status,
                 "profile_id": pairing.profile_id,
                 "name": pairing.name,
@@ -468,9 +834,19 @@ class ControlService:
                 "authorization_status": pairing.authorization_status,
                 "relay_id": pairing.relay_id,
                 "peer_name": pairing.peer_name or "",
+                "peer_id": str(pairing.peer_id) if pairing.peer_id is not None else "",
+                "device_id": pairing.device_id,
+                "authorization_id": pairing.authorization_id,
+                "credential_epoch": pairing.credential_epoch,
+                "credential_expires_at": str(pairing.credential_expires_at) if pairing.credential_expires_at is not None else "",
+                "credential_refresh_after": str(pairing.credential_refresh_after) if pairing.credential_refresh_after is not None else "",
+                "server_error": pairing.server_error,
+                "validation_error": pairing.validation_error,
+                "revoked_at": str(pairing.revoked_at) if pairing.revoked_at is not None else "",
             },
             mesh=self.mesh_store.status(),
             backend=backend.status(),
+            connection=gate,
         )
 
     def _pairing_or_raise(self, profile_id: str) -> PairingRecord:

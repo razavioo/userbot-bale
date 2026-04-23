@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import secrets
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from baleobala.control.keychain import SecretBackend, default_secret_backend
+from baleobala.control.relay_directory import RelayDirectory
 from baleobala.control.paths import config_dir
 from baleobala.control.store import JsonStore
 
@@ -184,11 +188,20 @@ class PairingStore:
         role: str = "client",
         peer_id: int | None = None,
         peer_name: str | None = None,
+        relay_name: str | None = None,
         relay_mode: str = "proxy",
         backend_preference: str | None = None,
         transport_preference: str = "auto",
         secret_name: str | None = None,
     ) -> PairingRecord:
+        if peer_id is None and relay_name:
+            relay = RelayDirectory().lookup(relay_name)
+            if relay is not None:
+                peer_id = relay.peer_id
+                peer_name = peer_name or relay.name
+                backend_preference = backend_preference or relay.backend_preference
+                if transport_preference == "auto":
+                    transport_preference = relay.transport_preference
         record = PairingRecord(
             profile_id=secrets.token_hex(4),
             name=name,
@@ -207,6 +220,64 @@ class PairingStore:
         if record.secret_name:
             self._secret_backend.save(record.secret_name, secrets.token_urlsafe(24))
         return self.add(record)
+
+    def export_invite_link(self, profile_id: str) -> str:
+        exchange = self.export_request(profile_id)
+        payload = json.dumps(exchange.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+        return f"baleobala://pair?data={encoded}"
+
+    def import_invite_link(self, link: str) -> PairingRecord:
+        parsed = urlparse(link)
+        if parsed.scheme and parsed.scheme != "baleobala":
+            raise ValueError("invite link must use the baleobala:// scheme")
+        data = ""
+        if parsed.scheme:
+            values = parse_qs(parsed.query).get("data", [])
+            data = values[0] if values else parsed.path.lstrip("/")
+        else:
+            data = link
+        if not data:
+            raise ValueError("invite link is missing encoded data")
+        padding = "=" * (-len(data) % 4)
+        payload = base64.urlsafe_b64decode(data + padding)
+        exchange = PairingExchange.from_dict(json.loads(payload.decode("utf-8")))
+        if exchange.exchange_type == "response":
+            return self.apply_response(exchange)
+        if exchange.exchange_type != "request":
+            raise ValueError("pairing invite must be a request or response exchange")
+
+        existing = self.get(exchange.profile_id)
+        if existing is None:
+            self.add(
+                PairingRecord(
+                    profile_id=exchange.profile_id,
+                    name=exchange.name,
+                    role=exchange.role,
+                    pair_code=exchange.pair_code,
+                    relay_mode=exchange.relay_mode,
+                    peer_id=exchange.peer_id,
+                    peer_name=exchange.peer_name,
+                    backend_preference=exchange.backend_preference,
+                    transport_preference=exchange.transport_preference,
+                    secret_name=self._secret_name_for(exchange.name),
+                    provisioning_status="pending",
+                    authorization_status="none",
+                    status="pending",
+                )
+            )
+        self.accept_request(
+            exchange,
+            name=exchange.name,
+            peer_id=exchange.peer_id,
+            peer_name=exchange.peer_name,
+            backend_preference=exchange.backend_preference,
+            transport_preference=exchange.transport_preference,
+        )
+        updated = self.get(exchange.profile_id)
+        if updated is None:
+            raise LookupError(f"no pairing profile {exchange.profile_id!r} found after import")
+        return updated
 
     def accept(
         self,
