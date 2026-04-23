@@ -8,6 +8,25 @@ Low-level commands such as `loopback`, `tunnel-loopback`, `bale-call`, `bale-tun
 
 The main product path is: `doctor -> auth -> pair -> connect`.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    User[User] --> ControlPlane[Control Plane]
+    ControlPlane --> Carrier[Carrier]
+    Carrier --> Transport[Transport]
+    Transport --> Tunnel[Tunnel]
+    Tunnel --> TUN[TUN]
+```
+
+At a high level, the product flow is:
+
+- User actions go through the control plane for auth, pairing, provisioning, and backend selection.
+- The carrier is the live session layer that keeps a call open and moves bytes for the tunnel.
+- The transport is the byte-bearing link inside the carrier, such as DataChannel, audio, QR, or RPC.
+- The tunnel turns opaque transport frames into IP packets and keeps ARQ, reassembly, and swap logic alive.
+- The TUN device is the kernel edge where IP packets enter and leave the host.
+
 ## Install
 
 Create a virtual environment and install the Bale and GUI dependencies:
@@ -109,3 +128,19 @@ should stay centered on `doctor`, `auth`, `pair`, `vpn`, and `gui`.
 - [Install and Bootstrap](docs/INSTALL.md)
 - [Bale Headless Notes](docs/BALE_HEADLESS.md)
 - [Native macOS Scaffold](native/macos/README.md)
+- [Architecture](docs/ARCHITECTURE.md)
+
+## Glossary
+
+| Code term | VPN term | Meaning |
+| --- | --- | --- |
+| `ControlService` / `ProvisioningService` | control plane | Owns auth, pairing, relay enrollment, and credential issuance. |
+| `CarrierSession` | carrier / call session | The live media session that carries the tunnel payload. |
+| `Transport` | bearer transport | The opaque byte pipe used inside the carrier. |
+| `TransportPool` / `TransportChain` | transport selector | Chooses and swaps between available bearer transports. |
+| `Tunnel` | tunnel engine | Handles framing, fragmentation, ARQ, and reassembly. |
+| `VpnRunner` | tunnel runner | Connects TUN to the tunnel and drains the packet queue. |
+| `TunnelBridge` / `TunnelService` | tunnel service boundary | IPC surface for the future packet-tunnel integration. |
+| `VpnBackend` | VPN backend adapter | Platform-specific integration layer for packet tunnel or proxy modes. |
+| `CredentialEpoch` | credential lease | Short-lived secret window used for relay/device access. |
+| `TUN` | kernel tunnel interface | The OS device that injects and receives IP packets. |

@@ -123,6 +123,22 @@ to tear down the current transport and advance to the next one in the
 auto chain — TCP sessions survive because the tunnel's seq/ARQ state is
 preserved across the swap.
 
+## Transport Hot-Swap
+
+The live tunnel now keeps running while the bearer transport changes.
+`SIGUSR1` is the operator trigger: the signal handler in
+`src/baleobala/vpn/cli.py` asks the failover controller for the next
+candidate in the chain, swaps that transport into the active `Tunnel`,
+and closes the old bearer after the swap succeeds.
+
+Practical notes:
+
+- `--transport auto` builds the default chain in order: `dc -> qr -> audio -> rpc -> mtproto_rpc`.
+- Each `SIGUSR1` advances to the next viable transport in that chain.
+- The tunnel keeps its sequence number space, ARQ window, and reassembly state, so existing TCP sessions normally survive the swap.
+- If no replacement transport is available, the controller leaves the current bearer in place until a later retry succeeds.
+- The carrier session itself is not renegotiated by the signal; this is a transport-level swap, not a new call.
+
 ## Multi-client exit node (mesh mode)
 
 One exit node can serve many clients concurrently — each incoming Bale
@@ -169,6 +185,21 @@ for backwards compatibility, but `auth bale-login` is the preferred
 entry point because it can force the real browser login path that we
 verified against the GUI flow.
 
+## Credential Lifecycle
+
+Relay and device access is backed by short-lived credential epochs in
+`src/baleobala/control/provisioning.py`.
+
+- `approve_authorization()` ensures there is an active `CredentialEpoch` for the relay.
+- `current_epoch()` returns the live epoch when it has not expired yet.
+- `refresh_credentials()` rotates the epoch immediately.
+- Revocation also rotates the epoch so previously issued secrets stop being the active lease.
+
+Each epoch carries `issued_at`, `refresh_after`, and `expires_at`. In
+operator terms, this is a rotating credential lease rather than a
+permanent secret: clients should expect renewal and expiry, not an
+infinite token.
+
 ## Real Two-Account Smoke
 
 To validate the full live path on one machine with two Bale accounts:
@@ -204,8 +235,10 @@ use a CA override instead of disabling TLS verification.
 - **Tunnel comes up but traffic doesn't flow** — verify both tun
   devices have addresses on the same /24 and MTU matches; `ping`
   between them first, then debug routing.
-- **Call drops after ~30 min** — the keepalive layer (Phase 7) isn't
-  wired yet. Workaround: relaunch.
+- **Call drops after ~30 min** — the keepalive is wired into the VPN
+  entry points now, so this usually points to carrier connectivity or a
+  terminated process rather than a missing keepalive. Check `vpn
+  status`, LiveKit connectivity, and whether the process stayed alive.
 
 ## Self-test (no network)
 
