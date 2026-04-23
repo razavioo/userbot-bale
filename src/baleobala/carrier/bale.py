@@ -83,8 +83,9 @@ class BaleCarrierController:
             got = threading.Event()
             holder: list[CarrierCredentials] = []
 
-            def on_creds(creds) -> None:  # noqa: ANN001
+            def on_creds(event) -> None:  # noqa: ANN001
                 if not holder:
+                    creds = event.credentials
                     holder.append(
                         CarrierCredentials(
                             url=creds.url,

@@ -6,6 +6,7 @@ import pytest
 
 from baleobala.vpn.mesh.allocator import IpAllocator
 from baleobala.vpn.mesh.router import PacketRouter
+from baleobala.vpn.provisioning import MeshProvisionMessage
 from baleobala.vpn.transports import InMemoryTransport
 from baleobala.vpn.tunnel import Tunnel
 
@@ -31,6 +32,13 @@ def test_allocator_releases_on_drop():
     # Releasing frees the slot; next assign with a new peer picks it up.
     y = a.assign(99)
     assert y.prefix == x.prefix
+
+
+def test_allocator_can_reserve_persisted_slot():
+    a = IpAllocator("10.77.0.0/28")
+    reserved = a.reserve(2, 7)
+    assert reserved.slot == 2
+    assert a.assign(7) == reserved
 
 
 def test_allocator_exhaustion():
@@ -73,3 +81,20 @@ def test_router_rejects_unknown_dst():
     r = PacketRouter()
     pkt = _ipv4_to_bytes("1.2.3.4")
     assert r.dispatch(pkt) is False
+
+
+def test_mesh_provision_message_roundtrip():
+    msg = MeshProvisionMessage(
+        version=1,
+        kind="assign",
+        peer_id=5,
+        session_id=0x1116,
+        pool_cidr="10.77.0.0/24",
+        prefix="10.77.0.4/30",
+        gateway_ip="10.77.0.5",
+        client_ip="10.77.0.6",
+        tun_mtu=1400,
+        transport="dc",
+    )
+    decoded = MeshProvisionMessage.decode(msg.encode())
+    assert decoded == msg

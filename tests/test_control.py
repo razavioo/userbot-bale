@@ -166,6 +166,7 @@ def test_control_service_bootstraps_first_run(tmp_path, monkeypatch) -> None:
     assert snapshot.vpn["state"] == "configured"
     assert snapshot.vpn["profile_id"] == "default"
     assert snapshot.pairing["state"] == "empty"
+    assert snapshot.mesh["state"] == "empty"
     assert snapshot.backend["backend"] == "linux-tun"
 
 
@@ -244,6 +245,41 @@ def test_pairing_store_tracks_managed_provisioning_metadata(tmp_path, monkeypatc
     assert accepted.secret_name == "pair.secret"
     assert store.connectable(accepted.profile_id) == accepted
     assert store.load_secret(accepted.profile_id) is not None
+
+
+def test_control_service_tracks_durable_mesh_assignments(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import ControlService
+
+    service = ControlService()
+    assigned = service.issue_mesh_assignment(77, pool_cidr="10.77.0.0/24", transport="dc", session_id=0x115e)
+    assert assigned.client_ip == "10.77.0.2"
+    assert assigned.provisioning_status == "assigned"
+
+    looked_up = service.lookup_mesh_assignment(77)
+    assert looked_up is not None
+    assert looked_up.slot == assigned.slot
+
+    active = service.activate_mesh_assignment(77, transport="dc", session_id=0x115e)
+    assert active.provisioning_status == "active"
+
+    service.release_mesh_assignment(77)
+    released = service.lookup_mesh_assignment(77)
+    assert released is not None
+    assert released.provisioning_status == "released"
+
+
+def test_mesh_assignments_are_sticky_across_service_restart(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import ControlService
+
+    first = ControlService()
+    issued = first.issue_mesh_assignment(99, pool_cidr="10.77.0.0/24")
+
+    second = ControlService()
+    reissued = second.issue_mesh_assignment(99, pool_cidr="10.77.0.0/24")
+    assert reissued.slot == issued.slot
+    assert reissued.client_ip == issued.client_ip
 
 
 def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -> None:
@@ -681,6 +717,13 @@ def test_build_parser_exposes_control_plane_commands() -> None:
     assert "ws_ca_file" in live_smoke_opts
     assert "ws_ca_path" in live_smoke_opts
     assert "ws_ssl_no_verify" in live_smoke_opts
+    netns_session_parser = vpn_subcommands["netns-session"]
+    netns_session_opts = {action.dest for action in netns_session_parser._actions}
+    assert "full_device" in netns_session_opts
+    assert "dns_server" in netns_session_opts
+    assert "carrier_host" in netns_session_opts
+    assert "skip_nat_setup" in netns_session_opts
+    assert "skip_host_route_setup" in netns_session_opts
 
     relay_parser = subcommands["relay"]
     relay_subcommands = _subparser_choices(relay_parser)

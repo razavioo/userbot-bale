@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from baleobala.bale.api import BaleApiClient, LiveKitCredentials
+from baleobala.bale.messaging_backend import MessagingBackend
 from baleobala.bale.protos import (
     CallCredentials, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
 )
@@ -50,6 +51,18 @@ def test_parse_call_credentials_from_capture_bytes() -> None:
     assert c.room == "c9432d6c-12c6-4b8f-8f75-4150495dc055"
 
 
+def test_parse_call_credentials_extracts_peer_id_when_present() -> None:
+    blob = (
+        b"\x0a\x06\x08\x01\x10\xb9\x60 "
+        b"wss://meet-gwe.ble.ir "
+        b"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + b"A" * 200 + b".XYZ "
+        b"c9432d6c-12c6-4b8f-8f75-4150495dc055"
+    )
+    c = parse_call_credentials(blob)
+    assert c is not None
+    assert c.peer_id == 12345
+
+
 def test_parse_call_credentials_returns_none_without_match() -> None:
     assert parse_call_credentials(b"just some random bytes") is None
 
@@ -77,3 +90,8 @@ def test_api_client_bootstraps_endpoints() -> None:
     eps = client.bootstrap()
     assert len(eps) >= 1
     assert all(e.host.endswith(".bale.ai") for e in eps)
+
+
+def test_bale_api_client_satisfies_messaging_backend_protocol() -> None:
+    client = BaleApiClient(jwt="token")
+    assert isinstance(client, MessagingBackend)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+from baleobala.bale.protos import IncomingCallEvent
 from baleobala.carrier.bale import BaleCarrierController
 
 
@@ -43,7 +44,7 @@ def test_answer_sets_ready_event_after_listener_is_registered() -> None:
     assert client.started is True
     assert client.callback is not None
 
-    client.callback(_FakeCreds())
+    client.callback(IncomingCallEvent(credentials=_FakeCreds(), peer_id=7))
     t.join(timeout=1.0)
 
     creds = result_holder["creds"]

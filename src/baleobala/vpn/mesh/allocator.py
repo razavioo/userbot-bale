@@ -31,9 +31,11 @@ DEFAULT_POOL = "10.77.0.0/16"
 @dataclass(frozen=True)
 class Assignment:
     peer_id: int
+    slot: int
     gateway: str   # exit-node side IP
     client: str    # client side IP
     prefix: str    # e.g. "10.77.0.0/30"
+    pool_cidr: str
 
 
 class IpAllocator:
@@ -69,6 +71,21 @@ class IpAllocator:
             self._by_slot[slot] = peer_id
             return self._build(slot, peer_id)
 
+    def reserve(self, slot: int, peer_id: int) -> Assignment:
+        with self._lock:
+            if not 0 <= slot < len(self._subnets):
+                raise ValueError("slot out of range")
+            existing = self._by_slot.get(slot)
+            if existing is not None and existing != peer_id:
+                raise RuntimeError(f"slot {slot} already reserved by peer {existing}")
+            prior = self._by_peer.get(peer_id)
+            if prior is not None and prior != slot:
+                raise RuntimeError(f"peer {peer_id} already assigned to slot {prior}")
+            self._free.discard(slot)
+            self._by_peer[peer_id] = slot
+            self._by_slot[slot] = peer_id
+            return self._build(slot, peer_id)
+
     def release(self, peer_id: int) -> None:
         with self._lock:
             slot = self._by_peer.pop(peer_id, None)
@@ -84,7 +101,9 @@ class IpAllocator:
         # and .2 (client).
         return Assignment(
             peer_id=peer_id,
+            slot=slot,
             gateway=str(hosts[0]),
             client=str(hosts[1]),
             prefix=str(net),
+            pool_cidr=str(self._pool),
         )

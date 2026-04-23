@@ -98,7 +98,15 @@ class CallCredentials:
     url: str
     token: str
     room: str
+    peer_id: int | None = None
     raw: bytes = b""
+
+
+@dataclass(frozen=True)
+class IncomingCallEvent:
+    credentials: CallCredentials
+    peer_id: int | None
+    source: str = "push"
 
 
 # ============================================================
@@ -432,12 +440,72 @@ def parse_call_credentials(buf: bytes) -> CallCredentials | None:
     )
     if not (url_m and tok_m):
         return None
+    peer_id = parse_call_peer_id(buf)
     return CallCredentials(
         url=url_m.group(0).decode("ascii"),
         token=tok_m.group(0).decode("ascii"),
         room=room_m.group(0).decode("ascii") if room_m else "",
+        peer_id=peer_id,
         raw=buf,
     )
+
+
+def parse_call_peer_id(buf: bytes) -> int | None:
+    """Best-effort extraction of a Bale user_id from call-related pushes.
+
+    We look for nested `OutPeer`-shaped messages (`field 1 = type`,
+    `field 2 = user_id`) near the credentials payload and return the
+    first plausible user id.
+    """
+    candidates: list[int] = []
+
+    def _scan(inner: bytes) -> None:
+        pos = 0
+        peer_type = None
+        user_id = None
+        def _commit_candidate() -> None:
+            if peer_type in {1, 2} and user_id is not None and 10_000 <= user_id <= 5_000_000_000:
+                candidates.append(user_id)
+
+        while pos < len(inner):
+            try:
+                tag, pos = _dec_varint(inner, pos)
+            except (IndexError, ValueError):
+                _commit_candidate()
+                return
+            fn, wt = tag >> 3, tag & 7
+            if wt == 0:
+                try:
+                    val, pos = _dec_varint(inner, pos)
+                except (IndexError, ValueError):
+                    _commit_candidate()
+                    return
+                if fn == 1:
+                    peer_type = val
+                elif fn == 2:
+                    user_id = val
+            elif wt == 2:
+                try:
+                    ln, pos = _dec_varint(inner, pos)
+                except (IndexError, ValueError):
+                    _commit_candidate()
+                    return
+                end = pos + ln
+                if end > len(inner):
+                    end = len(inner)
+                _scan(inner[pos:end])
+                pos = end
+            elif wt == 1:
+                pos += 8
+            elif wt == 5:
+                pos += 4
+            else:
+                _commit_candidate()
+                return
+        _commit_candidate()
+
+    _scan(buf)
+    return candidates[0] if candidates else None
 
 
 # ============================================================
