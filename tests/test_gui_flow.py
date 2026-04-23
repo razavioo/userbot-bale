@@ -100,3 +100,77 @@ def test_connect_view_creates_pairing_and_persists_profile(qapp, monkeypatch, tm
     assert profile.name == "home-relay"
     assert profile.backend == "packet-tunnel"
     assert profile.proxy_secret == "secret"
+
+
+def test_login_view_validates_phone_and_code(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.gui.app import MainWindow
+
+    win = MainWindow()
+    view = win.login_view
+
+    view.phone.setText("12")
+    view._on_send_clicked()
+    assert "Phone number needs attention" in view.banner.title.text()
+
+    view.code.setEnabled(True)
+    view.code.setText("abc")
+    view._on_verify_clicked()
+    assert "Code needs attention" in view.banner.title.text()
+
+
+def test_connect_view_keeps_logs_collapsed_by_default(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.gui.app import MainWindow
+
+    win = MainWindow()
+
+    assert not win.connect_view.logs.isVisible()
+    assert win.connect_view.logs_toggle.text() == "Show Connection Log"
+
+
+def test_connect_view_shows_readiness_items(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.gui.app import MainWindow
+
+    win = MainWindow()
+
+    labels = [label.text() for label in win.connect_view.readiness._labels]
+    assert any("Bale sign-in" in text for text in labels)
+    assert any("Relay pairing" in text for text in labels)
+
+
+def test_login_view_includes_onboarding_panel(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from PySide6.QtWidgets import QFrame
+    from baleobala.gui.app import MainWindow
+
+    win = MainWindow()
+    panels = [panel for panel in win.login_view.findChildren(QFrame) if panel.objectName() == "hero-panel"]
+    assert panels
+
+
+def test_connect_view_surfaces_failover_status(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.gui.app import MainWindow
+
+    win = MainWindow()
+    win.connect_view._on_connected(
+        {
+            "backend": {
+                "backend": "linux-tun",
+                "transport_selected": "audio",
+                "transport_previous": "dc",
+                "recovery_state": "recovering",
+                "failover_count": "2",
+                "peer_coordination": "active",
+            },
+            "probe": {"ok": "yes", "detail": "probe reached gateway"},
+        }
+    )
+
+    detail = win.connect_view.phase_detail.text()
+    assert "recovering via linux-tun" in detail.lower()
+    assert "Previous transport: dc." in detail
+    assert "Failovers so far: 2." in detail
+    assert "Peer failover coordination is active." in detail

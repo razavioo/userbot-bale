@@ -1,9 +1,4 @@
-"""Theme tokens and QSS builder for the Qt6 GUI.
-
-Centralises color, spacing, and typography so views don't embed raw hex
-literals and so light/dark switching is a single code path. The OS theme is
-detected at apply time; users can override via the config system.
-"""
+"""Theme tokens and QSS builder for the Qt GUI."""
 
 from __future__ import annotations
 
@@ -11,11 +6,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 try:
-    from PySide6.QtCore import Qt
     from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QApplication
-except ImportError:  # GUI extras not installed
-    Qt = None  # type: ignore[assignment]
+except ImportError:
     QPalette = None  # type: ignore[assignment]
     QApplication = None  # type: ignore[assignment]
 
@@ -26,51 +19,48 @@ Mode = Literal["light", "dark", "auto"]
 @dataclass(frozen=True)
 class Theme:
     name: str
-    primary: str
-    primary_hover: str
-    primary_pressed: str
-    primary_disabled_bg: str
-    primary_disabled_fg: str
-    danger: str
-    danger_bg_hover: str
+    accent: str
+    accent_hover: str
+    accent_pressed: str
+    accent_soft: str
     ok: str
     err: str
+    info: str
+    card_border: str
+    shadow: str
+    font_family_ui: str = '"Avenir Next", "Segoe UI", sans-serif'
     font_family_mono: str = '"SF Mono", Menlo, Consolas, monospace'
-    base_font_px: int = 13
-    title_font_px: int = 22
-    section_font_px: int = 11
-    radius_card: int = 10
-    radius_input: int = 6
-    pad_input_v: int = 7
-    pad_input_h: int = 10
-    pad_button_v: int = 8
-    pad_button_h: int = 16
+    base_font_px: int = 14
+    title_font_px: int = 28
+    section_font_px: int = 12
+    radius_card: int = 16
+    radius_input: int = 10
 
 
 LIGHT = Theme(
     name="light",
-    primary="#2b6cb0",
-    primary_hover="#2c5a94",
-    primary_pressed="#234b7a",
-    primary_disabled_bg="#c3cdd9",
-    primary_disabled_fg="#6b7280",
-    danger="#d64e66",
-    danger_bg_hover="rgba(214, 78, 102, 0.08)",
-    ok="#2ea043",
-    err="#d64e66",
+    accent="#0f766e",
+    accent_hover="#0b5f59",
+    accent_pressed="#094e49",
+    accent_soft="#d7f3ef",
+    ok="#1f7a44",
+    err="#b9384e",
+    info="#185c9c",
+    card_border="#d5ddd9",
+    shadow="rgba(16, 24, 40, 0.08)",
 )
 
 DARK = Theme(
     name="dark",
-    primary="#2b6cb0",
-    primary_hover="#2c5a94",
-    primary_pressed="#234b7a",
-    primary_disabled_bg="#3a4556",
-    primary_disabled_fg="#8a95a5",
-    danger="#f0506e",
-    danger_bg_hover="rgba(240, 80, 110, 0.08)",
-    ok="#2ea043",
-    err="#f0506e",
+    accent="#2ec4b6",
+    accent_hover="#27aa9d",
+    accent_pressed="#1f8d82",
+    accent_soft="rgba(46, 196, 182, 0.15)",
+    ok="#59c174",
+    err="#ff6b81",
+    info="#78b8ff",
+    card_border="#2f3744",
+    shadow="rgba(0, 0, 0, 0.35)",
 )
 
 
@@ -82,7 +72,6 @@ def detect_os_theme() -> Literal["light", "dark"]:
         return "light"
     palette = app.palette()
     window = palette.color(QPalette.ColorRole.Window)
-    # Qt's color-valueF is 0.0–1.0; < 0.5 ≈ dark.
     return "dark" if window.valueF() < 0.5 else "light"
 
 
@@ -94,83 +83,133 @@ def resolve_theme(mode: Mode) -> Theme:
 
 def stylesheet(theme: Theme) -> str:
     return f"""
-* {{ font-size: {theme.base_font_px}px; }}
+* {{
+    font-family: {theme.font_family_ui};
+    font-size: {theme.base_font_px}px;
+}}
 
-QMainWindow, QWidget#container {{ background: palette(window); }}
+QMainWindow, QWidget#container {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 palette(window),
+        stop:1 palette(alternate-base));
+}}
 
-QWidget#card {{
+QWidget#card, QGroupBox, QFrame#banner-info, QFrame#banner-ok, QFrame#banner-err, QFrame#accent-panel, QFrame#hero-panel {{
     background: palette(base);
+    border: 1px solid {theme.card_border};
     border-radius: {theme.radius_card}px;
 }}
 
-QLabel#title    {{ font-size: {theme.title_font_px}px; font-weight: 600; }}
-QLabel#subtitle {{ color: palette(placeholder-text); }}
-QLabel#section  {{
-    font-size: {theme.section_font_px}px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 1px;
-    color: palette(placeholder-text);
+QFrame#accent-panel {{
+    background: rgba(15, 118, 110, 0.04);
+}}
+QFrame#hero-panel {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 {theme.accent_soft},
+        stop:1 rgba(15, 118, 110, 0.03));
+    border-color: rgba(15, 118, 110, 0.20);
 }}
 
-QLabel#status-info {{ color: palette(placeholder-text); }}
-QLabel#status-ok   {{ color: {theme.ok}; font-weight: 600; }}
-QLabel#status-err  {{ color: {theme.err}; font-weight: 600; }}
+QGroupBox {{
+    margin-top: 8px;
+    padding: 20px 18px 18px 18px;
+    font-weight: 600;
+}}
 
-QLineEdit, QComboBox, QSpinBox {{
-    padding: {theme.pad_input_v}px {theme.pad_input_h}px;
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 0 6px;
+}}
+
+QLabel#title {{ font-size: {theme.title_font_px}px; font-weight: 700; }}
+QLabel#subtitle {{ color: palette(placeholder-text); }}
+QLabel#section, QLabel#eyebrow {{
+    font-size: {theme.section_font_px}px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: palette(placeholder-text);
+}}
+QLabel#summary {{ color: palette(placeholder-text); }}
+QLabel#accent-title {{ font-weight: 700; }}
+QLabel#accent-body {{ color: palette(text); }}
+QLabel#readiness-ok {{
+    color: palette(text);
+    background: rgba(31, 122, 68, 0.08);
+    border: 1px solid rgba(31, 122, 68, 0.18);
+    border-radius: 10px;
+    padding: 8px 10px;
+}}
+QLabel#readiness-pending {{
+    color: palette(text);
+    background: rgba(24, 92, 156, 0.08);
+    border: 1px solid rgba(24, 92, 156, 0.18);
+    border-radius: 10px;
+    padding: 8px 10px;
+}}
+
+QLabel#banner-title {{ font-weight: 700; }}
+QLabel#banner-body {{ color: palette(text); }}
+QFrame#banner-info {{ background: {theme.accent_soft}; }}
+QFrame#banner-ok {{ background: rgba(31, 122, 68, 0.10); }}
+QFrame#banner-err {{ background: rgba(185, 56, 78, 0.10); }}
+
+QLabel#status-info {{ color: palette(text); }}
+QLabel#status-ok {{ color: {theme.ok}; font-weight: 600; }}
+QLabel#status-err {{ color: {theme.err}; font-weight: 600; }}
+
+QLabel#step-done, QLabel#step-current, QLabel#step-pending {{
+    border-radius: 10px;
+    padding: 8px 10px;
+    border: 1px solid {theme.card_border};
+}}
+QLabel#step-done {{ background: rgba(31, 122, 68, 0.10); color: {theme.ok}; font-weight: 700; }}
+QLabel#step-current {{ background: {theme.accent_soft}; color: {theme.accent}; font-weight: 700; border-color: {theme.accent}; }}
+QLabel#step-pending {{ color: palette(placeholder-text); background: palette(base); }}
+
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {{
+    padding: 9px 11px;
     border: 1px solid palette(mid);
     border-radius: {theme.radius_input}px;
     background: palette(base);
-    selection-background-color: palette(highlight);
+    selection-background-color: {theme.accent};
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: palette(highlight); }}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{
+    border-color: {theme.accent};
+}}
 
-QPushButton {{
-    padding: {theme.pad_button_v}px {theme.pad_button_h}px;
+QPushButton, QToolButton {{
+    padding: 10px 16px;
     border-radius: {theme.radius_input}px;
     border: 1px solid palette(mid);
     background: palette(button);
 }}
-QPushButton:hover    {{ background: palette(midlight); }}
-QPushButton:pressed  {{ background: palette(mid); }}
-QPushButton:disabled {{ color: palette(placeholder-text); }}
+QPushButton:hover, QToolButton:hover {{ background: palette(midlight); }}
+QPushButton:disabled, QToolButton:disabled {{ color: palette(placeholder-text); }}
 
 QPushButton#primary {{
-    background: {theme.primary};
+    background: {theme.accent};
     color: white;
-    border: 1px solid {theme.primary};
+    border-color: {theme.accent};
+    font-weight: 700;
 }}
-QPushButton#primary:hover    {{ background: {theme.primary_hover}; }}
-QPushButton#primary:pressed  {{ background: {theme.primary_pressed}; }}
-QPushButton#primary:disabled {{
-    background: {theme.primary_disabled_bg};
-    color: {theme.primary_disabled_fg};
-    border-color: {theme.primary_disabled_bg};
-}}
+QPushButton#primary:hover {{ background: {theme.accent_hover}; }}
+QPushButton#primary:pressed {{ background: {theme.accent_pressed}; }}
 
 QPushButton#danger {{
     background: transparent;
-    color: {theme.danger};
-    border-color: {theme.danger};
+    color: {theme.err};
+    border-color: {theme.err};
+    font-weight: 700;
 }}
-QPushButton#danger:hover {{ background: {theme.danger_bg_hover}; }}
+QPushButton#danger:hover {{ background: rgba(185, 56, 78, 0.08); }}
 
-QPlainTextEdit {{
-    font-family: {theme.font_family_mono};
-    font-size: {theme.base_font_px - 2}px;
-    background: palette(base);
-    border: 1px solid palette(mid);
-    border-radius: {theme.radius_input}px;
-    padding: 8px;
-}}
-
-QStatusBar {{ background: palette(window); color: palette(placeholder-text); }}
-
-QFrame#divider {{ background: palette(mid); max-height: 1px; min-height: 1px; }}
+QStatusBar {{ color: palette(placeholder-text); }}
 """
 
 
 def apply_theme(app, mode: Mode = "auto") -> Theme:
-    """Install the stylesheet for ``mode`` on ``app`` and return the theme used."""
     theme = resolve_theme(mode)
     app.setStyle("Fusion")
     app.setStyleSheet(stylesheet(theme))

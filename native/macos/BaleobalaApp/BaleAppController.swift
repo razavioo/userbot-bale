@@ -4,8 +4,8 @@ import NetworkExtension
 
 final class BaleAppController: NSObject, ObservableObject {
     @Published private(set) var statusText = "Not installed"
-    @Published private(set) var profileText = "No tunnel profile loaded"
-    @Published private(set) var connectionText = "Disconnected"
+    @Published private(set) var profileText = "No system tunnel profile installed yet"
+    @Published private(set) var connectionText = "Tunnel inactive"
     @Published var draft = BaleTunnelConfiguration(displayName: "baleobala")
 
     private let manager = BaleTunnelManager()
@@ -44,10 +44,11 @@ final class BaleAppController: NSObject, ObservableObject {
             self.manager.save(manager: tunnelManager) { error in
                 DispatchQueue.main.async {
                     if let error = error {
-                        self.statusText = "Install failed: \(error.localizedDescription)"
+                        self.statusText = "System profile install failed"
+                        self.connectionText = error.localizedDescription
                     } else {
                         self.draft = profile
-                        self.statusText = "Tunnel profile installed"
+                        self.statusText = "System profile installed"
                         self.profileText = self.profileSummary(for: profile)
                         self.refreshConnectionText()
                     }
@@ -58,16 +59,17 @@ final class BaleAppController: NSObject, ObservableObject {
 
     func connect() {
         guard let tunnelManager = tunnelManager else {
-            statusText = "Install a tunnel profile first"
+            statusText = "Install the system profile first"
             return
         }
         manager.start(manager: tunnelManager) { [weak self] error in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if let error = error {
-                    self.statusText = "Connect failed: \(error.localizedDescription)"
+                    self.statusText = "Tunnel start failed"
+                    self.connectionText = error.localizedDescription
                 } else {
-                    self.statusText = "Tunnel requested"
+                    self.statusText = "Tunnel start requested"
                     self.refreshConnectionText()
                 }
             }
@@ -76,11 +78,11 @@ final class BaleAppController: NSObject, ObservableObject {
 
     func disconnect() {
         guard let tunnelManager = tunnelManager else {
-            statusText = "No tunnel profile loaded"
+            statusText = "No system tunnel profile is loaded"
             return
         }
         manager.stop(manager: tunnelManager)
-        statusText = "Disconnected"
+        statusText = "Tunnel stopped"
         refreshConnectionText()
     }
 
@@ -114,9 +116,9 @@ final class BaleAppController: NSObject, ObservableObject {
 
     private func refreshSummary() {
         guard let tunnelManager = tunnelManager else {
-            statusText = "No tunnel profile installed"
-            profileText = "Create a profile, install it, then connect."
-            connectionText = "Disconnected"
+            statusText = "No system profile installed"
+            profileText = "Create a profile here, install it, then start the tunnel."
+            connectionText = "Tunnel inactive"
             return
         }
 
@@ -126,37 +128,37 @@ final class BaleAppController: NSObject, ObservableObject {
             draft = profile
             profileText = profileSummary(for: profile)
         } else {
-            profileText = "Installed tunnel profile found, but it is missing configuration."
+            profileText = "A system profile exists, but it is missing configuration details."
         }
         refreshConnectionText()
     }
 
     private func refreshConnectionText() {
         guard let tunnelManager = tunnelManager else {
-            connectionText = "Disconnected"
-            statusText = "No tunnel profile installed"
+            connectionText = "Tunnel inactive"
+            statusText = "No system profile installed"
             return
         }
         let status = tunnelManager.connection.status
         switch status {
         case .connected:
             connectionText = "Connected"
-            statusText = "The packet tunnel is active"
+            statusText = "Tunnel active"
         case .connecting:
             connectionText = "Connecting"
-            statusText = "Starting the tunnel"
+            statusText = "Starting tunnel"
         case .disconnecting:
             connectionText = "Disconnecting"
-            statusText = "Stopping the tunnel"
+            statusText = "Stopping tunnel"
         case .reasserting:
             connectionText = "Reasserting"
-            statusText = "The tunnel is re-establishing"
+            statusText = "Tunnel is re-establishing"
         case .invalid:
             connectionText = "Invalid"
-            statusText = "The installed profile is invalid"
+            statusText = "Installed profile is invalid"
         case .disconnected:
-            connectionText = "Disconnected"
-            statusText = "Tunnel profile ready"
+            connectionText = "Tunnel inactive"
+            statusText = "System profile ready"
         @unknown default:
             connectionText = "Unknown"
             statusText = "Tunnel status changed"
