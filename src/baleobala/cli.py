@@ -750,6 +750,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         auth_store=auth_store,
         pairing_store=pairing_store,
         vpn_store=vpn_store,
+        backend_factory=backend_for_profile,
     )
 
     if args.vpn_cmd == "plan":
@@ -790,49 +791,67 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         return 0
 
     if args.vpn_cmd == "status":
-        auth_status = auth_store.status()
-        vpn_status = vpn_store.status()
-        pairing = pairing_store.active()
-        profile = vpn_store.load() or vpn_store.ensure_default()
-        backend = backend_for_profile(profile)
-        backend_status = backend.status()
-        snapshot_lines = summarize_snapshot(
-            type("Snapshot", (), {
-                "auth": auth_status,
-                "vpn": vpn_status,
-                "pairing": {"state": "empty"} if pairing is None else {
-                    "state": pairing.status,
-                    "name": pairing.name,
-                },
-                "backend": backend_status,
-            })()
-        )
+        snapshot = control_service.status()
+        snapshot_lines = summarize_snapshot(snapshot)
         print("baleobala secure connection status")
         for line in snapshot_lines:
             print(line)
         print("")
         print("Details:")
-        print(f"saved_profile: {vpn_status.get('name', 'default')}")
-        print(f"backend: {backend_status.get('backend', 'unknown')}")
-        print(f"backend_state: {backend_status.get('state', 'unknown')}")
-        _print_health_block(backend_status)
-        if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
+        print(f"saved_profile: {snapshot.vpn.get('name', 'default')}")
+        print(f"backend: {snapshot.backend.get('backend', 'unknown')}")
+        print(f"backend_state: {snapshot.backend.get('state', 'unknown')}")
+        _print_health_block(snapshot.backend)
+        print("connection:")
+        for key in (
+            "state",
+            "code",
+            "title",
+            "message",
+            "next_step",
+            "backend",
+            "profile_id",
+            "pairing_id",
+            "auth_state",
+            "pairing_state",
+            "authorization_status",
+            "provisioning_status",
+        ):
+            value = snapshot.connection.get(key, "")
+            if value:
+                print(f"  {key}: {value}")
+        if sys.platform == "darwin" and snapshot.vpn.get("backend") in {"proxy", "direct"}:
             from baleobala.control.macos import MacOSSystemProxySession
             system_proxy = MacOSSystemProxySession(state_path=None)
             print("system_proxy:")
             for key, value in system_proxy.status().items():
                 print(f"  {key}: {value}")
         print("pairing:")
-        if pairing is None:
+        if snapshot.pairing.get("state") == "empty":
             print("  state: empty")
-            print("  next_step: run `baleobala pair enroll --name home-relay`")
         else:
-            print(f"  profile_id: {pairing.profile_id}")
-            print(f"  name: {pairing.name}")
-            print(f"  role: {pairing.role}")
-            print(f"  status: {pairing.status}")
-            print(f"  authorization_status: {pairing.authorization_status}")
-            print(f"  provisioning_status: {pairing.provisioning_status}")
+            for key in (
+                "profile_id",
+                "name",
+                "role",
+                "status",
+                "authorization_status",
+                "provisioning_status",
+                "relay_id",
+                "peer_name",
+                "peer_id",
+                "device_id",
+                "authorization_id",
+                "credential_epoch",
+                "credential_expires_at",
+                "credential_refresh_after",
+                "revoked_at",
+                "server_error",
+                "validation_error",
+            ):
+                value = snapshot.pairing.get(key, "")
+                if value:
+                    print(f"  {key}: {value}")
         return 0
 
     if args.vpn_cmd == "probe":
