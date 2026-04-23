@@ -100,6 +100,12 @@ QWidget#card, QGroupBox, QFrame#banner-info, QFrame#banner-ok, QFrame#banner-err
     border-radius: {theme.radius_card}px;
 }}
 
+QFrame#dashboard-panel, QFrame#gate-panel, QFrame#settings-panel {{
+    background: rgba(15, 118, 110, 0.03);
+    border: 1px solid rgba(15, 118, 110, 0.12);
+    border-radius: {theme.radius_card}px;
+}}
+
 QFrame#accent-panel {{
     background: rgba(15, 118, 110, 0.04);
 }}
@@ -196,6 +202,21 @@ QPushButton#primary {{
 }}
 QPushButton#primary:hover {{ background: {theme.accent_hover}; }}
 QPushButton#primary:pressed {{ background: {theme.accent_pressed}; }}
+
+QPushButton#hero-action {{
+    background: {theme.accent};
+    color: white;
+    border-color: {theme.accent};
+    font-weight: 800;
+    font-size: 18px;
+    min-height: 58px;
+    padding: 14px 24px;
+    border-radius: 16px;
+}}
+QPushButton#hero-action:hover {{ background: {theme.accent_hover}; }}
+QPushButton#hero-action:pressed {{ background: {theme.accent_pressed}; }}
+QPushButton#hero-action:checked {{ background: {theme.accent_pressed}; }}
+QPushButton#hero-action:checked:hover {{ background: {theme.accent_hover}; }}
 
 QPushButton#danger {{
     background: transparent;

@@ -590,10 +590,10 @@ class ConnectView(QWidget):
                 "Starting the secure connection checks the saved profile, relay pairing, and runtime, then opens the active transport.",
             )
         )
-        root.addLayout(callouts)
 
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.setObjectName("hero-action")
+        self.connect_btn.setCheckable(True)
         self.connect_btn.setMinimumHeight(58)
         self.connect_btn.setMinimumWidth(300)
         self.connect_btn.clicked.connect(self._on_primary_clicked)
@@ -607,6 +607,13 @@ class ConnectView(QWidget):
         self.setup_toggle.setText("Show setup options")
         self.setup_toggle.setCheckable(True)
         self.setup_toggle.toggled.connect(self._toggle_setup)
+
+        self.setup_panel = QFrame()
+        self.setup_panel.setObjectName("settings-panel")
+        self.setup_panel_layout = QVBoxLayout(self.setup_panel)
+        self.setup_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.setup_panel_layout.setSpacing(12)
+        self.advanced_section = _section("Advanced")
 
         self.quick_start = QGroupBox("Quick Start")
         self.quick_start.setObjectName("quick-start")
@@ -628,7 +635,6 @@ class ConnectView(QWidget):
         quick_layout.addRow("Device role", self.role)
         quick_layout.addRow("Relay name", self.pair_name)
         quick_layout.addRow("Pairing code", self.pair_code)
-        self.quick_start.setVisible(False)
 
         self.state_label = QLabel()
         self.state_label.setObjectName("status-info")
@@ -671,7 +677,6 @@ class ConnectView(QWidget):
         sharing_layout.addWidget(self.invite_link)
         sharing_layout.addWidget(self.invite_qr)
         sharing_layout.addWidget(self.join_link)
-        self.sharing.setVisible(False)
 
         self.advanced = QGroupBox("Advanced Settings")
         self.advanced.setObjectName("advanced-settings")
@@ -697,7 +702,11 @@ class ConnectView(QWidget):
         advanced_layout.addRow("Connection backend", self.backend)
         advanced_layout.addRow("Shared secret", self.proxy_secret)
         advanced_layout.addRow("Local SOCKS5 port", self.listen_port)
-        self.advanced.setVisible(False)
+
+        self.setup_panel_layout.addWidget(self.quick_start)
+        self.setup_panel_layout.addWidget(self.sharing)
+        self.setup_panel_layout.addWidget(self.advanced_section)
+        self.setup_panel_layout.addWidget(self.advanced)
 
         self.logs_toggle = QToolButton()
         self.logs_toggle.setText("Show Connection Log")
@@ -711,14 +720,11 @@ class ConnectView(QWidget):
         self.logs.setVisible(False)
 
         root.addLayout(quick_row)
+        root.addLayout(callouts)
         root.addWidget(self.setup_toggle, 0, Qt.AlignmentFlag.AlignLeft)
-        root.addWidget(self.quick_start)
-        root.addWidget(self.sharing)
+        root.addWidget(self.setup_panel)
         root.addWidget(self.state_label)
-        self.advanced_section = _section("Advanced")
-        self.advanced_section.setVisible(False)
-        root.addWidget(self.advanced_section)
-        root.addWidget(self.advanced)
+        self.setup_panel.setVisible(False)
         root.addWidget(self.logs_toggle)
         root.addWidget(self.logs, 1)
 
@@ -727,10 +733,7 @@ class ConnectView(QWidget):
 
     def _toggle_setup(self, open_: bool) -> None:
         self.setup_toggle.setText("Hide setup options" if open_ else "Show setup options")
-        self.quick_start.setVisible(open_)
-        self.sharing.setVisible(open_)
-        self.advanced_section.setVisible(open_)
-        self.advanced.setVisible(open_)
+        self.setup_panel.setVisible(open_)
 
     def _toggle_logs(self, open_: bool) -> None:
         self._logs_open = open_
@@ -746,6 +749,7 @@ class ConnectView(QWidget):
         for widget in (self.invite_btn, self.join_btn, self.join_link):
             widget.setEnabled(editable)
         self.connect_btn.setText("Disconnect" if self._phase in {"connecting", "connected"} else "Connect")
+        self.connect_btn.setChecked(self._phase in {"connecting", "connected"})
         self.connect_btn.style().unpolish(self.connect_btn)
         self.connect_btn.style().polish(self.connect_btn)
 
@@ -1158,6 +1162,7 @@ class MainWindow(QMainWindow):
         self.phone = None
         self._update_status()
         self.show_login_view()
+        self.connect_view._manual_detail = ""
         if self._status_snapshot:
             self.connect_view._latest_snapshot = self._status_snapshot
         self.connect_view._set_phase("idle", "Sign in again to create or reuse a relay pairing.")
@@ -1188,6 +1193,8 @@ class MainWindow(QMainWindow):
         if thread is not None:
             thread.quit()
             thread.wait(2500)
+        self._status_worker = None
+        self._status_thread = None
         super().closeEvent(event)
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import asdict, is_dataclass
 from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -317,7 +318,20 @@ class ControlPlaneConnectWorker(QObject):
             self.connecting.emit("Reconciling saved profile…")
             recorder.event("reconcile_started", stage="call_setup", outcome="begin")
             snapshot = self._service.reconcile_runtime()
-            if snapshot.pairing is None:
+            gate = getattr(snapshot, "connection", {}) or {}
+            if gate.get("state") == "blocked":
+                message = gate.get("message") or "Connection is not ready."
+                info = classify_failure(last_error=message)
+                recorder.event(
+                    "reconcile_failed",
+                    stage="call_setup",
+                    outcome="failure",
+                    failure_class=info.failure_class,
+                    failure_code=info.failure_code,
+                    error_message=message,
+                )
+                raise RuntimeError(message)
+            if snapshot.pairing is None and not gate:
                 info = classify_failure(last_error="No paired relay is ready")
                 recorder.event(
                     "reconcile_failed",
@@ -328,9 +342,13 @@ class ControlPlaneConnectWorker(QObject):
                     error_message="No paired relay is ready. Create or accept a pairing first.",
                 )
                 raise RuntimeError("No paired relay is ready. Create or accept a pairing first.")
-            self.log_line.emit(f"pairing={snapshot.pairing.name} backend={snapshot.pairing.backend_preference}")
+            if snapshot.pairing is not None:
+                self.log_line.emit(f"pairing={snapshot.pairing.name} backend={snapshot.pairing.backend_preference}")
+            elif gate.get("backend"):
+                self.log_line.emit(f"backend={gate.get('backend')} gate={gate.get('state')}")
+            backend_name = snapshot.pairing.backend_preference if snapshot.pairing is not None else str(gate.get("backend", ""))
             self.connecting.emit("Starting backend…")
-            recorder.event("backend_starting", stage="transport_init", outcome="begin", backend=snapshot.pairing.backend_preference)
+            recorder.event("backend_starting", stage="transport_init", outcome="begin", backend=backend_name)
             result = self._service.start_connection(self._profile_id)
             time.sleep(0.05)
             recorder.event("backend_started", stage="transport_init", outcome="success", backend=result.backend)
@@ -357,6 +375,46 @@ class ControlPlaneConnectWorker(QObject):
             )
             log.exception("control-plane worker crashed")
             self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
+class StatusPoller(QObject):
+    """Poll `ControlService.status()` on a fixed interval for the GUI."""
+
+    snapshot = Signal(dict)
+    failed = Signal(str)
+    stopped = Signal()
+
+    def __init__(self, service, *, interval_seconds: float = 2.0) -> None:  # noqa: ANN001
+        super().__init__()
+        self._service = service
+        self._interval_seconds = interval_seconds
+        self._stop_event = threading.Event()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def _to_payload(self, snapshot) -> dict[str, object]:  # noqa: ANN001
+        if is_dataclass(snapshot):
+            return asdict(snapshot)
+        if isinstance(snapshot, dict):
+            return dict(snapshot)
+        if hasattr(snapshot, "__dict__"):
+            return dict(snapshot.__dict__)
+        return {"value": snapshot}
+
+    def run(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    snapshot = self._service.status()
+                    self.snapshot.emit(self._to_payload(snapshot))
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("status poll failed")
+                    self.failed.emit(f"{type(exc).__name__}: {exc}")
+                if self._stop_event.wait(self._interval_seconds):
+                    break
+        finally:
+            self.stopped.emit()
 
 
 # Keep a global registry so workers + threads are never GC'd while
