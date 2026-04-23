@@ -3,10 +3,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="${repo_root}/native/macos/Baleobala.xcodeproj"
+base_xcconfig="${repo_root}/native/macos/Config/Base.xcconfig"
+app_xcconfig="${repo_root}/native/macos/Config/App.xcconfig"
+packet_xcconfig="${repo_root}/native/macos/Config/PacketTunnel.xcconfig"
 app_entitlements="${repo_root}/native/macos/BaleobalaApp/BaleobalaApp.entitlements"
 tunnel_entitlements="${repo_root}/native/macos/BaleobalaPacketTunnel/BaleobalaPacketTunnel.entitlements"
 app_group_swift="${repo_root}/native/macos/Shared/BaleAppGroup.swift"
 provider_swift="${repo_root}/native/macos/BaleobalaPacketTunnel/PacketTunnelProvider.swift"
+export_options_plist="${EXPORT_OPTIONS_PLIST:-${repo_root}/native/macos/ExportOptions.direct.plist}"
+mode="${1:-repo}"
 
 if [[ ! -d "${project}" ]]; then
   echo "missing Xcode project: ${project}" >&2
@@ -17,6 +22,31 @@ if ! command -v xcodebuild >/dev/null 2>&1; then
   echo "xcodebuild is required for macOS acceptance checks" >&2
   exit 2
 fi
+
+require_pattern() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  if ! grep -q "${pattern}" "${path}"; then
+    echo "${message}" >&2
+    exit 3
+  fi
+}
+
+check_release_inputs() {
+  local missing=()
+  [[ -n "${MACOS_DEVELOPMENT_TEAM:-}" ]] || missing+=("MACOS_DEVELOPMENT_TEAM")
+  [[ -n "${MACOS_CODE_SIGN_IDENTITY:-}" ]] || missing+=("MACOS_CODE_SIGN_IDENTITY")
+  [[ -n "${MACOS_APP_PROFILE_SPECIFIER:-}${MACOS_APP_PROFILE_UUID:-}" ]] || missing+=("MACOS_APP_PROFILE_SPECIFIER or MACOS_APP_PROFILE_UUID")
+  [[ -n "${MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER:-}${MACOS_PACKET_TUNNEL_PROFILE_UUID:-}" ]] || missing+=("MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER or MACOS_PACKET_TUNNEL_PROFILE_UUID")
+  [[ -f "${export_options_plist}" ]] || missing+=("EXPORT_OPTIONS_PLIST (${export_options_plist})")
+
+  if ((${#missing[@]} > 0)); then
+    printf 'missing required macOS release input(s):\n' >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    exit 4
+  fi
+}
 
 app_group="$(python3 - <<'PY' "${app_group_swift}"
 import pathlib, re, sys
@@ -38,6 +68,14 @@ print(match.group(1))
 PY
 )"
 
+effective_team="${MACOS_DEVELOPMENT_TEAM:-$(python3 - <<'PY' "${base_xcconfig}"
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r'^DEVELOPMENT_TEAM\s*=\s*(\S*)\s*$', text, re.M)
+print(match.group(1) if match else "")
+PY
+)}"
+
 for path in "${app_entitlements}" "${tunnel_entitlements}"; do
   if ! plutil -convert xml1 -o - "${path}" | grep -q "${app_group}"; then
     echo "app group ${app_group} missing from ${path}" >&2
@@ -45,20 +83,13 @@ for path in "${app_entitlements}" "${tunnel_entitlements}"; do
   fi
 done
 
-if ! grep -q "${provider_bundle}" "${repo_root}/native/macos/Config/PacketTunnel.xcconfig"; then
-  echo "provider bundle ${provider_bundle} missing from PacketTunnel.xcconfig" >&2
-  exit 3
-fi
-
-if ! grep -q 'handleControlMessage' "${provider_swift}"; then
-  echo "packet tunnel provider is missing control-message handling" >&2
-  exit 3
-fi
-
-if ! grep -q '"type": "status"' "${provider_swift}"; then
-  echo "packet tunnel provider is missing status response payloads" >&2
-  exit 3
-fi
+require_pattern "${provider_bundle}" "${packet_xcconfig}" "provider bundle ${provider_bundle} missing from PacketTunnel.xcconfig"
+require_pattern "com.apple.developer.networking.networkextension" "${tunnel_entitlements}" "packet-tunnel entitlement missing network extension capability"
+require_pattern "packet-tunnel-provider" "${tunnel_entitlements}" "packet-tunnel entitlement missing packet-tunnel-provider value"
+require_pattern "com.apple.security.application-groups" "${app_entitlements}" "app entitlements missing application-groups capability"
+require_pattern "com.apple.security.application-groups" "${tunnel_entitlements}" "packet-tunnel entitlements missing application-groups capability"
+require_pattern "handleControlMessage" "${provider_swift}" "packet tunnel provider is missing control-message handling"
+require_pattern '"type": "status"' "${provider_swift}" "packet tunnel provider is missing status response payloads"
 
 xcodebuild \
   -project "${project}" \
@@ -69,4 +100,22 @@ xcodebuild \
   CODE_SIGNING_REQUIRED=NO \
   build >/dev/null
 
-echo "macOS native acceptance checks passed"
+if [[ "${mode}" == "release" ]]; then
+  if [[ -z "${effective_team}" ]]; then
+    echo "effective DEVELOPMENT_TEAM is empty; macOS packaging is still in scaffold mode" >&2
+    exit 4
+  fi
+  check_release_inputs
+  if ! plutil -extract method raw -o - "${export_options_plist}" | grep -q '^developer-id$'; then
+    echo "export options plist must use developer-id for direct distribution" >&2
+    exit 4
+  fi
+  if ! plutil -extract signingStyle raw -o - "${export_options_plist}" | grep -q '^manual$'; then
+    echo "export options plist must use manual signing for direct distribution" >&2
+    exit 4
+  fi
+  echo "macOS release acceptance checks passed"
+  exit 0
+fi
+
+echo "macOS native repo acceptance checks passed"
