@@ -4,79 +4,94 @@ struct ContentView: View {
     @ObservedObject var controller: BaleAppController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("baleobala")
-                    .font(.largeTitle.weight(.bold))
-                Text("A real macOS VPN control panel for the Bale packet tunnel.")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("baleobala for macOS")
+                        .font(.largeTitle.weight(.bold))
+                    Text("This companion app installs the system VPN profile and starts or stops the packet tunnel after sign-in and pairing are already handled in the shared Bale app flow.")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
 
-            Divider()
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("System tunnel status")
+                            .font(.headline)
+                        Text(controller.statusText)
+                            .font(.title3.weight(.semibold))
+                        Text(controller.connectionText)
+                            .foregroundStyle(.secondary)
+                        Text(controller.profileText)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Tunnel profile")
-                    .font(.headline)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Setup")
+                            .font(.headline)
+                        TextField("Profile name", text: draftBinding(\.displayName))
+                        TextField("Tunnel server address", text: draftBinding(\.serverAddress))
 
-                TextField("Profile name", text: draftBinding(\.displayName))
-                TextField("Packet tunnel bundle identifier", text: draftBinding(\.providerBundleIdentifier))
-                TextField("App group identifier", text: draftBinding(\.appGroupIdentifier))
-                TextField("Tunnel server address", text: draftBinding(\.serverAddress))
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading) {
+                                Text("DNS servers")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField("1.1.1.1, 9.9.9.9", text: multiValueBinding(\.dnsServers))
+                            }
+                            VStack(alignment: .leading) {
+                                Text("Packet MTU")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField("1400", value: intBinding(\.mtu), format: .number)
+                                    .frame(width: 140)
+                            }
+                        }
+
+                        Text("Install writes the route, DNS, and shared runtime settings that macOS uses for the packet tunnel.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                DisclosureGroup("Advanced identifiers") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("Packet tunnel bundle identifier", text: draftBinding(\.providerBundleIdentifier))
+                        TextField("App group identifier", text: draftBinding(\.appGroupIdentifier))
+                        Text("Most people should leave these values alone. Change them only when working on Xcode signing or bundle configuration.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 8)
+                }
 
                 HStack(spacing: 12) {
-                    VStack(alignment: .leading) {
-                        Text("DNS servers")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("1.1.1.1, 9.9.9.9", text: multiValueBinding(\.dnsServers))
+                    Button("Refresh Status") {
+                        controller.loadState()
                     }
-                    VStack(alignment: .leading) {
-                        Text("Packet MTU")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("1400", value: intBinding(\.mtu), format: .number)
-                            .frame(width: 140)
+                    Button("Install System Profile") {
+                        controller.installCurrentProfile()
                     }
+                    Button("Start Tunnel") {
+                        controller.connect()
+                    }
+                    .disabled(!controller.canConnect)
+                    Button("Stop Tunnel") {
+                        controller.disconnect()
+                    }
+                    .disabled(!controller.canConnect)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
 
-                Text("This profile writes the shared route, DNS, and app-group settings that the packet-tunnel extension uses.")
-                    .font(.callout)
+                Text("Typical flow: sign in and pair in the Bale app, install the system profile here, approve any macOS permission prompts, then start the tunnel.")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("State")
-                    .font(.headline)
-                Text(controller.statusText)
-                Text(controller.profileText)
-                    .foregroundStyle(.secondary)
-                Text(controller.connectionText)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 12) {
-                Button("Refresh") {
-                    controller.loadState()
-                }
-                Button("Install profile") {
-                    controller.installCurrentProfile()
-                }
-                Button("Start tunnel") {
-                    controller.connect()
-                }
-                .disabled(!controller.canConnect)
-                Button("Stop tunnel") {
-                    controller.disconnect()
-                }
-                .disabled(!controller.canConnect)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Text("Refresh reloads the installed tunnel profile from System Settings. Install writes the profile, Connect starts the packet tunnel, and Disconnect stops it.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 420)

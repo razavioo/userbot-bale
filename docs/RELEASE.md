@@ -7,17 +7,36 @@ the user flow on `doctor`, `auth bale-login`, `pair`, `relay`, `vpn`, and `gui`.
 transport commands remain available for compatibility or debugging, but should not be presented as
 parallel first-run paths.
 
-## macOS signed build
+The preferred first-run story should always read as `doctor -> auth -> pair -> connect`.
 
-Use Xcode to archive both native targets under `native/macos/`:
+## macOS direct-distribution release
 
-1. Open the macOS project in Xcode.
-2. Set the team, signing identity, and app-group entitlement.
-3. Archive the app and packet-tunnel targets.
-4. Export the archive with the signed distribution profile.
-5. Notarize the app bundle if you are distributing outside the App Store.
+The supported macOS shipping path is direct distribution outside the App Store. Use the checked-in release tooling under `native/macos/` and `scripts/build-macos.sh`, not an ad hoc Xcode-only flow.
 
-The packet-tunnel extension now consumes the route and DNS configuration from the shared tunnel profile, so the app and extension stay in sync.
+Required release inputs:
+
+- `MACOS_DEVELOPMENT_TEAM`
+- `MACOS_CODE_SIGN_IDENTITY`
+- `MACOS_APP_PROFILE_SPECIFIER` or `MACOS_APP_PROFILE_UUID`
+- `MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER` or `MACOS_PACKET_TUNNEL_PROFILE_UUID`
+- `MACOS_NOTARY_PROFILE`
+
+Validate and build with:
+
+```bash
+./scripts/build-macos.sh validate-release-env
+./scripts/acceptance-macos-native.sh release
+./scripts/build-macos.sh release
+```
+
+The default export configuration is `native/macos/ExportOptions.direct.plist`, which is set up for `developer-id` export. The packet-tunnel extension consumes the route and DNS configuration from the shared tunnel profile, so the app and extension stay in sync.
+
+Ship only after clean-machine validation confirms:
+
+1. first install of the stapled app succeeds,
+2. profile install/update/remove works through `NETunnelProviderManager`,
+3. connect/disconnect/relaunch behavior is stable,
+4. route, DNS, and teardown behavior match Python runtime probes during a real signed tunnel session.
 
 ## Linux packaged build
 
@@ -39,5 +58,5 @@ Ship the wheel alongside system packages for:
 - `baleobala doctor` passes on the target machine.
 - `baleobala auth bale-login --phone ... --save` stores auth locally and expired sessions are treated as missing.
 - A relay pairing exists or can be created on first run.
-- `vpn up` starts the correct platform backend.
+- `vpn up` or `gui` starts the correct platform connection flow.
 - The first-run smoke tests pass in CI before publishing.
