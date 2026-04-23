@@ -374,27 +374,48 @@ def test_bundle_analyzer_classifies_missing_bundle(tmp_path, monkeypatch) -> Non
     assert analysis.ok == "no"
 
 
+def _write_bundle_fixture(bundle, payload: dict[str, object]) -> None:
+    bundle.mkdir()
+    for name, body in {
+        "summary.json": {"ok": payload.get("smoke", {}).get("ok", "no"), "smoke_kind": payload.get("scenario", {}).get("smoke_kind", "")},
+        "scenario.json": payload.get("scenario", {}),
+        "environment.json": {"platform": "linux"},
+        "process_status.json": {"started": payload.get("started", []), "stopped": payload.get("stopped", [])},
+        "markers.json": {"markers": payload.get("markers", [])},
+        "smoke.json": payload.get("smoke", {}),
+        "teardown.json": payload.get("teardown", {}),
+        "route_snapshot.json": payload.get("route_snapshot", {}),
+        "dns_snapshot.json": payload.get("dns_snapshot", {}),
+        "command_transcript.json": {"items": []},
+    }.items():
+        (bundle / name).write_text(json.dumps(body), encoding="utf-8")
+    (bundle / "events.jsonl").write_text("", encoding="utf-8")
+    (bundle / "server.log").write_text("call_established\n", encoding="utf-8")
+    (bundle / "client.log").write_text("transport_selected=dc\n", encoding="utf-8")
+    (bundle / "verdict.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_bundle_analyzer_accepts_complete_success_bundle(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle"
-    bundle.mkdir()
-    (bundle / "verdict.json").write_text(
-        json.dumps(
-            {
-                "scenario": {"kind": "proxy-pair"},
-                "setup": {"ok": "yes"},
-                "smoke": {"ok": "yes", "last_error": ""},
-                "teardown": {"ok": "yes"},
-                "started": [{"name": "server"}],
-                "stopped": [{"name": "server"}],
-                "markers": ["call_established", "transport_selected=dc"],
-                "failure_class": "",
-                "log_tails": {"server": "call_established\ntransport_selected=dc\n"},
-            }
-        ),
-        encoding="utf-8",
+    _write_bundle_fixture(
+        bundle,
+        {
+            "scenario": {"kind": "proxy-pair"},
+            "setup": {"ok": "yes"},
+            "smoke": {"ok": "yes", "last_error": ""},
+            "teardown": {"ok": "yes"},
+            "started": [{"name": "server"}],
+            "stopped": [{"name": "server"}],
+            "markers": ["call_established", "transport_selected=dc"],
+            "failure_class": "",
+            "failure_code": "",
+            "last_success_stage": "teardown",
+            "failed_stage": "",
+            "log_tails": {"server": "call_established\ntransport_selected=dc\n"},
+        },
     )
 
     analysis = analyze_bundle(bundle)
@@ -407,23 +428,20 @@ def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monke
     from baleobala.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle-carrier"
-    bundle.mkdir()
-    (bundle / "verdict.json").write_text(
-        json.dumps(
-            {
-                "scenario": {"kind": "proxy-pair"},
-                "setup": {"ok": "yes"},
-                "smoke": {"ok": "no", "last_error": "process readiness timeout"},
-                "teardown": {"ok": "yes"},
-                "started": [{"name": "server"}],
-                "stopped": [{"name": "server"}],
-                "markers": ["call_established"],
-                "failure_class": "transport_runtime",
-                "failure_code": "transport_closed_early",
-                "log_tails": {"server": "call_established\n"},
-            }
-        ),
-        encoding="utf-8",
+    _write_bundle_fixture(
+        bundle,
+        {
+            "scenario": {"kind": "proxy-pair"},
+            "setup": {"ok": "yes"},
+            "smoke": {"ok": "no", "last_error": "process readiness timeout"},
+            "teardown": {"ok": "yes"},
+            "started": [{"name": "server"}],
+            "stopped": [{"name": "server"}],
+            "markers": ["call_established"],
+            "failure_class": "transport_runtime",
+            "failure_code": "transport_closed_early",
+            "log_tails": {"server": "call_established\n"},
+        },
     )
 
     analysis = analyze_bundle(bundle)
@@ -432,27 +450,47 @@ def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monke
     assert analysis.failure_code == "transport_closed_early"
 
 
+def test_bundle_analyzer_reports_missing_bundle_artifacts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    bundle = tmp_path / "bundle-missing-artifacts"
+    bundle.mkdir()
+    (bundle / "verdict.json").write_text(json.dumps({"markers": []}), encoding="utf-8")
+    analysis = analyze_bundle(bundle)
+    assert analysis.classification == "infra_flake"
+    assert analysis.reason == "missing artifacts"
+
+
+def test_bundle_analyzer_reports_invalid_json(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    bundle = tmp_path / "bundle-invalid-json"
+    bundle.mkdir()
+    (bundle / "verdict.json").write_text("{", encoding="utf-8")
+    analysis = analyze_bundle(bundle)
+    assert analysis.reason == "invalid JSON"
+
+
 def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control.analyzer import merge_status_with_bundle
 
     bundle = tmp_path / "bundle-merge"
-    bundle.mkdir()
-    (bundle / "verdict.json").write_text(
-        json.dumps(
-            {
-                "scenario": {"kind": "proxy-pair"},
-                "setup": {"ok": "yes"},
-                "smoke": {"ok": "yes", "last_error": ""},
-                "teardown": {"ok": "yes"},
-                "started": [{"name": "server"}],
-                "stopped": [{"name": "server"}],
-                "markers": ["call_established", "transport_selected=dc"],
-                "failure_class": "",
-                "log_tails": {"server": "call_established\ntransport_selected=dc\n"},
-            }
-        ),
-        encoding="utf-8",
+    _write_bundle_fixture(
+        bundle,
+        {
+            "scenario": {"kind": "proxy-pair"},
+            "setup": {"ok": "yes"},
+            "smoke": {"ok": "yes", "last_error": ""},
+            "teardown": {"ok": "yes"},
+            "started": [{"name": "server"}],
+            "stopped": [{"name": "server"}],
+            "markers": ["call_established", "transport_selected=dc"],
+            "failure_class": "",
+            "log_tails": {"server": "call_established\ntransport_selected=dc\n"},
+        },
     )
 
     merged = merge_status_with_bundle(
@@ -479,6 +517,137 @@ def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monk
     assert merged["failover_count"] == "2"
     assert merged["teardown_clean"] == "yes"
     assert merged["artifact_bundle"] == str(bundle)
+    assert merged["route_ready"] == "yes"
+    assert merged["dns_ready"] == "yes"
+    assert merged["carrier_bypass_ready"] == "no"
+    assert merged["egress_ready"] == "no"
+
+
+def test_merge_status_with_bundle_reports_full_device_bypass_and_egress(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import merge_status_with_bundle
+
+    bundle = tmp_path / "bundle-full-device"
+    _write_bundle_fixture(
+        bundle,
+        {
+            "scenario": {
+                "kind": "tunnel-pair",
+                "smoke_kind": "tunnel-payload",
+                "full_device_checks": ["route", "dns", "tcp-egress"],
+                "network_plan": {
+                    "dns_servers": ["1.1.1.1"],
+                    "carrier_hosts": ["next-ws.bale.ai"],
+                    "setup_host_routes": True,
+                    "client": {"tun": "vpn0", "routes": ["0.0.0.0/1", "128.0.0.0/1"]},
+                },
+            },
+            "setup": {"ok": "yes"},
+            "smoke": {"ok": "yes", "last_error": ""},
+            "teardown": {"ok": "yes"},
+            "started": [{"name": "server"}],
+            "stopped": [{"name": "server"}],
+            "markers": ["call_established", "transport_selected=dc"],
+            "failure_class": "",
+            "failure_code": "",
+            "route_snapshot": {"client": {"stdout": "0.0.0.0/1 dev vpn0\n128.0.0.0/1 dev vpn0\nnext-ws.bale.ai via 172.29.0.2 dev bb-vc\n"}},
+            "dns_snapshot": {"client": {"stdout": "nameserver 1.1.1.1\n"}},
+        },
+    )
+
+    merged = merge_status_with_bundle({"backend": "linux-tun", "state": "running"}, bundle)
+    assert merged["route_ready"] == "yes"
+    assert merged["dns_ready"] == "yes"
+    assert merged["carrier_bypass_ready"] == "yes"
+    assert merged["egress_ready"] == "yes"
+
+
+def test_bundle_analyzer_classifies_dns_snapshot_regression(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    bundle = tmp_path / "bundle-dns"
+    _write_bundle_fixture(
+        bundle,
+        {
+            "scenario": {
+                "kind": "tunnel-pair",
+                "smoke_kind": "tunnel-payload",
+                "full_device_checks": ["route", "dns", "tcp-egress"],
+                "network_plan": {
+                    "dns_servers": ["1.1.1.1", "9.9.9.9"],
+                    "client": {"tun": "vpn0", "routes": ["0.0.0.0/1", "128.0.0.0/1"]},
+                },
+            },
+            "setup": {"ok": "yes"},
+            "smoke": {"ok": "yes", "last_error": ""},
+            "teardown": {"ok": "yes"},
+            "started": [{"name": "server"}],
+            "stopped": [{"name": "server"}],
+            "markers": ["call_established", "transport_selected=dc"],
+            "failure_class": "",
+            "failure_code": "",
+            "route_snapshot": {"client": {"stdout": "0.0.0.0/1 dev vpn0\n128.0.0.0/1 dev vpn0\n"}},
+            "dns_snapshot": {"client": {"stdout": "nameserver 1.1.1.1\n"}},
+        },
+    )
+
+    analysis = analyze_bundle(bundle)
+    assert analysis.classification == "infra_flake"
+    assert analysis.reason == "dns_config_failed"
+    assert analysis.failure_code == "dns_config_failed"
+
+    from baleobala.control.analyzer import merge_status_with_bundle
+
+    merged = merge_status_with_bundle({"backend": "linux-tun", "state": "running"}, bundle)
+    assert merged["route_ready"] == "yes"
+    assert merged["dns_ready"] == "no"
+    assert merged["carrier_bypass_ready"] == "no"
+    assert merged["egress_ready"] == "yes"
+
+
+def test_bundle_analyzer_classifies_route_snapshot_regression(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.analyzer import analyze_bundle
+
+    bundle = tmp_path / "bundle-route"
+    _write_bundle_fixture(
+        bundle,
+        {
+            "scenario": {
+                "kind": "tunnel-pair",
+                "smoke_kind": "tunnel-payload",
+                "full_device_checks": ["route", "dns", "tcp-egress"],
+                "network_plan": {
+                    "dns_servers": ["1.1.1.1"],
+                    "client": {"tun": "vpn0", "routes": ["0.0.0.0/1", "128.0.0.0/1"]},
+                },
+            },
+            "setup": {"ok": "yes"},
+            "smoke": {"ok": "yes", "last_error": ""},
+            "teardown": {"ok": "yes"},
+            "started": [{"name": "server"}],
+            "stopped": [{"name": "server"}],
+            "markers": ["call_established", "transport_selected=dc"],
+            "failure_class": "",
+            "failure_code": "",
+            "route_snapshot": {"client": {"stdout": ""}},
+            "dns_snapshot": {"client": {"stdout": "nameserver 1.1.1.1\n"}},
+        },
+    )
+
+    analysis = analyze_bundle(bundle)
+    assert analysis.classification == "infra_flake"
+    assert analysis.reason == "route_program_failed"
+    assert analysis.failure_code == "route_program_failed"
+
+    from baleobala.control.analyzer import merge_status_with_bundle
+
+    merged = merge_status_with_bundle({"backend": "linux-tun", "state": "running"}, bundle)
+    assert merged["route_ready"] == "no"
+    assert merged["dns_ready"] == "yes"
+    assert merged["carrier_bypass_ready"] == "no"
+    assert merged["egress_ready"] == "yes"
 
 
 def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
@@ -493,6 +662,10 @@ def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
             "transport_selected": "dc",
             "data_flow_ok": "yes",
             "teardown_clean": "yes",
+            "route_ready": "yes",
+            "dns_ready": "yes",
+            "carrier_bypass_ready": "yes",
+            "egress_ready": "yes",
             "failure_class": "",
             "artifact_bundle": "/tmp/bundle",
         },
@@ -514,6 +687,10 @@ def test_product_verdict_leaves_failure_class_empty_for_accepted_flow(tmp_path, 
             "transport_selected": "dc",
             "data_flow_ok": "yes",
             "teardown_clean": "yes",
+            "route_ready": "yes",
+            "dns_ready": "yes",
+            "carrier_bypass_ready": "yes",
+            "egress_ready": "yes",
             "failure_class": "",
             "artifact_bundle": "/tmp/bundle",
         },
@@ -521,6 +698,10 @@ def test_product_verdict_leaves_failure_class_empty_for_accepted_flow(tmp_path, 
     )
     assert verdict.ok == "yes"
     assert verdict.failure_class == ""
+    assert verdict.route_ready == "yes"
+    assert verdict.dns_ready == "yes"
+    assert verdict.carrier_bypass_ready == "yes"
+    assert verdict.egress_ready == "yes"
     assert verdict.analysis_classification == "accepted_flow"
 
 

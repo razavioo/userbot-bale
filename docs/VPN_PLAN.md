@@ -105,10 +105,13 @@ If a paired relay already exists locally, `vpn up --backend proxy` will select i
 - Keep daily CI focused on:
   - in-memory tests
   - harness unit tests
-  - dry-run and orchestration tests
-- Run Linux nightly or on a suitable runner:
+  - analyzer tests
+  - netns runner tests with fakes or dry-run setup
+- Run a Linux nightly acceptance gate on a privileged runner:
   - real `proxy-pair`
   - then real `tunnel-pair`
+  - upload both artifact bundles
+  - fail unless both bundles classify as `accepted_flow`
 - Preserve a small two-device smoke test for release confirmation only.
 
 ## Public Interfaces
@@ -137,6 +140,18 @@ The readiness/status model should include:
 - `failure_class`
 
 These fields must be derivable from the runner and its artifact bundle, not only from backend state.
+
+### Acceptance Truth
+
+- Linux nightly `vpn netns-session` is the primary automated trust gate.
+- The bundle verdict is the product source of truth.
+- Human or AI summaries are downstream of the bundle and must never replace runtime markers or verdict fields.
+- The exact marker protocol is a public compatibility surface:
+  - `call_established`
+  - `transport_selected=<name>`
+  - `proxy_listening=<host:port>`
+  - `tunnel_up=<tun_name>`
+  - `teardown_done`
 
 ## Test Strategy
 
@@ -167,6 +182,12 @@ These fields must be derivable from the runner and its artifact bundle, not only
   - incomplete bundle -> `infra_flake`
   - call ok but payload fail -> `product_bug`
   - missing call credentials or unstable negotiation -> `carrier_instability`
+
+## Release Validation Notes
+
+- Nightly Linux acceptance is the primary automated gate.
+- Two-device smoke remains a release-confirmation step only.
+- `vpn analyze-bundle` and `vpn verdict` must consume the same bundle schema without special-case fallback logic.
 
 ## Assumptions
 

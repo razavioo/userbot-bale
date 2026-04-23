@@ -115,3 +115,11 @@ def test_docs_share_main_product_path_language() -> None:
     assert "doctor -> auth -> pair -> connect" in docs["SETUP"]
     assert "doctor -> auth -> pair -> connect" in docs["INSTALL"]
     assert "doctor -> auth -> pair -> connect" in docs["RELEASE"]
+
+
+def test_marker_emitter_writes_exact_line(capsys) -> None:
+    from baleobala.cli import _emit_marker
+
+    _emit_marker("call_established")
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "call_established"

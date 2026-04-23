@@ -14,7 +14,11 @@ def test_build_proxy_pair_scenario_uses_real_cli_commands() -> None:
     assert "bale-proxy" in scenario.server_cmd
     assert "relay" in scenario.server_cmd
     assert "client" in scenario.client_cmd
+    assert scenario.smoke_server_cmd
     assert scenario.smoke_client_cmd
+    assert scenario.smoke_kind == "tcp-connect-echo"
+    assert "call_established" in scenario.required_markers
+    assert "command_transcript.json" in scenario.bundle_expectations
 
 
 def test_build_tunnel_pair_scenario_uses_real_cli_commands() -> None:
@@ -36,6 +40,8 @@ def test_build_tunnel_pair_scenario_uses_real_cli_commands() -> None:
     assert scenario.network_plan["dns_probe_host"] == "example.com"
     assert scenario.network_plan["egress_probe_host"] == "1.1.1.1"
     assert scenario.smoke_client_cmd
+    assert "route" in scenario.full_device_checks
+    assert "call_established" in scenario.required_markers
 
 
 def test_build_tunnel_pair_scenario_can_disable_full_device_automation() -> None:

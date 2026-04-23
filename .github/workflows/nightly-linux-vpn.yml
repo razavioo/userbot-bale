@@ -1,0 +1,76 @@
+name: Nightly Linux VPN Acceptance
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  test-and-accept:
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate acceptance secrets
+        env:
+          SERVER_JWT_FILE: ${{ secrets.SERVER_JWT_FILE }}
+          CLIENT_JWT_FILE: ${{ secrets.CLIENT_JWT_FILE }}
+          PEER_ID: ${{ secrets.PEER_ID }}
+          PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
+        run: |
+          missing=""
+          for name in SERVER_JWT_FILE CLIENT_JWT_FILE PEER_ID PROXY_SECRET; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing required acceptance secrets:$missing" >&2
+            exit 1
+          fi
+      - name: Install test deps
+        run: python3 -m pip install -e .[test]
+      - name: Unit and analyzer tests
+        run: python3 -m pytest tests/test_scenario.py tests/test_netns.py tests/test_control.py tests/test_cli_surface.py -q
+      - name: Run proxy-pair acceptance
+        env:
+          SERVER_JWT_FILE: ${{ secrets.SERVER_JWT_FILE }}
+          CLIENT_JWT_FILE: ${{ secrets.CLIENT_JWT_FILE }}
+          PEER_ID: ${{ secrets.PEER_ID }}
+          PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
+        run: |
+          python3 -m baleobala.cli vpn netns-session \
+            --kind proxy-pair \
+            --server-jwt-file "$SERVER_JWT_FILE" \
+            --client-jwt-file "$CLIENT_JWT_FILE" \
+            --peer-id "$PEER_ID" \
+            --proxy-secret "$PROXY_SECRET" \
+            --artifact-dir "$RUNNER_TEMP/netns-artifacts" \
+            --json
+      - name: Upload proxy-pair bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpn-netns-artifacts-proxy-pair
+          path: ${{ runner.temp }}/netns-artifacts
+      - name: Run tunnel-pair acceptance
+        env:
+          SERVER_JWT_FILE: ${{ secrets.SERVER_JWT_FILE }}
+          CLIENT_JWT_FILE: ${{ secrets.CLIENT_JWT_FILE }}
+          PEER_ID: ${{ secrets.PEER_ID }}
+        run: |
+          python3 -m baleobala.cli vpn netns-session \
+            --kind tunnel-pair \
+            --server-jwt-file "$SERVER_JWT_FILE" \
+            --client-jwt-file "$CLIENT_JWT_FILE" \
+            --peer-id "$PEER_ID" \
+            --transport auto \
+            --full-device \
+            --artifact-dir "$RUNNER_TEMP/netns-artifacts" \
+            --json
+      - name: Upload tunnel-pair bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpn-netns-artifacts-tunnel-pair
+          path: ${{ runner.temp }}/netns-artifacts

@@ -11,26 +11,38 @@ class NetnsScenario:
     kind: str
     server_cmd: list[str]
     client_cmd: list[str]
-    server_ready: str = ""
-    client_ready: str = ""
-    smoke_client_cmd: str = ""
-    expected_markers: list[str] = field(default_factory=list)
+    required_markers: list[str] = field(default_factory=list)
+    runtime_setup: list[dict[str, object]] = field(default_factory=list)
+    smoke_steps: list[list[str]] = field(default_factory=list)
     smoke_kind: str = ""
+    bundle_expectations: list[str] = field(default_factory=list)
+    failure_hints: dict[str, str] = field(default_factory=dict)
+    full_device_checks: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     network_plan: dict[str, object] = field(default_factory=dict)
+    server_ready: str = ""
+    client_ready: str = ""
+    smoke_server_cmd: str = ""
+    smoke_client_cmd: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.kind,
             "server_cmd": self.server_cmd,
             "client_cmd": self.client_cmd,
-            "server_ready": self.server_ready,
-            "client_ready": self.client_ready,
-            "smoke_client_cmd": self.smoke_client_cmd,
-            "expected_markers": self.expected_markers,
+            "required_markers": self.required_markers,
+            "runtime_setup": self.runtime_setup,
+            "smoke_steps": self.smoke_steps,
             "smoke_kind": self.smoke_kind,
+            "bundle_expectations": self.bundle_expectations,
+            "failure_hints": self.failure_hints,
+            "full_device_checks": self.full_device_checks,
             "notes": self.notes,
             "network_plan": self.network_plan,
+            "server_ready": self.server_ready,
+            "client_ready": self.client_ready,
+            "smoke_server_cmd": self.smoke_server_cmd,
+            "smoke_client_cmd": self.smoke_client_cmd,
         }
 
 
@@ -67,30 +79,77 @@ def build_proxy_pair_scenario(
         "--volume", str(volume),
         "--proxy-secret", proxy_secret,
     ]
-    smoke_client_cmd = (
+    smoke_server_cmd = (
         "python - <<'PY'\n"
         "import socket\n"
-        "s = socket.create_connection(('127.0.0.1', %d), timeout=3)\n"
-        "s.sendall(b'ping\\n')\n"
-        "print(s.recv(64).decode().strip() or 'proxy-flow-ok')\n"
-        "s.close()\n"
+        "listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        "listener.bind(('0.0.0.0', 18080))\n"
+        "listener.listen(1)\n"
+        "conn, _addr = listener.accept()\n"
+        "payload = conn.recv(64)\n"
+        "conn.sendall(payload or b'proxy-flow-ok\\n')\n"
+        "conn.close()\n"
+        "listener.close()\n"
+        "PY"
+    )
+    smoke_client_cmd = (
+        "python - <<'PY'\n"
+        "import socket, struct\n"
+        "proxy = socket.create_connection(('127.0.0.1', %d), timeout=3)\n"
+        "proxy.sendall(b'\\x05\\x01\\x00')\n"
+        "assert proxy.recv(2) == b'\\x05\\x00'\n"
+        "proxy.sendall(b'\\x05\\x01\\x00\\x01' + socket.inet_aton('172.29.0.2') + struct.pack('>H', 18080))\n"
+        "reply = proxy.recv(10)\n"
+        "assert len(reply) >= 2 and reply[1] == 0, reply\n"
+        "proxy.sendall(b'proxy-flow-ok\\n')\n"
+        "print(proxy.recv(64).decode().strip())\n"
+        "proxy.close()\n"
         "PY" % listen_port
     )
     return NetnsScenario(
         kind="proxy-pair",
         server_cmd=server_cmd,
         client_cmd=client_cmd,
+        smoke_server_cmd=smoke_server_cmd,
         smoke_client_cmd=smoke_client_cmd,
-        expected_markers=[
+        required_markers=[
             "call_established",
             "transport_selected=",
             "proxy_listening=",
             "teardown_done",
         ],
+        runtime_setup=[
+            {"phase": "server", "action": "start_echo_target", "host": "127.0.0.1", "port": 18080},
+        ],
+        smoke_steps=[
+            ["python", "-c", "import socket, struct"],
+            ["python", "-c", "print('proxy-flow-ok')"],
+        ],
         smoke_kind="tcp-connect-echo",
+        bundle_expectations=[
+            "verdict.json",
+            "summary.json",
+            "scenario.json",
+            "environment.json",
+            "events.jsonl",
+            "process_status.json",
+            "markers.json",
+            "smoke.json",
+            "teardown.json",
+            "server.log",
+            "client.log",
+            "route_snapshot.json",
+            "dns_snapshot.json",
+            "command_transcript.json",
+        ],
+        failure_hints={
+            "call_setup_timeout": "wait for call_established before smoke",
+            "payload_probe_failed": "proxy CONNECT or echo round-trip failed",
+        },
         notes=[
             "Client namespace expects the Bale peer id of the relay account.",
-            "Smoke command validates a real TCP connect and echo-style payload through the proxy listener.",
+            "Smoke command validates a real SOCKS5 CONNECT and echo-style payload through the proxy listener.",
             "Readiness markers are stable and should be emitted by the real runtime.",
         ],
     )
@@ -163,14 +222,42 @@ def build_tunnel_pair_scenario(
         kind="tunnel-pair",
         server_cmd=server_cmd,
         client_cmd=client_cmd,
-        expected_markers=[
+        required_markers=[
             "call_established",
             "transport_selected=",
             "tunnel_up=",
             "teardown_done",
         ],
+        runtime_setup=[
+            {"phase": "client", "action": "create_tun", "tun": client_tun, "address": "10.77.0.2/24", "mtu": 1400},
+            {"phase": "server", "action": "create_tun", "tun": server_tun, "address": "10.77.0.1/24", "mtu": 1400},
+            {"phase": "server", "action": "enable_nat", "wan": server_wan, "enabled": not skip_nat_setup},
+        ],
+        smoke_steps=[["ping", "-c", "1", "10.77.0.1"]],
         smoke_client_cmd=smoke_client_cmd,
         smoke_kind="tunnel-payload",
+        bundle_expectations=[
+            "verdict.json",
+            "summary.json",
+            "scenario.json",
+            "environment.json",
+            "events.jsonl",
+            "process_status.json",
+            "markers.json",
+            "smoke.json",
+            "teardown.json",
+            "server.log",
+            "client.log",
+            "route_snapshot.json",
+            "dns_snapshot.json",
+            "command_transcript.json",
+        ],
+        failure_hints={
+            "call_setup_timeout": "tunnel_up never arrived",
+            "payload_probe_failed": "tunnel packet probe or full-device assertion failed",
+            "missing_tun": "TUN device support is required",
+        },
+        full_device_checks=["route", "dns", "tcp-egress"] if full_device else [],
         notes=[
             "The session runner is expected to create/configure both TUN devices when automation is enabled.",
             "Server-side NAT and client-side default-route/DNS setup are part of the session orchestration.",

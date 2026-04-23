@@ -399,6 +399,10 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
         )
         controller.start(transport_name)
 
+        print("call_established", file=sys.stderr)
+        print(f"transport_selected={transport_name}", file=sys.stderr)
+        print(f"tunnel_up={args.tun}", file=sys.stderr)
+
         role = "exit-node" if is_exit_node else "client"
         print(f"[tunnel] up ({role}, transport={transport_name}, "
               f"tun={args.tun}, sess=0x{(provision.session_id if provision is not None else args.sess_id):x}, "
@@ -411,6 +415,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
             controller.stop()
             runner.stop()
     finally:
+        print("teardown_done", file=sys.stderr)
         keepalive.stop()
         try:
             chain.close()

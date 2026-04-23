@@ -555,6 +555,19 @@ def _contains_marker(text: str, marker: str) -> bool:
     return marker in text
 
 
+def _parse_marker_lines(text: str) -> list[str]:
+    exact = {"call_established", "teardown_done"}
+    prefix = ("transport_selected=", "proxy_listening=", "tunnel_up=")
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped in exact or any(stripped.startswith(item) for item in prefix):
+            out.append(stripped)
+    return sorted(set(out))
+
+
 def _marker_value(markers: list[str], prefix: str) -> str:
     for marker in markers:
         if marker.startswith(prefix):
@@ -594,6 +607,23 @@ def _classify_network_failure(report: NetnsRunReport) -> str:
     return ""
 
 
+def _snapshot_commands(topology: NetnsTopology) -> dict[str, list[str]]:
+    return {
+        "client_routes": ["ip", "netns", "exec", topology.client_ns, "ip", "route", "show"],
+        "server_routes": ["ip", "netns", "exec", topology.server_ns, "ip", "route", "show"],
+        "client_dns": ["sh", "-lc", f"cat /etc/netns/{shlex.quote(topology.client_ns)}/resolv.conf 2>/dev/null || true"],
+        "server_dns": ["sh", "-lc", f"cat /etc/netns/{shlex.quote(topology.server_ns)}/resolv.conf 2>/dev/null || true"],
+    }
+
+
+def _step_payload(item: Any) -> dict[str, Any]:
+    if hasattr(item, "to_dict"):
+        return dict(item.to_dict())
+    if isinstance(item, dict):
+        return dict(item)
+    return {"value": item}
+
+
 class NetnsSessionRunner:
     def __init__(self, harness: NetnsHarness, process_manager: NetnsProcessManager, *, artifact_root: Path | None = None) -> None:
         self._harness = harness
@@ -612,69 +642,44 @@ class NetnsSessionRunner:
         scenario: dict[str, Any] | None = None,
     ) -> NetnsSessionReport:
         bundle_dir = self._make_artifact_bundle()
+        scenario = scenario or {}
         recorder = StructuredEventRecorder(
             component="netns-session",
             base_fields={
-                "backend": str((scenario or {}).get("kind", "")),
+                "backend": str(scenario.get("kind", "")),
                 "artifact_bundle": str(bundle_dir),
             },
         )
-        required_markers = [str(marker) for marker in (scenario or {}).get("expected_markers", []) if marker]
-        network_plan = (scenario or {}).get("network_plan", {})
-        network_setup = self._network_setup(network_plan)
-        recorder.event(
-            "session_run_started",
-            stage="setup",
-            outcome="begin",
-            transport_requested=str((scenario or {}).get("transport", "")),
-            scenario=redact_value(scenario or {}),
-        )
-        setup = self._harness.setup()
-        if not setup.ok:
-            failure = classify_failure(
-                ready=False,
-                smoke_ok=False,
-                setup_ok=False,
-                teardown_ok=False,
-                last_error=setup.last_error,
-                bundle_ok=False,
-            )
-            recorder.event(
-                "setup_failed",
-                stage="setup",
-                outcome="failure",
-                error_message=setup.last_error,
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
-            )
+        required_markers = [str(marker) for marker in scenario.get("required_markers", []) if marker]
+        network_plan = scenario.get("network_plan", {})
+        recorder.event("session_run_started", stage="preflight", outcome="begin", transport_requested=str(scenario.get("transport", "")), scenario=redact_value(scenario))
+        preflight = self._preflight(scenario)
+        if not preflight.ok:
             self._write_bundle(
                 bundle_dir,
                 scenario=scenario,
-                setup=setup,
+                setup=preflight,
                 smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)),
                 teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)),
                 started=[],
                 stopped=[],
                 markers=[],
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
+                failure_class=preflight.last_error or "infra",
+                failure_code=preflight.last_error or "preflight_failed",
                 recorder=recorder,
             )
-            return self._report(
-                ok=False,
-                stage="setup",
-                readiness="failed",
-                harness_steps=setup.steps,
-                last_error=setup.last_error,
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
-                run_id=recorder.run_id,
-                last_success_stage=recorder.last_success_stage,
-                failed_stage=recorder.failed_stage or "setup",
-                artifact_bundle=str(bundle_dir),
-            )
-        recorder.event("setup_completed", stage="setup", outcome="success")
-        network = self._run_network_phase(network_setup["setup_commands"], phase="network-setup")
+            return self._report(ok=False, stage="preflight", readiness="failed", failure_class="infra", failure_code=preflight.last_error or "preflight_failed", run_id=recorder.run_id, last_success_stage=recorder.last_success_stage, failed_stage="preflight", artifact_bundle=str(bundle_dir), last_error=preflight.last_error)
+        setup = self._harness.setup()
+        if not setup.ok:
+            self._write_bundle(bundle_dir, scenario=scenario, setup=setup, smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)), teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)), started=[], stopped=[], markers=[], failure_class="infra", failure_code=setup.last_error or "setup_failed", recorder=recorder)
+            return self._report(ok=False, stage="setup", readiness="failed", harness_steps=setup.steps, last_error=setup.last_error, failure_class="infra", failure_code=setup.last_error or "setup_failed", run_id=recorder.run_id, last_success_stage=recorder.last_success_stage, failed_stage="setup", artifact_bundle=str(bundle_dir))
+        recorder.event(
+            "setup_completed",
+            stage="setup",
+            outcome="success",
+        )
+        network_setup = self._network_setup(network_plan)
+        network = self._run_network_phase(network_setup["setup_commands"], phase="runtime-setup")
         if not network.ok:
             failure = classify_failure(
                 ready=False,
@@ -683,59 +688,15 @@ class NetnsSessionRunner:
                 teardown_ok=False,
                 last_error=network.last_error,
                 bundle_ok=False,
-                legacy_failure_class=_classify_network_failure(network),
+                legacy_failure_class=_classify_network_failure(network) or "runtime_setup_failed",
             )
-            recorder.event(
-                "network_setup_failed",
-                stage="setup",
-                outcome="failure",
-                error_message=network.last_error,
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
-            )
-            self._write_bundle(
-                bundle_dir,
-                scenario=scenario,
-                setup=setup,
-                smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)),
-                teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)),
-                started=[],
-                stopped=[],
-                markers=[],
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
-                recorder=recorder,
-                network=network.to_dict(),
-            )
-            return self._report(
-                ok=False,
-                stage="network-setup",
-                readiness="failed",
-                tun_created=network_setup["tun_created"],
-                routes_programmed=network_setup["routes_programmed"],
-                dns_configured=network_setup["dns_configured"],
-                nat_configured=network_setup["nat_configured"],
-                carrier_bypass_configured=network_setup["carrier_bypass_configured"],
-                default_route_active=network_setup["default_route_active"],
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
-                run_id=recorder.run_id,
-                last_success_stage=recorder.last_success_stage,
-                failed_stage=recorder.failed_stage or "setup",
-                artifact_bundle=str(bundle_dir),
-                harness_steps=setup.steps + network.steps,
-                last_error=network.last_error,
-            )
+            self._write_bundle(bundle_dir, scenario=scenario, setup=setup, smoke=NetnsRunReport(False, "smoke-skipped", _topology_dict(self._harness.topology)), teardown=NetnsRunReport(False, "teardown-skipped", _topology_dict(self._harness.topology)), started=[], stopped=[], markers=[], failure_class="infra", failure_code=failure.failure_code, recorder=recorder, network=network.to_dict())
+            return self._report(ok=False, stage="runtime_setup", readiness="failed", tun_created=network_setup["tun_created"], routes_programmed=network_setup["routes_programmed"], dns_configured=network_setup["dns_configured"], nat_configured=network_setup["nat_configured"], carrier_bypass_configured=network_setup["carrier_bypass_configured"], default_route_active=network_setup["default_route_active"], failure_class="infra", failure_code=failure.failure_code, run_id=recorder.run_id, last_success_stage=recorder.last_success_stage, failed_stage="runtime_setup", artifact_bundle=str(bundle_dir), harness_steps=setup.steps + network.steps, last_error=network.last_error)
 
         started = self._process_manager.start(
             self._harness.build_process_specs(server_cmd=server_cmd, client_cmd=client_cmd)
         )
-        recorder.event(
-            "processes_started",
-            stage="call_setup",
-            outcome="begin",
-            process_status=[item.to_dict() for item in started],
-        )
+        recorder.event("processes_started", stage="process_start", outcome="begin", process_status=[item.to_dict() for item in started])
         ready, ready_error, markers = self._wait_for_ready(
             started,
             server_ready_pattern=server_ready_pattern,
@@ -744,12 +705,9 @@ class NetnsSessionRunner:
             required_markers=required_markers,
             recorder=recorder,
         )
-        if ready and smoke_commands:
-            recorder.event("smoke_started", stage="smoke", outcome="begin", smoke_mode="custom")
-            smoke = self._harness._run_phase("smoke-custom", smoke_commands)
-        elif ready:
-            recorder.event("smoke_started", stage="smoke", outcome="begin", smoke_mode="default")
-            smoke = self._harness.smoke()
+        if ready:
+            recorder.event("smoke_started", stage="smoke", outcome="begin", smoke_mode=str(scenario.get("smoke_kind", "")))
+            smoke = self._harness._run_phase("smoke", smoke_commands or [])
         else:
             smoke = NetnsRunReport(
                 ok=False,
@@ -759,54 +717,17 @@ class NetnsSessionRunner:
                 last_error=ready_error,
             )
         if ready:
-            recorder.event(
-                "smoke_completed" if smoke.ok else "smoke_failed",
-                stage="smoke",
-                outcome="success" if smoke.ok else "failure",
-                error_message="" if smoke.ok else smoke.last_error,
-            )
+            recorder.event("smoke_completed" if smoke.ok else "smoke_failed", stage="smoke", outcome="success" if smoke.ok else "failure", error_message="" if smoke.ok else smoke.last_error)
         stopped = self._process_manager.stop()
-        recorder.event(
-            "processes_stopped",
-            stage="teardown",
-            outcome="begin",
-            process_status=[item.to_dict() for item in stopped],
-        )
-        network_teardown = self._run_network_phase(network_setup["teardown_commands"], phase="network-teardown", best_effort=True)
+        recorder.event("processes_stopped", stage="process_stop", outcome="begin", process_status=[item.to_dict() for item in stopped])
+        network_teardown = self._run_network_phase(network_setup["teardown_commands"], phase="teardown", best_effort=True)
         teardown = self._harness.teardown()
-        recorder.event(
-            "teardown_completed" if teardown.ok else "teardown_failed",
-            stage="teardown",
-            outcome="success" if teardown.ok else "failure",
-            error_message="" if teardown.ok else teardown.last_error,
-        )
+        recorder.event("teardown_completed" if teardown.ok else "teardown_failed", stage="teardown", outcome="success" if teardown.ok else "failure", error_message="" if teardown.ok else teardown.last_error)
         ok = ready and smoke.ok and teardown.ok and network_teardown.ok
-        failure = classify_failure(
-            ready=ready,
-            smoke_ok=smoke.ok,
-            setup_ok=setup.ok,
-            teardown_ok=teardown.ok and network_teardown.ok,
-            last_error=ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error,
-            bundle_ok=True,
-            markers=markers,
-            legacy_failure_class=_classify_network_failure(network) or _classify_network_failure(network_teardown),
-        )
         if not ready:
-            recorder.event(
-                "readiness_failed",
-                stage="call_setup",
-                outcome="failure",
-                error_message=ready_error,
-                failure_class=failure.failure_class,
-                failure_code=failure.failure_code,
-            )
+            recorder.event("readiness_failed", stage="readiness_wait", outcome="failure", error_message=ready_error, failure_class="call_setup", failure_code="call_setup_timeout")
         elif _has_marker(markers, "call_established"):
-            recorder.event(
-                "call_established",
-                stage="call_setup",
-                outcome="success",
-                transport_selected=_marker_value(markers, "transport_selected="),
-            )
+            recorder.event("call_established", stage="readiness_wait", outcome="success", transport_selected=_marker_value(markers, "transport_selected="))
         bundle_ok = self._write_bundle(
             bundle_dir,
             scenario=scenario,
@@ -816,8 +737,8 @@ class NetnsSessionRunner:
             started=started,
             stopped=stopped,
             markers=markers,
-            failure_class=failure.failure_class,
-            failure_code=failure.failure_code,
+            failure_class="" if ok else (_classify_network_failure(network) or _classify_network_failure(network_teardown) or "product_bug"),
+            failure_code=ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error,
             recorder=recorder,
             network={
                 "setup": network.to_dict(),
@@ -830,18 +751,11 @@ class NetnsSessionRunner:
             markers = final_markers
         call_established = "yes" if _has_marker(markers, "call_established") else "no"
         transport_selected = _marker_value(markers, "transport_selected=")
-        data_flow_ok = "yes" if smoke.ok else "no"
+        data_flow_ok = "yes" if smoke.ok and ready else "no"
         teardown_clean = "yes" if teardown.ok and network_teardown.ok else "no"
-        final_failure = classify_failure(
-            ready=ready,
-            smoke_ok=smoke.ok,
-            setup_ok=setup.ok,
-            teardown_ok=teardown.ok and network_teardown.ok,
-            last_error=ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error,
-            bundle_ok=bundle_ok,
-            markers=markers,
-            legacy_failure_class=_classify_network_failure(network) or _classify_network_failure(network_teardown),
-        )
+        from baleobala.control.analyzer import analyze_bundle
+        final_failure = classify_failure(ready=ready, smoke_ok=smoke.ok, setup_ok=setup.ok, teardown_ok=teardown.ok and network_teardown.ok, last_error=ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error, bundle_ok=bundle_ok, markers=markers, legacy_failure_class=_classify_network_failure(network) or _classify_network_failure(network_teardown))
+        bundle_analysis = analyze_bundle(bundle_dir)
         return self._report(
             ok=ok,
             stage="session",
@@ -865,7 +779,12 @@ class NetnsSessionRunner:
             failed_stage=recorder.failed_stage,
             artifact_bundle=str(bundle_dir),
             process_status=[item.to_dict() for item in stopped],
-            harness_steps=setup.steps + network.steps + smoke.steps + network_teardown.steps + teardown.steps,
+            harness_steps=setup.steps
+            + network.steps
+            + ([{"phase": smoke.stage, "ok": smoke.ok, "last_error": smoke.last_error}] if smoke.stage else [])
+            + smoke.steps
+            + network_teardown.steps
+            + teardown.steps,
             log_tails=log_tails,
             last_error="" if ok else (ready_error or smoke.last_error or network.last_error or network_teardown.last_error or teardown.last_error),
         )
@@ -875,6 +794,22 @@ class NetnsSessionRunner:
         if isinstance(value, (list, tuple)):
             return bool(value)
         return bool(value)
+
+    def _preflight(self, scenario: dict[str, Any]) -> NetnsRunReport:
+        checks = [
+            (["ip", "-V"], "missing_iproute"),
+            (["ping", "-V"], "missing_ping"),
+        ]
+        if scenario.get("kind") == "tunnel-pair":
+            checks.append((["sh", "-lc", "test -e /dev/net/tun"], "missing_tun"))
+        for cmd, code in checks:
+            try:
+                result = self._harness._runner(cmd, check=False, capture_output=True, text=True)
+            except OSError as exc:
+                return NetnsRunReport(False, "preflight", _topology_dict(self._harness.topology), last_error=code if code != "missing_ping" else str(exc))
+            if result.returncode != 0:
+                return NetnsRunReport(False, "preflight", _topology_dict(self._harness.topology), last_error=code)
+        return NetnsRunReport(True, "preflight", _topology_dict(self._harness.topology))
 
     def _run_network_phase(
         self,
@@ -1076,27 +1011,12 @@ class NetnsSessionRunner:
 
     def _collect_markers(self, statuses: list[NetnsProcessStatus]) -> list[str]:
         out: list[str] = []
-        exact_markers = ("call_established", "teardown_done")
-        prefix_markers = ("transport_selected=", "proxy_listening=", "tunnel_up=")
         for item in statuses:
             try:
                 text = Path(item.log_path).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for line in text.splitlines():
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if stripped in exact_markers:
-                    out.append(stripped)
-                    continue
-                for marker in prefix_markers:
-                    if stripped.startswith(marker):
-                        out.append(stripped)
-                        break
-            for marker in exact_markers:
-                if marker in text:
-                    out.append(marker)
+            out.extend(_parse_marker_lines(text))
         return sorted(set(out))
 
     def _patterns_ready(
@@ -1186,6 +1106,33 @@ class NetnsSessionRunner:
             bundle_dir.mkdir(parents=True, exist_ok=True)
         return bundle_dir
 
+    def _capture_snapshot(self) -> dict[str, Any]:
+        snapshot: dict[str, Any] = {"routes": {}, "dns": {}}
+        commands = _snapshot_commands(self._harness.topology)
+        for name, cmd in commands.items():
+            try:
+                result = self._harness._runner(cmd, check=False, capture_output=True, text=True)
+                payload = {
+                    "ok": "yes" if result.returncode == 0 else "no",
+                    "command": list(cmd),
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "returncode": int(result.returncode),
+                }
+            except OSError as exc:
+                payload = {
+                    "ok": "no",
+                    "command": list(cmd),
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "returncode": 127,
+                }
+            if name.endswith("_routes"):
+                snapshot["routes"][name.removesuffix("_routes")] = payload
+            else:
+                snapshot["dns"][name.removesuffix("_dns")] = payload
+        return snapshot
+
     def _write_bundle(
         self,
         bundle_dir: Path,
@@ -1205,6 +1152,7 @@ class NetnsSessionRunner:
         try:
             log_tails = _collect_log_tails(stopped)
             scenario_payload = redact_value(scenario or {})
+            snapshot = self._capture_snapshot()
             summary = {
                 "run_id": recorder.run_id,
                 "failure_class": failure_class,
@@ -1213,6 +1161,7 @@ class NetnsSessionRunner:
                 "failed_stage": recorder.failed_stage,
                 "transport_selected": _marker_value(markers, "transport_selected="),
                 "call_established": "yes" if _has_marker(markers, "call_established") else "no",
+                "smoke_kind": str(scenario_payload.get("smoke_kind", "")) if isinstance(scenario_payload, dict) else "",
                 "artifact_bundle": str(bundle_dir),
             }
             payload = {
@@ -1231,6 +1180,7 @@ class NetnsSessionRunner:
                 "last_success_stage": recorder.last_success_stage,
                 "failed_stage": recorder.failed_stage,
                 "log_tails": log_tails,
+                "snapshots": snapshot,
             }
             (bundle_dir / "verdict.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
             (bundle_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -1251,6 +1201,23 @@ class NetnsSessionRunner:
             (bundle_dir / "teardown.json").write_text(json.dumps(teardown.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
             (bundle_dir / "markers.json").write_text(json.dumps({"markers": markers}, indent=2, sort_keys=True), encoding="utf-8")
             (bundle_dir / "network.json").write_text(json.dumps(network or {}, indent=2, sort_keys=True), encoding="utf-8")
+            (bundle_dir / "route_snapshot.json").write_text(json.dumps(snapshot.get("routes", {}), indent=2, sort_keys=True), encoding="utf-8")
+            (bundle_dir / "dns_snapshot.json").write_text(json.dumps(snapshot.get("dns", {}), indent=2, sort_keys=True), encoding="utf-8")
+            (bundle_dir / "command_transcript.json").write_text(
+                json.dumps(
+                    {
+                        "setup": [_step_payload(step) for step in setup.steps],
+                        "smoke": [_step_payload(step) for step in smoke.steps],
+                        "teardown": [_step_payload(step) for step in teardown.steps],
+                        "started": [item.to_dict() for item in started],
+                        "stopped": [item.to_dict() for item in stopped],
+                        "markers": markers,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
             recorder.write_jsonl(bundle_dir / "events.jsonl")
             for item in started:
                 src = Path(item.log_path)
