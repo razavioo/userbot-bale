@@ -7,8 +7,14 @@ from typing import Callable
 
 from baleobala.control.auth import AuthRecord, AuthStore
 from baleobala.control.backend import MacOSPacketTunnelBackend, VpnBackend, backend_for_profile
+from baleobala.control.mesh import MeshProvisionRecord, MeshProvisionStore
 from baleobala.control.probe import ProbeResult
 from baleobala.control.pairing import PairingExchange, PairingRecord, PairingStore
+from baleobala.control.provisioning import (
+    DeviceAuthorization,
+    ProvisioningService,
+    RelayEnrollment,
+)
 from baleobala.control.tunnel_service import LocalTunnelService
 from baleobala.control.vpn import VpnProfile, VpnStore
 
@@ -21,6 +27,7 @@ class ControlSnapshot:
     auth: dict[str, str]
     vpn: dict[str, str]
     pairing: dict[str, str]
+    mesh: dict[str, str]
     backend: dict[str, str]
 
 
@@ -40,11 +47,15 @@ class ControlService:
         *,
         auth_store: AuthStore | None = None,
         pairing_store: PairingStore | None = None,
+        mesh_store: MeshProvisionStore | None = None,
+        provisioning: ProvisioningService | None = None,
         vpn_store: VpnStore | None = None,
         backend_factory: BackendFactory | None = None,
     ) -> None:
         self.auth_store = auth_store or AuthStore()
         self.pairing_store = pairing_store or PairingStore()
+        self.mesh_store = mesh_store or MeshProvisionStore()
+        self.provisioning = provisioning or ProvisioningService()
         self.vpn_store = vpn_store or VpnStore()
         self._backend_factory = backend_factory or backend_for_profile
 
@@ -77,6 +88,49 @@ class ControlService:
     def save_profile(self, profile: VpnProfile) -> None:
         self.vpn_store.save(profile)
 
+    def issue_mesh_assignment(
+        self,
+        peer_id: int,
+        *,
+        pool_cidr: str,
+        profile_id: str | None = None,
+        peer_name: str | None = None,
+        transport: str = "",
+        session_id: int | None = None,
+    ) -> MeshProvisionRecord:
+        return self.mesh_store.issue_assignment(
+            peer_id,
+            pool_cidr=pool_cidr,
+            profile_id=profile_id,
+            peer_name=peer_name,
+            transport=transport,
+            session_id=session_id,
+        )
+
+    def activate_mesh_assignment(
+        self,
+        peer_id: int,
+        *,
+        transport: str = "",
+        session_id: int | None = None,
+    ) -> MeshProvisionRecord:
+        return self.mesh_store.activate(
+            peer_id,
+            transport=transport,
+            session_id=session_id,
+        )
+
+    def release_mesh_assignment(
+        self,
+        peer_id: int,
+        *,
+        error: str = "",
+    ) -> MeshProvisionRecord | None:
+        return self.mesh_store.release(peer_id, error=error)
+
+    def lookup_mesh_assignment(self, peer_id: int) -> MeshProvisionRecord | None:
+        return self.mesh_store.get(peer_id)
+
     def begin_pairing(
         self,
         name: str,
@@ -88,7 +142,7 @@ class ControlService:
         backend_preference: str | None = None,
         transport_preference: str = "auto",
         secret_name: str | None = None,
-    ) -> PairingRecord:
+        ) -> PairingRecord:
         return self.pairing_store.begin(
             name,
             role=role,
@@ -98,6 +152,166 @@ class ControlService:
             backend_preference=backend_preference,
             transport_preference=transport_preference,
             secret_name=secret_name,
+        )
+
+    def enroll_pairing(
+        self,
+        name: str,
+        *,
+        role: str = "client",
+        peer_id: int | None = None,
+        peer_name: str | None = None,
+        relay_mode: str = "proxy",
+        backend_preference: str | None = None,
+        transport_preference: str = "auto",
+    ) -> PairingRecord:
+        record = self.pairing_store.begin(
+            name,
+            role=role,
+            peer_id=peer_id,
+            peer_name=peer_name,
+            relay_mode=relay_mode,
+            backend_preference=backend_preference,
+            transport_preference=transport_preference,
+        )
+        enrollment = self.provisioning.enroll_relay(
+            self.load_auth(),
+            name=name,
+            role=role,
+            relay_mode=relay_mode,
+            backend_preference=backend_preference or relay_mode,
+            transport_preference=transport_preference,
+            peer_id=peer_id,
+        )
+        return self.pairing_store.save_provisioning(
+            record.profile_id,
+            relay_id=enrollment.relay_id,
+            device_id=self.provisioning.ensure_device_id(),
+            authorization_status="none",
+            provisioning_status="enrolled",
+            peer_id=enrollment.peer_id,
+            peer_name=peer_name or enrollment.name,
+        )
+
+    def list_relays(self) -> list[RelayEnrollment]:
+        return self.provisioning.list_relays(self.load_auth())
+
+    def request_pairing_access(self, profile_id: str) -> PairingRecord:
+        record = self._pairing_or_raise(profile_id)
+        authz = self.provisioning.request_authorization(
+            self.load_auth(),
+            relay_id=record.relay_id,
+            device_id=self.provisioning.ensure_device_id(),
+        )
+        return self.pairing_store.save_provisioning(
+            record.profile_id,
+            relay_id=record.relay_id,
+            device_id=authz.device_id,
+            authorization_id=authz.authorization_id,
+            authorization_status=authz.status,
+            provisioning_status="pending",
+            server_error="",
+        )
+
+    def approve_pairing_access(self, profile_id: str) -> PairingRecord:
+        record = self._pairing_or_raise(profile_id)
+        authz = self.provisioning.approve_authorization(
+            self.load_auth(),
+            relay_id=record.relay_id,
+            authorization_id=record.authorization_id,
+        )
+        return self.sync_pairing(profile_id, authorization=authz)
+
+    def reject_pairing_access(self, profile_id: str, *, reason: str = "") -> PairingRecord:
+        record = self._pairing_or_raise(profile_id)
+        authz = self.provisioning.reject_authorization(
+            self.load_auth(),
+            relay_id=record.relay_id,
+            authorization_id=record.authorization_id,
+            reason=reason,
+        )
+        return self.pairing_store.save_provisioning(
+            profile_id,
+            authorization_status=authz.status,
+            provisioning_status="rejected",
+            server_error=authz.rejected_reason or "authorization rejected",
+        )
+
+    def revoke_pairing_device(self, profile_id: str) -> PairingRecord:
+        record = self._pairing_or_raise(profile_id)
+        authz = self.provisioning.revoke_device(
+            self.load_auth(),
+            relay_id=record.relay_id,
+            device_id=record.device_id or self.provisioning.ensure_device_id(),
+        )
+        return self.pairing_store.save_provisioning(
+            profile_id,
+            authorization_status=authz.status,
+            provisioning_status="revoked",
+            revoked_at=authz.revoked_at,
+            server_error="device revoked",
+        )
+
+    def sync_pairing(
+        self,
+        profile_id: str,
+        *,
+        authorization: DeviceAuthorization | None = None,
+    ) -> PairingRecord:
+        record = self._pairing_or_raise(profile_id)
+        if not record.relay_id:
+            return record
+        authz = authorization
+        if authz is None and record.authorization_id:
+            authz = self.provisioning.get_authorization(
+                self.load_auth(),
+                relay_id=record.relay_id,
+                authorization_id=record.authorization_id,
+            )
+        if authz is None:
+            return self.pairing_store.mark_server_error(profile_id, "authorization has not been requested")
+        peer = self.provisioning.get_peer(
+            self.load_auth(),
+            relay_id=record.relay_id,
+            device_id=record.device_id or self.provisioning.ensure_device_id(),
+        )
+        secret_value = peer.credential_epoch.secret_value if peer.credential_epoch is not None else None
+        credential_epoch = peer.credential_epoch.epoch_id if peer.credential_epoch is not None else ""
+        credential_expires_at = peer.credential_epoch.expires_at if peer.credential_epoch is not None else None
+        credential_refresh_after = peer.credential_epoch.refresh_after if peer.credential_epoch is not None else None
+        server_error = ""
+        if authz.status == "rejected":
+            server_error = authz.rejected_reason or "authorization rejected"
+        elif authz.status == "revoked":
+            server_error = "device revoked"
+        elif authz.status != "approved":
+            server_error = "waiting for relay-owner approval"
+        return self.pairing_store.save_provisioning(
+            profile_id,
+            device_id=record.device_id or self.provisioning.ensure_device_id(),
+            authorization_id=authz.authorization_id,
+            authorization_status=authz.status,
+            provisioning_status=peer.provisioning_status,
+            credential_epoch=credential_epoch,
+            credential_expires_at=credential_expires_at,
+            credential_refresh_after=credential_refresh_after,
+            peer_id=peer.peer_id,
+            peer_name=peer.peer_name,
+            secret_value=secret_value,
+            revoked_at=authz.revoked_at,
+            server_error=server_error,
+        )
+
+    def refresh_pairing_credentials(self, profile_id: str) -> PairingRecord:
+        record = self._pairing_or_raise(profile_id)
+        epoch = self.provisioning.refresh_credentials(self.load_auth(), relay_id=record.relay_id)
+        return self.pairing_store.save_provisioning(
+            profile_id,
+            credential_epoch=epoch.epoch_id,
+            credential_expires_at=epoch.expires_at,
+            credential_refresh_after=epoch.refresh_after,
+            secret_value=epoch.secret_value,
+            provisioning_status="complete",
         )
 
     def accept_pairing(
@@ -154,6 +368,11 @@ class ControlService:
 
     def resolve_profile(self, profile_id: str | None = None) -> VpnProfile:
         profile = self.vpn_store.load() or self.vpn_store.ensure_default()
+        target_profile_id = profile_id or profile.pairing_id
+        if target_profile_id:
+            pairing = self.pairing_store.get(target_profile_id)
+            if pairing is not None and pairing.relay_id:
+                pairing = self.sync_pairing(target_profile_id)
         pairing = self.pairing_store.connectable(profile_id or profile.pairing_id)
         if pairing is None:
             pairing = self.pairing_store.connectable()
@@ -246,7 +465,16 @@ class ControlService:
                 "backend_preference": pairing.backend_preference,
                 "transport_preference": pairing.transport_preference,
                 "provisioning_status": pairing.provisioning_status,
+                "authorization_status": pairing.authorization_status,
+                "relay_id": pairing.relay_id,
                 "peer_name": pairing.peer_name or "",
             },
+            mesh=self.mesh_store.status(),
             backend=backend.status(),
         )
+
+    def _pairing_or_raise(self, profile_id: str) -> PairingRecord:
+        record = self.pairing_store.get(profile_id)
+        if record is None:
+            raise LookupError(f"no pairing profile {profile_id!r} found")
+        return record

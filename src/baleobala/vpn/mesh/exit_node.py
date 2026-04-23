@@ -46,8 +46,10 @@ log = logging.getLogger(__name__)
 @dataclass
 class ClientSlot:
     assignment: Assignment
-    tunnel: Tunnel
+    tunnel: Tunnel | None
     transport: object  # holds close()
+    peer_name: str | None = None
+    active: bool = False
     closed: bool = False
 
 
@@ -98,13 +100,55 @@ class MeshExitNode:
         window: int = 32,
         mtu_override: Optional[int] = None,
     ) -> Assignment:
-        """Bring up a new per-client tunnel. Returns the Assignment so
-        the caller can send its (gateway, client) IPs back to the peer
-        (e.g. as the first DataChannel message)."""
         assignment = self._alloc.assign(peer_id)
+        self.issue_client(peer_id, transport, assignment=assignment)
+        self.activate_client(
+            peer_id,
+            ack_timeout=ack_timeout,
+            window=window,
+            mtu_override=mtu_override,
+        )
+        return assignment
+
+    def issue_client(
+        self,
+        peer_id: int,
+        transport,  # type: ignore[no-untyped-def]
+        *,
+        assignment: Assignment,
+        peer_name: str | None = None,
+    ) -> Assignment:
+        self._alloc.reserve(assignment.slot, peer_id)
+        slot = ClientSlot(
+            assignment=assignment,
+            tunnel=None,
+            transport=transport,
+            peer_name=peer_name,
+        )
+        with self._lock:
+            prior = self._clients.pop(peer_id, None)
+            if prior is not None:
+                self._close_slot_locked(prior)
+            self._clients[peer_id] = slot
+        return assignment
+
+    def activate_client(
+        self,
+        peer_id: int,
+        *,
+        ack_timeout: float = 0.5,
+        window: int = 32,
+        mtu_override: Optional[int] = None,
+    ) -> Assignment:
+        with self._lock:
+            slot = self._clients.get(peer_id)
+        if slot is None:
+            raise LookupError(f"peer {peer_id} has no pending slot")
+        if slot.active and slot.tunnel is not None:
+            return slot.assignment
         tunnel = Tunnel(
-            transport,
-            sess_id=(self._sess_id_base + assignment.peer_id) & 0xFFFF,
+            slot.transport,
+            sess_id=(self._sess_id_base + slot.assignment.peer_id) & 0xFFFF,
             ack_timeout=ack_timeout,
             window=window,
             mtu_override=mtu_override,
@@ -119,23 +163,23 @@ class MeshExitNode:
                 log.warning("mesh: tun write failed for peer=%d: %s", peer_id, e)
 
         tunnel.start(on_packet=on_packet)
-        slot = ClientSlot(assignment=assignment, tunnel=tunnel, transport=transport)
         with self._lock:
-            # Evict any prior slot for the same peer_id (reconnect).
-            prior = self._clients.pop(peer_id, None)
-            if prior is not None:
-                self._close_slot_locked(prior)
-            self._clients[peer_id] = slot
-        self._router.attach(assignment.client, tunnel)
-        log.info("mesh: accepted peer=%d at %s", peer_id, assignment.client)
-        return assignment
+            current = self._clients.get(peer_id)
+            if current is None:
+                raise LookupError(f"peer {peer_id} disappeared before activation")
+            current.tunnel = tunnel
+            current.active = True
+        self._router.attach(slot.assignment.client, tunnel)
+        log.info("mesh: accepted peer=%d at %s", peer_id, slot.assignment.client)
+        return slot.assignment
 
     def drop_client(self, peer_id: int) -> None:
         with self._lock:
             slot = self._clients.pop(peer_id, None)
         if slot is None:
             return
-        self._router.detach(slot.assignment.client)
+        if slot.active:
+            self._router.detach(slot.assignment.client)
         self._close_slot_locked(slot)
         self._alloc.release(peer_id)
         log.info("mesh: dropped peer=%d", peer_id)
@@ -164,7 +208,8 @@ class MeshExitNode:
             return
         slot.closed = True
         try:
-            slot.tunnel.stop()
+            if slot.tunnel is not None:
+                slot.tunnel.stop()
         except Exception:  # noqa: BLE001
             log.exception("mesh: tunnel.stop failed")
         try:

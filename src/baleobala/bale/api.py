@@ -40,6 +40,7 @@ from typing import Callable, List, Optional
 from baleobala.bale.endpoints import Endpoint, fetch_endpoints
 from baleobala.bale.protos import (
     ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials, InboundMessage,
+    IncomingCallEvent,
     MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PhoneToImport,
     RequestImportContacts, RequestSearchContacts, RequestSendMessage,
     RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
@@ -82,7 +83,7 @@ class BaleApiClient:
         self,
         jwt: str | None = None,
         ws_url: str | None = None,
-        on_incoming_credentials: Optional[Callable[[CallCredentials], None]] = None,
+        on_incoming_credentials: Optional[Callable[[IncomingCallEvent], None]] = None,
         ws_tls_config: WsTlsConfig | None = None,
     ) -> None:
         self._jwt = jwt
@@ -91,7 +92,7 @@ class BaleApiClient:
         self._on_incoming_creds = on_incoming_credentials
         self._ws: WsClient | None = None
         self._endpoints: List[Endpoint] | None = None
-        self._last_creds: CallCredentials | None = None
+        self._last_creds: IncomingCallEvent | CallCredentials | None = None
         self._creds_event = threading.Event()
         # peer_id → callback(body: bytes). Registered via listen_messages;
         # fires on any UpdateMessage push whose peer/sender matches.
@@ -244,6 +245,8 @@ class BaleApiClient:
                 )
             self._creds_event.wait(timeout=min(0.25, remaining))
         assert self._last_creds is not None
+        if isinstance(self._last_creds, IncomingCallEvent):
+            return self._last_creds.credentials
         return self._last_creds
 
     def import_contacts(
@@ -415,7 +418,7 @@ class BaleApiClient:
 
     def listen_incoming_calls(
         self,
-        callback: Callable[[CallCredentials], None],
+        callback: Callable[[IncomingCallEvent], None],
     ) -> None:
         """Register a callback for any incoming call credentials.
 
@@ -456,12 +459,17 @@ class BaleApiClient:
         if self._message_subs:
             self._dispatch_inbound_messages(resp.raw)
 
-    def _deliver_creds(self, creds: CallCredentials) -> None:
-        self._last_creds = creds
+    def _deliver_creds(self, creds: CallCredentials, *, source: str = "push") -> None:
+        event = IncomingCallEvent(
+            credentials=creds,
+            peer_id=creds.peer_id,
+            source=source,
+        )
+        self._last_creds = event
         self._creds_event.set()
         if self._on_incoming_creds is not None:
             try:
-                self._on_incoming_creds(creds)
+                self._on_incoming_creds(event)
             except Exception:  # noqa: BLE001
                 log.exception("on_incoming_creds callback failed")
 
@@ -478,7 +486,7 @@ class BaleApiClient:
                 log.error("AcceptCall response had no LiveKit credentials")
                 return
             log.info("AcceptCall returned credentials: room=%s", creds.room)
-            self._deliver_creds(creds)
+            self._deliver_creds(creds, source="accept")
         except Exception:  # noqa: BLE001
             log.exception("AcceptCall failed for callId=%d", call_id)
 

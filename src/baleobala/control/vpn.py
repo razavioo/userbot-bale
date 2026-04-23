@@ -32,6 +32,11 @@ class VpnProfile:
     pairing_id: str | None = None
     peer_id: int | None = None
     peer_name: str | None = None
+    mesh_peer_id: int | None = None
+    mesh_gateway_ip: str | None = None
+    mesh_client_ip: str | None = None
+    mesh_prefix: str | None = None
+    mesh_provisioning_status: str = "pending"
     answer: bool = False
     auto_start: bool = False
     listen_host: str = "127.0.0.1"
@@ -55,6 +60,11 @@ class VpnProfile:
             pairing_id=data.get("pairing_id"),
             peer_id=data.get("peer_id"),
             peer_name=data.get("peer_name"),
+            mesh_peer_id=data.get("mesh_peer_id"),
+            mesh_gateway_ip=data.get("mesh_gateway_ip"),
+            mesh_client_ip=data.get("mesh_client_ip"),
+            mesh_prefix=data.get("mesh_prefix"),
+            mesh_provisioning_status=str(data.get("mesh_provisioning_status", "pending")),
             answer=bool(data.get("answer", False)),
             auto_start=bool(data.get("auto_start", False)),
             listen_host=str(data.get("listen_host", "127.0.0.1")),
@@ -103,6 +113,11 @@ class VpnStore:
             "pairing_id": profile.pairing_id or "none",
             "peer_id": str(profile.peer_id) if profile.peer_id is not None else "none",
             "peer_name": profile.peer_name or "none",
+            "mesh_peer_id": str(profile.mesh_peer_id) if profile.mesh_peer_id is not None else "none",
+            "mesh_client_ip": profile.mesh_client_ip or "none",
+            "mesh_gateway_ip": profile.mesh_gateway_ip or "none",
+            "mesh_prefix": profile.mesh_prefix or "none",
+            "mesh_provisioning_status": profile.mesh_provisioning_status,
             "answer": "yes" if profile.answer else "no",
             "auto_start": "yes" if profile.auto_start else "no",
         }

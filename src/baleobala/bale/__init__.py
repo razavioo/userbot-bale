@@ -4,10 +4,15 @@ __all__ = [
     "BaleApiClient",
     "CallCredentials",
     "Endpoint",
+    "IncomingCallEvent",
     "LiveKitCredentials",
     "LiveKitSink",
     "LiveKitSource",
     "LiveKitSession",
+    "MessagingBackend",
+    "MtprotoMessagingBackend",
+    "MtprotoSessionState",
+    "MtprotoTransportNotReady",
     "OutPeer",
     "RequestStartLiveKitCall",
     "WsClient",
@@ -33,9 +38,10 @@ def __getattr__(name: str):
             "LiveKitSink": LiveKitSink,
             "LiveKitSource": LiveKitSource,
         }[name]
-    elif name in {"CallCredentials", "OutPeer", "RequestStartLiveKitCall", "parse_call_credentials"}:
+    elif name in {"CallCredentials", "IncomingCallEvent", "OutPeer", "RequestStartLiveKitCall", "parse_call_credentials"}:
         from baleobala.bale.protos import (
             CallCredentials,
+            IncomingCallEvent,
             OutPeer,
             RequestStartLiveKitCall,
             parse_call_credentials,
@@ -43,9 +49,26 @@ def __getattr__(name: str):
 
         value = {
             "CallCredentials": CallCredentials,
+            "IncomingCallEvent": IncomingCallEvent,
             "OutPeer": OutPeer,
             "RequestStartLiveKitCall": RequestStartLiveKitCall,
             "parse_call_credentials": parse_call_credentials,
+        }[name]
+    elif name == "MessagingBackend":
+        from baleobala.bale.messaging_backend import MessagingBackend
+
+        value = MessagingBackend
+    elif name in {"MtprotoMessagingBackend", "MtprotoSessionState", "MtprotoTransportNotReady"}:
+        from baleobala.bale.mtproto_backend import (
+            MtprotoMessagingBackend,
+            MtprotoSessionState,
+            MtprotoTransportNotReady,
+        )
+
+        value = {
+            "MtprotoMessagingBackend": MtprotoMessagingBackend,
+            "MtprotoSessionState": MtprotoSessionState,
+            "MtprotoTransportNotReady": MtprotoTransportNotReady,
         }[name]
     elif name == "WsClient":
         from baleobala.bale.ws_client import WsClient
