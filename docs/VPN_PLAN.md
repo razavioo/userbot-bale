@@ -76,14 +76,14 @@ If a paired relay already exists locally, `vpn up --backend proxy` will select i
 - Include `proxy_port_open`, `packet_flow_ok`, and `dns_failed` style outcomes in the report surface where relevant.
 
 ### Phase 4: Linux Realistic Path
-- Move the remaining Linux setup from scripts into the session runner where possible.
-- Automate:
+- `vpn netns-session --kind tunnel-pair` now owns the Linux full-device path by default.
+- The runner is responsible for:
   - TUN create and attach in the correct namespace
   - route programming
-  - DNS setup
+  - per-namespace DNS setup
   - NAT and host-route exemptions
-- Preserve the current manual scripts as references, but make the runner the source of truth for session orchestration.
-- Map infrastructure failures into deterministic classes such as `missing_iproute`, `missing_tun`, `permission_denied`, and `teardown_leak`.
+- Manual scripts stay as debug references only; they are no longer the normal orchestration path.
+- Infrastructure failures should continue to classify deterministically, including `missing_iproute`, `missing_tun`, `missing_iptables`, `permission_denied`, `route_program_failed`, `dns_config_failed`, `nat_setup_failed`, `host_route_failed`, and `teardown_leak`.
 
 ### Phase 5: Artifact Bundling and Triage
 - Bundle every run with:
