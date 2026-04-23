@@ -371,7 +371,7 @@ class ControlService:
         target_profile_id = profile_id or profile.pairing_id
         if target_profile_id:
             pairing = self.pairing_store.get(target_profile_id)
-            if pairing is not None and pairing.relay_id:
+            if pairing is not None and getattr(pairing, "relay_id", ""):
                 pairing = self.sync_pairing(target_profile_id)
         pairing = self.pairing_store.connectable(profile_id or profile.pairing_id)
         if pairing is None:
