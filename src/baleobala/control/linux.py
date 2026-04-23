@@ -220,6 +220,7 @@ class LinuxTunnelRuntime:
         self._runner = None
         self._keepalive = None
         self._health = None
+        self._controller = None
 
     def start(self, profile, auth_record) -> dict[str, str]:  # noqa: ANN001
         if auth_record is None or not auth_record.jwt:
@@ -230,7 +231,7 @@ class LinuxTunnelRuntime:
         from baleobala.cli import _resolve_livekit_credentials
         from baleobala.vpn.cli import _build_transport_chain, _safe_mtu
         from baleobala.vpn.keepalive import LiveKitKeepalive
-        from baleobala.vpn.router import HealthMonitor
+        from baleobala.vpn.router import FailoverController
         from baleobala.vpn.runner import RunnerConfig, VpnRunner
         from baleobala.vpn.tun import TunDevice
         from baleobala.bale import LiveKitSession
@@ -278,15 +279,21 @@ class LinuxTunnelRuntime:
         )
         runner = VpnRunner(tun, transport, cfg)
         runner.start()
-        health = HealthMonitor(runner._tunnel, interval=5.0, stuck_threshold=8)
-        health.start()
+        controller = FailoverController(
+            runner,
+            chain,
+            carrier_session=session,
+            carrier_factory=lambda: self._rebuild_runtime(args),
+            status_callback=self._update_status,
+        )
+        controller.start(transport_name)
 
         self._tun = tun
         self._session = session
         self._chain = chain
         self._runner = runner
         self._keepalive = keepalive
-        self._health = health
+        self._controller = controller
         self._active = True
         payload = {
             "endpoint": args.tun,
@@ -294,14 +301,19 @@ class LinuxTunnelRuntime:
             "call_established": "yes",
             "data_flow_ok": "yes",
             "last_error": "",
+            "recovery_state": "healthy",
+            "transport_previous": "",
+            "failover_count": "0",
+            "recovering_since": "",
+            "carrier_session_id": hex(id(session)),
         }
         self._state_store.save(payload)
         return payload
 
     def stop(self) -> None:
-        if self._health is not None:
-            self._health.stop()
-            self._health = None
+        if self._controller is not None:
+            self._controller.stop()
+            self._controller = None
         if self._runner is not None:
             self._runner.stop()
             self._runner = None
@@ -328,6 +340,38 @@ class LinuxTunnelRuntime:
     @property
     def active(self) -> bool:
         return self._active
+
+    def _rebuild_runtime(self, args):  # noqa: ANN001
+        from baleobala.cli import _resolve_livekit_credentials
+        from baleobala.bale import LiveKitSession
+        from baleobala.vpn.cli import _build_transport_chain
+        from baleobala.vpn.keepalive import LiveKitKeepalive
+
+        url, token = _resolve_livekit_credentials(args)
+        session = LiveKitSession(url=url, token=token, identity=args.identity)
+        session.start()
+        keepalive = LiveKitKeepalive(session, interval=20.0)
+        keepalive.start()
+        chain = _build_transport_chain(args.transport, session, args)
+        original_close = chain.close
+
+        def close_with_session() -> None:
+            try:
+                original_close()
+            finally:
+                keepalive.stop()
+                session.stop()
+
+        chain.close = close_with_session  # type: ignore[method-assign]
+        return session, chain
+
+    def _update_status(self, fields: dict[str, str]) -> None:
+        payload = self._state_store.load(default={})
+        if not isinstance(payload, dict):
+            payload = {}
+        payload = {str(k): str(v) for k, v in payload.items()}
+        payload.update({str(k): str(v) for k, v in fields.items()})
+        self._state_store.save(payload)
 
 
 class LinuxTunBackend:
@@ -375,13 +419,29 @@ class LinuxTunBackend:
             call_established=runtime.get("call_established", "no"),
             data_flow_ok=runtime.get("data_flow_ok", "no"),
             transport_selected=runtime.get("transport_selected", ""),
+            recovery_state=runtime.get("recovery_state", ""),
+            transport_previous=runtime.get("transport_previous", ""),
+            failover_count=runtime.get("failover_count", "0"),
+            recovering_since=runtime.get("recovering_since", ""),
+            carrier_session_id=runtime.get("carrier_session_id", ""),
+            peer_coordination=runtime.get("peer_coordination", ""),
             endpoint=runtime.get("endpoint"),
             last_error=runtime.get("last_error", ""),
         ).to_dict()
         payload["profile_id"] = profile.profile_id
         payload["pairing_id"] = profile.pairing_id or ""
         payload.update(session)
-        for key in ("transport_selected", "last_error", "endpoint"):
+        for key in (
+            "transport_selected",
+            "transport_previous",
+            "recovery_state",
+            "failover_count",
+            "recovering_since",
+            "carrier_session_id",
+            "peer_coordination",
+            "last_error",
+            "endpoint",
+        ):
             if runtime.get(key):
                 payload[key] = str(runtime[key])
         self._state_store.save(payload)
@@ -403,7 +463,19 @@ class LinuxTunBackend:
         if isinstance(payload, dict):
             merged = {str(k): str(v) for k, v in payload.items()}
             runtime = self._runtime_status()
-            for key in ("call_established", "data_flow_ok", "transport_selected", "last_error", "endpoint"):
+            for key in (
+                "call_established",
+                "data_flow_ok",
+                "transport_selected",
+                "transport_previous",
+                "recovery_state",
+                "failover_count",
+                "recovering_since",
+                "carrier_session_id",
+                "peer_coordination",
+                "last_error",
+                "endpoint",
+            ):
                 if key in runtime and runtime[key] not in {None, ""}:
                     merged[key] = str(runtime[key])
             return merged
@@ -418,6 +490,12 @@ class LinuxTunBackend:
             call_established=runtime.get("call_established", "no"),
             data_flow_ok=runtime.get("data_flow_ok", "no"),
             transport_selected=runtime.get("transport_selected", ""),
+            recovery_state=runtime.get("recovery_state", ""),
+            transport_previous=runtime.get("transport_previous", ""),
+            failover_count=runtime.get("failover_count", "0"),
+            recovering_since=runtime.get("recovering_since", ""),
+            carrier_session_id=runtime.get("carrier_session_id", ""),
+            peer_coordination=runtime.get("peer_coordination", ""),
             endpoint=runtime.get("endpoint"),
             last_error=runtime.get("last_error", ""),
         ).to_dict()

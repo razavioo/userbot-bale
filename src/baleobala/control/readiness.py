@@ -22,6 +22,12 @@ class BackendReadiness:
     dns_ready: str = "no"
     call_established: str = "no"
     data_flow_ok: str = "no"
+    recovery_state: str = ""
+    transport_previous: str = ""
+    failover_count: str = "0"
+    recovering_since: str = ""
+    carrier_session_id: str = ""
+    peer_coordination: str = ""
     teardown_clean: str = "no"
     failure_class: str = ""
     carrier_latency_ms: str = ""
@@ -41,6 +47,12 @@ class BackendReadiness:
             "dns_ready": self.dns_ready,
             "call_established": self.call_established,
             "data_flow_ok": self.data_flow_ok,
+            "recovery_state": self.recovery_state,
+            "transport_previous": self.transport_previous,
+            "failover_count": self.failover_count,
+            "recovering_since": self.recovering_since,
+            "carrier_session_id": self.carrier_session_id,
+            "peer_coordination": self.peer_coordination,
             "teardown_clean": self.teardown_clean,
             "failure_class": self.failure_class,
             "carrier_latency_ms": self.carrier_latency_ms,
@@ -119,6 +131,12 @@ class BackendReadiness:
         call_established: str = "no",
         data_flow_ok: str = "no",
         transport_selected: str = "",
+        recovery_state: str = "",
+        transport_previous: str = "",
+        failover_count: str = "0",
+        recovering_since: str = "",
+        carrier_session_id: str = "",
+        peer_coordination: str = "",
         endpoint: str | None = None,
         last_error: str = "",
     ) -> "BackendReadiness":
@@ -132,6 +150,12 @@ class BackendReadiness:
             dns_ready=_yn(ready),
             call_established=call_established,
             data_flow_ok=data_flow_ok,
+            recovery_state=recovery_state,
+            transport_previous=transport_previous,
+            failover_count=failover_count,
+            recovering_since=recovering_since,
+            carrier_session_id=carrier_session_id,
+            peer_coordination=peer_coordination,
             teardown_clean=_yn(state != "running" or session_active),
             carrier_latency_ms="0" if call_established == "yes" else "",
             last_error=last_error,
@@ -141,6 +165,9 @@ class BackendReadiness:
                 "address": address,
                 "mtu": mtu,
                 "transport_selected": transport_selected,
+                "transport_previous": transport_previous,
+                "failover_count": failover_count,
+                "peer_coordination": peer_coordination,
             },
         )
 
@@ -158,6 +185,12 @@ class BackendReadiness:
         route_ready: str = "no",
         dns_ready: str = "no",
         transport_selected: str = "",
+        recovery_state: str = "",
+        transport_previous: str = "",
+        failover_count: str = "0",
+        recovering_since: str = "",
+        carrier_session_id: str = "",
+        peer_coordination: str = "",
         last_error: str = "",
     ) -> "BackendReadiness":
         return cls(
@@ -169,6 +202,12 @@ class BackendReadiness:
             dns_ready=dns_ready,
             call_established=call_established,
             data_flow_ok=data_flow_ok,
+            recovery_state=recovery_state,
+            transport_previous=transport_previous,
+            failover_count=failover_count,
+            recovering_since=recovering_since,
+            carrier_session_id=carrier_session_id,
+            peer_coordination=peer_coordination,
             teardown_clean=_yn(state != "running" or runtime_active),
             last_error=last_error,
             endpoint=endpoint,
@@ -178,6 +217,9 @@ class BackendReadiness:
                 "mode": "native",
                 "policy": "full-tunnel",
                 "transport_selected": transport_selected,
+                "transport_previous": transport_previous,
+                "failover_count": failover_count,
+                "peer_coordination": peer_coordination,
             },
         )
 
@@ -198,6 +240,12 @@ class BackendReadiness:
                 "dns_ready",
                 "call_established",
                 "data_flow_ok",
+                "recovery_state",
+                "transport_previous",
+                "failover_count",
+                "recovering_since",
+                "carrier_session_id",
+                "peer_coordination",
                 "teardown_clean",
                 "failure_class",
                 "carrier_latency_ms",
@@ -216,6 +264,12 @@ class BackendReadiness:
             dns_ready=str(data.get("dns_ready", "no")),
             call_established=str(data.get("call_established", "no")),
             data_flow_ok=str(data.get("data_flow_ok", "no")),
+            recovery_state=str(data.get("recovery_state", "")),
+            transport_previous=str(data.get("transport_previous", "")),
+            failover_count=str(data.get("failover_count", "0")),
+            recovering_since=str(data.get("recovering_since", "")),
+            carrier_session_id=str(data.get("carrier_session_id", "")),
+            peer_coordination=str(data.get("peer_coordination", "")),
             teardown_clean=str(data.get("teardown_clean", "no")),
             failure_class=str(data.get("failure_class", "")),
             carrier_latency_ms=str(data.get("carrier_latency_ms", "")),

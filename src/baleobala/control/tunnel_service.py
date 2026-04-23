@@ -75,6 +75,12 @@ class TunnelServiceState:
     transport_selected: str = ""
     call_established: str = "no"
     data_flow_ok: str = "no"
+    recovery_state: str = ""
+    transport_previous: str = ""
+    failover_count: str = "0"
+    recovering_since: str = ""
+    carrier_session_id: str = ""
+    peer_coordination: str = ""
     route_ready: str = "no"
     dns_ready: str = "no"
     last_error: str = ""
@@ -91,6 +97,12 @@ class TunnelServiceState:
             "transport_selected": self.transport_selected,
             "call_established": self.call_established,
             "data_flow_ok": self.data_flow_ok,
+            "recovery_state": self.recovery_state,
+            "transport_previous": self.transport_previous,
+            "failover_count": self.failover_count,
+            "recovering_since": self.recovering_since,
+            "carrier_session_id": self.carrier_session_id,
+            "peer_coordination": self.peer_coordination,
             "route_ready": self.route_ready,
             "dns_ready": self.dns_ready,
             "last_error": self.last_error,
@@ -109,6 +121,12 @@ class TunnelServiceState:
             transport_selected=str(data.get("transport_selected", "")),
             call_established=str(data.get("call_established", "no")),
             data_flow_ok=str(data.get("data_flow_ok", "no")),
+            recovery_state=str(data.get("recovery_state", "")),
+            transport_previous=str(data.get("transport_previous", "")),
+            failover_count=str(data.get("failover_count", "0")),
+            recovering_since=str(data.get("recovering_since", "")),
+            carrier_session_id=str(data.get("carrier_session_id", "")),
+            peer_coordination=str(data.get("peer_coordination", "")),
             route_ready=str(data.get("route_ready", "no")),
             dns_ready=str(data.get("dns_ready", "no")),
             last_error=str(data.get("last_error", "")),
@@ -368,6 +386,12 @@ class CarrierTunnelService(TunnelService):
                 transport_selected=str(decoded.get("transport_selected", current.transport_selected)),
                 call_established=str(decoded.get("call_established", current.call_established)),
                 data_flow_ok=str(decoded.get("data_flow_ok", current.data_flow_ok)),
+                recovery_state=str(decoded.get("recovery_state", current.recovery_state)),
+                transport_previous=str(decoded.get("transport_previous", current.transport_previous)),
+                failover_count=str(decoded.get("failover_count", current.failover_count)),
+                recovering_since=str(decoded.get("recovering_since", current.recovering_since)),
+                carrier_session_id=str(decoded.get("carrier_session_id", current.carrier_session_id)),
+                peer_coordination=str(decoded.get("peer_coordination", current.peer_coordination)),
                 route_ready=str(decoded.get("route_ready", current.route_ready)),
                 dns_ready=str(decoded.get("dns_ready", current.dns_ready)),
                 last_error=str(decoded.get("last_error", current.last_error)),

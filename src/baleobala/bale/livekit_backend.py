@@ -40,7 +40,7 @@ import threading
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from enum import Enum
-from typing import Iterator
+from typing import Callable, Iterator
 
 import numpy as np
 
@@ -142,6 +142,7 @@ class LiveKitSession:
         self._tasks_lock = threading.Lock()
         self._submitted: set[Future] = set()
         self._submitted_lock = threading.Lock()
+        self._terminal_observers: list[Callable[[BaseException | None], None]] = []
 
     @property
     def state(self) -> str:
@@ -159,6 +160,9 @@ class LiveKitSession:
     def is_terminal(self) -> bool:
         with self._state_lock:
             return self._state in {LiveKitSessionState.STOPPED, LiveKitSessionState.FAILED}
+
+    def add_terminal_observer(self, observer: Callable[[BaseException | None], None]) -> None:
+        self._terminal_observers.append(observer)
 
     def start(self) -> None:
         with self._state_lock:
@@ -558,6 +562,7 @@ class LiveKitSession:
         with self._state_lock:
             self._terminal_error = exc
             self._state = LiveKitSessionState.FAILED
+        self._notify_terminal_observers(exc)
 
     def _raise_if_not_operational(self, message: str) -> None:
         with self._state_lock:
@@ -569,6 +574,13 @@ class LiveKitSession:
         if error is not None:
             raise RuntimeError(f"{message}{suffix}: {error}") from error
         raise RuntimeError(f"{message}{suffix}")
+
+    def _notify_terminal_observers(self, exc: BaseException | None) -> None:
+        for observer in list(self._terminal_observers):
+            try:
+                observer(exc)
+            except Exception:  # pragma: no cover
+                log.exception("terminal observer raised")
 
     def _create_task(self, coro) -> asyncio.Task[None]:  # type: ignore[no-untyped-def]
         task = asyncio.create_task(coro)

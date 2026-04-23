@@ -46,6 +46,7 @@ from .transports import Transport
 log = logging.getLogger(__name__)
 
 OnPacket = Callable[[bytes], None]
+OnEvent = Callable[[str, dict[str, object]], None]
 
 
 @dataclass
@@ -107,6 +108,7 @@ class Tunnel:
         self._seen: set[int] = set()
         self._seen_order: list[int] = []
         self._seen_cap = 4096
+        self._event_handlers: list[OnEvent] = []
 
     @property
     def sess_id(self) -> int:
@@ -127,6 +129,9 @@ class Tunnel:
         )
         self._rx_thread.start()
         self._retry_thread.start()
+
+    def add_event_handler(self, handler: OnEvent) -> None:
+        self._event_handlers.append(handler)
 
     def stop(self) -> None:
         self._stop.set()
@@ -162,8 +167,17 @@ class Tunnel:
                 return
             with self._pending_lock:
                 self._pending[f.seq] = _Pending(frame=f, sent_at=time.monotonic())
-            with self._tx_lock:
-                self._tx.send_bytes(f.encode())
+            try:
+                with self._tx_lock:
+                    self._tx.send_bytes(f.encode())
+            except Exception as exc:  # noqa: BLE001
+                self._emit(
+                    "transport_send_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    seq=f.seq,
+                )
+                raise
 
     # ---- internals --------------------------------------------------------
 
@@ -212,6 +226,7 @@ class Tunnel:
                     self._pending.pop(seq, None)
                 self._send_slot.release()
                 log.warning("vpn: dropping seq=%d after max retries", seq)
+                self._emit("frame_dropped", seq=seq, reason="max_retries")
             for p in to_retry:
                 retry_frame = VpnFrame(
                     sess_id=p.frame.sess_id,
@@ -219,8 +234,17 @@ class Tunnel:
                     flags=p.frame.flags | VpnFlag.RETRY,
                     payload=p.frame.payload,
                 )
-                with self._tx_lock:
-                    self._tx.send_bytes(retry_frame.encode())
+                try:
+                    with self._tx_lock:
+                        self._tx.send_bytes(retry_frame.encode())
+                except Exception as exc:  # noqa: BLE001
+                    self._emit(
+                        "transport_retry_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        seq=p.frame.seq,
+                        retries=p.retries,
+                    )
 
     def _handle_ack(self, seq: int) -> None:
         with self._pending_lock:
@@ -249,7 +273,16 @@ class Tunnel:
             self._tx = new_transport
         log.info("swapped tunnel transport: %s → %s",
                  type(old).__name__, type(new_transport).__name__)
+        self._emit(
+            "transport_swapped",
+            old_transport=type(old).__name__,
+            new_transport=type(new_transport).__name__,
+        )
         return old
+
+    def pending_count(self) -> int:
+        with self._pending_lock:
+            return len(self._pending)
 
     def _deliver(self, frame: VpnFrame) -> None:
         cb = self._on_packet
@@ -309,3 +342,10 @@ class Tunnel:
         while len(self._seen_order) > self._seen_cap:
             old = self._seen_order.pop(0)
             self._seen.discard(old)
+
+    def _emit(self, event: str, **payload: object) -> None:
+        for handler in list(self._event_handlers):
+            try:
+                handler(event, payload)
+            except Exception:  # pragma: no cover
+                log.exception("tunnel event handler raised")

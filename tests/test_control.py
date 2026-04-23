@@ -204,6 +204,52 @@ def test_control_service_exports_and_applies_pairing_exchange(tmp_path, monkeypa
     assert accepted.peer_name == "remote-relay"
 
 
+def test_control_service_enroll_request_approve_sync_flow(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService
+
+    service = ControlService()
+    service.save_auth_jwt("jwt-token", user_id=77, phone="+989")
+
+    enrolled = service.enroll_pairing("relay-a", role="client", relay_mode="proxy")
+    assert enrolled.relay_id
+    assert enrolled.authorization_status == "none"
+    assert enrolled.provisioning_status == "enrolled"
+
+    pending = service.request_pairing_access(enrolled.profile_id)
+    assert pending.authorization_id
+    assert pending.authorization_status == "pending"
+
+    approved = service.approve_pairing_access(enrolled.profile_id)
+    assert approved.authorization_status == "approved"
+    assert approved.provisioning_status == "complete"
+    assert approved.credential_epoch
+    assert approved.credential_expires_at is not None
+    assert service.pairing_store.connectable(approved.profile_id) is not None
+
+
+def test_control_service_revoked_pairing_is_not_connectable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService
+
+    service = ControlService()
+    service.save_auth_jwt("jwt-token", user_id=77, phone="+989")
+
+    record = service.enroll_pairing("relay-a", role="client", relay_mode="proxy")
+    record = service.request_pairing_access(record.profile_id)
+    record = service.approve_pairing_access(record.profile_id)
+    assert service.pairing_store.connectable(record.profile_id) is not None
+
+    revoked = service.revoke_pairing_device(record.profile_id)
+    assert revoked.authorization_status == "revoked"
+    assert revoked.provisioning_status == "revoked"
+    assert service.pairing_store.connectable(record.profile_id) is None
+
+
 def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import VpnProfile
@@ -416,6 +462,9 @@ def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monk
             "call_established": "no",
             "transport_selected": "",
             "data_flow_ok": "no",
+            "recovery_state": "recovering",
+            "transport_previous": "audio",
+            "failover_count": "2",
             "teardown_clean": "no",
             "failure_class": "",
         },
@@ -425,6 +474,9 @@ def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monk
     assert merged["call_established"] == "yes"
     assert merged["transport_selected"] == "dc"
     assert merged["data_flow_ok"] == "yes"
+    assert merged["recovery_state"] == "recovering"
+    assert merged["transport_previous"] == "audio"
+    assert merged["failover_count"] == "2"
     assert merged["teardown_clean"] == "yes"
     assert merged["artifact_bundle"] == str(bundle)
 
@@ -642,6 +694,12 @@ def test_carrier_tunnel_service_tracks_control_status_frames(tmp_path, monkeypat
             "transport_selected": "packet-tunnel",
             "call_established": "yes",
             "data_flow_ok": "yes",
+            "recovery_state": "healthy",
+            "transport_previous": "audio",
+            "failover_count": "3",
+            "recovering_since": "123.4",
+            "carrier_session_id": "0xabc",
+            "peer_coordination": "active",
             "route_ready": "yes",
             "dns_ready": "yes",
             "last_error": "",
@@ -664,14 +722,20 @@ def test_carrier_tunnel_service_tracks_control_status_frames(tmp_path, monkeypat
         reply = json.loads(recv_exact(client, int.from_bytes(header, "big")).decode("utf-8"))
 
     assert reply["transport_selected"] == "packet-tunnel"
+    assert reply["recovery_state"] == "healthy"
+    assert reply["transport_previous"] == "audio"
+    assert reply["failover_count"] == "3"
+    assert reply["peer_coordination"] == "active"
     assert runtime.status().call_established == "yes"
     assert runtime.status().route_ready == "yes"
+    assert runtime.status().peer_coordination == "active"
 
     probe = probe_endpoint(endpoint)
     assert probe.ok is True
     assert probe.payload is not None
     assert probe.payload["transport_selected"] == "packet-tunnel"
     assert probe.payload["call_established"] == "yes"
+    assert probe.payload["recovery_state"] == "healthy"
 
     runtime.stop()
 

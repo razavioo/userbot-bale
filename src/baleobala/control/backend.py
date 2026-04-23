@@ -102,6 +102,12 @@ class MacOSPacketTunnelBackend(VpnBackend):
             route_ready=service_state.route_ready if service_state is not None else "no",
             dns_ready=service_state.dns_ready if service_state is not None else "no",
             transport_selected=service_state.transport_selected if service_state is not None else "",
+            recovery_state=service_state.recovery_state if service_state is not None else "",
+            transport_previous=service_state.transport_previous if service_state is not None else "",
+            failover_count=service_state.failover_count if service_state is not None else "0",
+            recovering_since=service_state.recovering_since if service_state is not None else "",
+            carrier_session_id=service_state.carrier_session_id if service_state is not None else "",
+            peer_coordination=service_state.peer_coordination if service_state is not None else "",
             last_error=service_state.last_error if service_state is not None else "",
         )
         self._state_store.save(readiness.to_dict())
@@ -130,6 +136,12 @@ class MacOSPacketTunnelBackend(VpnBackend):
                 route_ready=runtime.route_ready,
                 dns_ready=runtime.dns_ready,
                 transport_selected=runtime.transport_selected,
+                recovery_state=runtime.recovery_state,
+                transport_previous=runtime.transport_previous,
+                failover_count=runtime.failover_count,
+                recovering_since=runtime.recovering_since,
+                carrier_session_id=runtime.carrier_session_id,
+                peer_coordination=runtime.peer_coordination,
                 last_error=runtime.last_error,
             ).to_dict()
         payload = self._state_store.load(default=None)

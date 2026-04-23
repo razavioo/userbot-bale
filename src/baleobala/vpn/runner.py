@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
+from typing import Callable
 
 from .qos import PriorityQueue
 from .transports import Transport
@@ -41,6 +42,9 @@ class RunnerConfig:
     mtu_override: int | None = None
 
 
+OnRunnerEvent = Callable[[str, dict[str, object]], None]
+
+
 class VpnRunner:
     def __init__(
         self,
@@ -56,6 +60,7 @@ class VpnRunner:
         self._tx_worker: threading.Thread | None = None
         self._qos = PriorityQueue()
         self._stop = threading.Event()
+        self._event_handlers: list[OnRunnerEvent] = []
 
     def start(self) -> None:
         if self._tunnel is not None:
@@ -68,6 +73,7 @@ class VpnRunner:
             max_retries=self._cfg.max_retries,
             mtu_override=self._cfg.mtu_override,
         )
+        self._tunnel.add_event_handler(self._emit)
         self._tunnel.start(on_packet=self._on_inbound)
         self._tun_rx = threading.Thread(
             target=self._tun_loop, name="vpn-tun-ingest", daemon=True
@@ -79,6 +85,9 @@ class VpnRunner:
         self._tx_worker.start()
         log.info("vpn runner started: tun=%s sess=0x%x window=%d (qos=on)",
                  self._tun.name, self._cfg.sess_id, self._cfg.window)
+
+    def add_event_handler(self, handler: OnRunnerEvent) -> None:
+        self._event_handlers.append(handler)
 
     def stop(self) -> None:
         self._stop.set()
@@ -101,6 +110,15 @@ class VpnRunner:
         """Block until one of the threads exits (e.g. on transport close)."""
         if self._tun_rx is not None:
             self._tun_rx.join()
+
+    @property
+    def tunnel(self) -> Tunnel | None:
+        return self._tunnel
+
+    def swap_transport(self, transport: Transport) -> Transport:
+        if self._tunnel is None:
+            raise RuntimeError("runner not started")
+        return self._tunnel.swap_transport(transport)
 
     # --- internals ---------------------------------------------------------
 
@@ -132,12 +150,20 @@ class VpnRunner:
                 self._tunnel.send_packet(pkt)
             except Exception:  # noqa: BLE001
                 log.exception("tunnel send_packet failed")
+                self._emit("runner_send_failed", {"error": "tunnel send_packet failed"})
 
     def _on_inbound(self, pkt: bytes) -> None:
         try:
             self._tun.write_packet(pkt)
         except OSError as e:
             log.warning("tun write failed: %s", e)
+
+    def _emit(self, event: str, payload: dict[str, object]) -> None:
+        for handler in list(self._event_handlers):
+            try:
+                handler(event, payload)
+            except Exception:  # pragma: no cover
+                log.exception("runner event handler raised")
 
 
 def wait_for_signal() -> None:

@@ -133,6 +133,42 @@ def test_linux_tun_backend_up_down(tmp_path: Path) -> None:
     assert backend.status()["state"] == "stopped"
 
 
+def test_linux_tun_backend_merges_recovery_runtime_fields(tmp_path: Path) -> None:
+    runner = FakeRunner(existing_devices=("vpn0",))
+    session = LinuxTunSession(
+        plan=TunPlan(name="vpn0"),
+        state_path=tmp_path / "s.json",
+        runner=runner,
+        resolver=NullResolver(),
+    )
+    backend = LinuxTunBackend(
+        session=session,
+        state_path=tmp_path / "b.json",
+        runtime_state_path=tmp_path / "runtime.json",
+    )
+    profile = VpnProfile(profile_id="p", name="p", backend="linux-tun")
+    backend.up(profile)
+    backend.update_runtime_status(
+        transport_selected="audio",
+        transport_previous="dc",
+        recovery_state="recovering",
+        failover_count="4",
+        recovering_since="123.4",
+        carrier_session_id="0xabc",
+        peer_coordination="active",
+        call_established="yes",
+        data_flow_ok="no",
+    )
+    status = backend.status()
+    assert status["transport_selected"] == "audio"
+    assert status["transport_previous"] == "dc"
+    assert status["recovery_state"] == "recovering"
+    assert status["failover_count"] == "4"
+    assert status["carrier_session_id"] == "0xabc"
+    assert status["peer_coordination"] == "active"
+    backend.down()
+
+
 def test_macos_resolver_configure_restore(tmp_path: Path) -> None:
     runner = FakeRunner()
     r = MacOSResolver(state_path=tmp_path / "m.json", runner=runner)
