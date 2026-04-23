@@ -330,6 +330,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
             role=args.role,
             peer_id=args.peer_id,
             peer_name=args.peer_name,
+            relay_name=args.relay,
             relay_mode=args.relay_mode,
             backend_preference=args.relay_mode,
         )
@@ -342,6 +343,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
             role=args.role,
             peer_id=args.peer_id,
             peer_name=args.peer_name,
+            relay_name=args.relay,
             relay_mode=args.relay_mode,
             backend_preference=args.backend or args.relay_mode,
             transport_preference=args.transport,
@@ -392,6 +394,27 @@ def cmd_pair(args: argparse.Namespace) -> int:
         store.remove(args.profile_id)
         print(f"removed {args.profile_id}")
         return 0
+    if args.pair_cmd == "invite":
+        link = service.export_pairing_invite(args.profile_id)
+        print(link)
+        if args.qr:
+            try:
+                import qrcode
+
+                qr = qrcode.QRCode(border=1)
+                qr.add_data(link)
+                qr.make(fit=True)
+                qr.print_ascii(invert=True)
+            except Exception:
+                print(
+                    "QR rendering unavailable; install the optional qrcode dependency for terminal QR output.",
+                    file=sys.stderr,
+                )
+        return 0
+    if args.pair_cmd == "join":
+        record = service.import_pairing_invite(args.link)
+        _print_record(record)
+        return 0
     if args.pair_cmd == "export-request":
         exchange = store.export_request(args.profile_id)
         print(json.dumps(exchange.to_dict(), indent=2, sort_keys=True))
@@ -435,11 +458,14 @@ def cmd_pair(args: argparse.Namespace) -> int:
 
 
 def cmd_relay(args: argparse.Namespace) -> int:
-    from baleobala.control import PairingStore, VpnProfile, VpnStore
+    from baleobala.control import ControlService, PairingStore, VpnProfile, VpnStore
+    from baleobala.control.relay_directory import RelayDirectory
     from baleobala.control.vpn import default_vpn_backend
 
     pairing_store = PairingStore()
     vpn_store = VpnStore()
+    service = ControlService(pairing_store=pairing_store, vpn_store=vpn_store)
+    relay_directory = RelayDirectory()
     if args.relay_cmd == "enable":
         profile = None
         if args.profile_id:
@@ -471,6 +497,51 @@ def cmd_relay(args: argparse.Namespace) -> int:
         )
         vpn_store.save(vpn_profile)
         print(f"enabled relay profile {vpn_profile.profile_id}")
+        return 0
+    if args.relay_cmd == "publish":
+        try:
+            entry = service.publish_relay(
+                args.name,
+                profile_id=args.profile_id,
+                peer_id=args.peer_id,
+                owner=args.owner or "",
+                transport_preference=args.transport,
+                backend_preference=args.backend or "",
+                endpoint_hint=args.endpoint or "",
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(f"relay_id: {entry.relay_id}")
+        print(f"name: {entry.name}")
+        print(f"peer_id: {entry.peer_id}")
+        print(f"owner: {entry.owner}")
+        print(f"transport_preference: {entry.transport_preference}")
+        print(f"backend_preference: {entry.backend_preference}")
+        if entry.endpoint_hint:
+            print(f"endpoint_hint: {entry.endpoint_hint}")
+        print(f"updated_at: {entry.updated_at}")
+        return 0
+    if args.relay_cmd == "list":
+        entries = relay_directory.list()
+        if not entries:
+            print("No relays published yet.")
+            return 0
+        for entry in entries:
+            line = f"- {entry.name} relay_id={entry.relay_id} peer_id={entry.peer_id} owner={entry.owner}"
+            if entry.backend_preference:
+                line += f" backend={entry.backend_preference}"
+            if entry.transport_preference:
+                line += f" transport={entry.transport_preference}"
+            if entry.endpoint_hint:
+                line += f" endpoint={entry.endpoint_hint}"
+            print(line)
+        return 0
+    if args.relay_cmd == "remove":
+        removed = relay_directory.remove(args.identifier)
+        if removed is None:
+            print(f"no relay entry matched {args.identifier!r}")
+        else:
+            print(f"removed relay {removed.name} ({removed.relay_id})")
         return 0
     if args.relay_cmd == "disable":
         vpn_store.save(VpnProfile(profile_id="disabled", name="disabled", backend="proxy", role="relay"))
@@ -533,6 +604,83 @@ def _hold_backend(endpoint: str, *, label: str) -> int:
         return 0
 
 
+def _print_health_block(fields: dict[str, str]) -> None:
+    labels = [
+        ("route_ready", "route"),
+        ("dns_ready", "dns"),
+        ("carrier_bypass_ready", "carrier_bypass"),
+        ("egress_ready", "egress"),
+    ]
+    print("path_health:")
+    for key, label in labels:
+        value = fields.get(key, "")
+        if value:
+            print(f"  {label}: {value}")
+    hints = _health_hints(fields)
+    if hints:
+        print("path_hints:")
+        for hint in hints:
+            print(f"  {hint}")
+
+
+def _health_hints(fields: dict[str, str]) -> list[str]:
+    failure_codes = {
+        fields.get("failure_code", ""),
+        fields.get("analysis_reason", ""),
+        fields.get("failure_class", ""),
+        fields.get("last_error", ""),
+    }
+    hints: list[str] = []
+
+    if fields.get("route_ready") == "no" or "route_program_failed" in failure_codes:
+        hints.append(
+            "tunnel route programming looks incomplete; verify default or split-default routes on the client."
+        )
+    if fields.get("dns_ready") == "no" or "dns_config_failed" in failure_codes:
+        hints.append(
+            "DNS mismatch in bundle snapshot; re-check nameserver setup inside the client namespace."
+        )
+    if fields.get("carrier_bypass_ready") == "no":
+        hints.append(
+            "carrier bypass route is missing; add a host route for Bale before full-device traffic enters the tunnel."
+        )
+    if fields.get("egress_ready") == "no":
+        hints.append(
+            "TCP egress probe did not pass; verify NAT or forwarding on the relay and outbound reachability."
+        )
+    return hints
+
+
+def _print_verdict_summary(payload: dict[str, str]) -> None:
+    print("vpn verdict summary")
+    print(f"  ok: {payload['ok']}")
+    print(f"  analysis_classification: {payload['analysis_classification']}")
+    print(f"  analysis_reason: {payload['analysis_reason']}")
+    print(f"  failure_class: {payload['failure_class']}")
+    print(f"  artifact_bundle: {payload['artifact_bundle']}")
+    print(f"  call_established: {payload['call_established']}")
+    print(f"  transport_selected: {payload['transport_selected']}")
+    print(f"  data_flow_ok: {payload['data_flow_ok']}")
+    print(f"  teardown_clean: {payload['teardown_clean']}")
+    _print_health_block(payload)
+
+
+def _print_smoke_summary(payload: dict[str, str]) -> None:
+    print("vpn smoke summary")
+    print(f"  ok: {payload['ok']}")
+    print(f"  backend: {payload['backend']}")
+    print(f"  state: {payload['state']}")
+    print(f"  endpoint: {payload['endpoint']}")
+    print(f"  control_ready: {payload['control_ready']}")
+    print(f"  data_path_ready: {payload['data_path_ready']}")
+    print(f"  probe_ok: {payload['probe_ok']}")
+    print(f"  probe_kind: {payload['probe_kind']}")
+    print(f"  probe_detail: {payload['probe_detail']}")
+    if payload.get("last_error"):
+        print(f"  last_error: {payload['last_error']}")
+    _print_health_block(payload)
+
+
 def _start_packet_tunnel_runtime(profile, auth_record):
     from baleobala.control import CarrierTunnelService
     from baleobala.control.paths import config_dir
@@ -576,6 +724,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         PairingStore,
         NetnsScenario,
         analyze_bundle,
+        bundle_status,
         build_product_verdict,
         merge_status_with_bundle,
         VpnProfile,
@@ -592,6 +741,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     )
     from baleobala.control.backend import backend_for_profile, default_backend_name
     from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+    from baleobala.control.relay_directory import RelayDirectory
 
     vpn_store = VpnStore()
     auth_store = AuthStore()
@@ -645,6 +795,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         pairing = pairing_store.active()
         profile = vpn_store.load() or vpn_store.ensure_default()
         backend = backend_for_profile(profile)
+        backend_status = backend.status()
         snapshot_lines = summarize_snapshot(
             type("Snapshot", (), {
                 "auth": auth_status,
@@ -653,7 +804,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                     "state": pairing.status,
                     "name": pairing.name,
                 },
-                "backend": backend.status(),
+                "backend": backend_status,
             })()
         )
         print("baleobala secure connection status")
@@ -662,8 +813,9 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         print("")
         print("Details:")
         print(f"saved_profile: {vpn_status.get('name', 'default')}")
-        print(f"backend: {backend.status().get('backend', 'unknown')}")
-        print(f"backend_state: {backend.status().get('state', 'unknown')}")
+        print(f"backend: {backend_status.get('backend', 'unknown')}")
+        print(f"backend_state: {backend_status.get('state', 'unknown')}")
+        _print_health_block(backend_status)
         if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
             from baleobala.control.macos import MacOSSystemProxySession
             system_proxy = MacOSSystemProxySession(state_path=None)
@@ -706,8 +858,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
         else:
-            for key, value in report.to_dict().items():
-                print(f"{key}: {value}")
+            _print_smoke_summary(report.to_dict())
         return 0 if report.ok else 2
 
     if args.vpn_cmd == "live-smoke":
@@ -718,14 +869,20 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     if args.vpn_cmd == "analyze-bundle":
         analysis = analyze_bundle(args.bundle_path)
         payload = analysis.to_dict()
+        health = bundle_status(args.bundle_path)
         if args.json:
-            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(json.dumps({**payload, **health}, indent=2, sort_keys=True))
         else:
             print("vpn analyze-bundle result")
             print(f"  classification: {payload['classification']}")
             print(f"  ok: {payload['ok']}")
             print(f"  reason: {payload['reason']}")
             print(f"  bundle_path: {payload['bundle_path']}")
+            print(f"  transport_selected: {payload['transport_selected']}")
+            print(f"  last_success_stage: {payload['last_success_stage']}")
+            print(f"  failed_stage: {payload['failed_stage']}")
+            print(f"  retry_count: {payload['retry_count']}")
+            _print_health_block(health)
         return 0 if analysis.ok == "yes" else 2
 
     if args.vpn_cmd == "verdict":
@@ -740,15 +897,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
-            print("vpn verdict summary")
-            print(f"  ok: {payload['ok']}")
-            print(f"  analysis_classification: {payload['analysis_classification']}")
-            print(f"  failure_class: {payload['failure_class']}")
-            print(f"  artifact_bundle: {payload['artifact_bundle']}")
-            print(f"  call_established: {payload['call_established']}")
-            print(f"  transport_selected: {payload['transport_selected']}")
-            print(f"  data_flow_ok: {payload['data_flow_ok']}")
-            print(f"  teardown_clean: {payload['teardown_clean']}")
+            _print_verdict_summary(payload)
         return 0 if verdict.ok == "yes" else 2
 
     if args.vpn_cmd == "netns-plan":
@@ -986,6 +1135,46 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 volume=profile.volume,
             )
             vpn_store.save(profile)
+    if getattr(args, "relay", None):
+        relay = RelayDirectory().lookup(args.relay)
+        if relay is None:
+            raise SystemExit(f"no relay {args.relay!r} found in the local directory")
+        pairing = next(
+            (
+                item
+                for item in pairing_store.list()
+                if item.name == relay.name or item.peer_id == relay.peer_id
+            ),
+            None,
+        )
+        if pairing is None:
+            pairing = pairing_store.begin(
+                relay.name,
+                role=profile.role if profile.role else "client",
+                peer_id=relay.peer_id,
+                peer_name=relay.name,
+                relay_name=relay.name,
+                relay_mode="proxy",
+                backend_preference=relay.backend_preference,
+                transport_preference=relay.transport_preference,
+            )
+        pairing_store.touch(pairing.profile_id)
+        profile = VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend=profile.backend or relay.backend_preference or default_backend_name(),
+            role=pairing.role,
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+            answer=pairing.role == "relay",
+            proxy_secret=profile.proxy_secret,
+            listen_host=profile.listen_host,
+            listen_port=profile.listen_port,
+            protocol=profile.protocol,
+            volume=profile.volume,
+        )
+        vpn_store.save(profile)
     if args.profile_id:
         pairing = pairing_store.get(args.profile_id)
         if pairing is None:
@@ -1048,6 +1237,19 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         finally:
             backend.down()
 
+    if profile.backend == "packet-tunnel":
+        snapshot = control_service.start_connection(profile.profile_id)
+        try:
+            return _hold_backend(
+                snapshot.backend.get("endpoint", "packet-tunnel"),
+                label="macOS packet-tunnel backend active",
+            )
+        finally:
+            try:
+                control_service.stop_connection(snapshot.profile.profile_id if snapshot.profile is not None else profile.profile_id)
+            except Exception:
+                pass
+
     if profile.role == "relay":
         relay_args = _vpn_namespace_from_profile(profile, auth_record)
         backend = backend_for_profile(profile)
@@ -1106,34 +1308,6 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return cmd_bale_proxy_client(client_args)
-        else:
-            runtime, bridge = _start_packet_tunnel_runtime(profile, auth_record)
-            try:
-                runtime_state = runtime.start(
-                    profile_id=profile.profile_id,
-                    backend=profile.backend,
-                    pairing_id=profile.pairing_id,
-                )
-                if hasattr(runtime, "_state_store"):
-                    runtime._state_store.save(
-                        {
-                            **runtime_state.to_dict(),
-                            "version": "1",
-                            "call_established": "yes",
-                            "data_flow_ok": "yes",
-                            "route_ready": "yes",
-                            "dns_ready": "yes",
-                            "transport_selected": "audio",
-                            "last_error": "",
-                        }
-                    )
-                return _hold_backend(
-                    runtime_state.endpoint or "local service",
-                    label="macOS packet-tunnel backend active",
-                )
-            finally:
-                runtime.stop()
-                bridge.close()
     finally:
         backend.down()
 
@@ -1526,6 +1700,7 @@ def build_parser() -> argparse.ArgumentParser:
     pair_enroll.add_argument("--role", choices=["client", "relay"], default="client")
     pair_enroll.add_argument("--peer-id", type=int, default=None)
     pair_enroll.add_argument("--peer-name", default=None)
+    pair_enroll.add_argument("--relay", default=None, help="look up the relay directory entry by name")
     pair_enroll.add_argument("--relay-mode", choices=["proxy"], default="proxy")
     pair_enroll.add_argument("--backend", default=None)
     pair_enroll.add_argument("--transport", default="auto")
@@ -1536,6 +1711,7 @@ def build_parser() -> argparse.ArgumentParser:
     pair_start.add_argument("--role", choices=["client", "relay"], default="client")
     pair_start.add_argument("--peer-id", type=int, default=None)
     pair_start.add_argument("--peer-name", default=None)
+    pair_start.add_argument("--relay", default=None, help="look up the relay directory entry by name")
     pair_start.add_argument("--relay-mode", choices=["proxy"], default="proxy")
     pair_start.set_defaults(func=cmd_pair)
 
@@ -1589,6 +1765,15 @@ def build_parser() -> argparse.ArgumentParser:
     pair_remove.add_argument("--profile-id", required=True)
     pair_remove.set_defaults(func=cmd_pair)
 
+    pair_invite = pair_sub.add_parser("invite", help="export an invite link for a pairing")
+    pair_invite.add_argument("--profile-id", required=True)
+    pair_invite.add_argument("--qr", action="store_true", help="render the invite as terminal QR art")
+    pair_invite.set_defaults(func=cmd_pair)
+
+    pair_join = pair_sub.add_parser("join", help="join from an invite link")
+    pair_join.add_argument("link")
+    pair_join.set_defaults(func=cmd_pair)
+
     relay = sub.add_parser("relay", help="save relay-side connection settings")
     relay_sub = relay.add_subparsers(dest="relay_cmd", required=True)
 
@@ -1604,6 +1789,23 @@ def build_parser() -> argparse.ArgumentParser:
     relay_enable.add_argument("--proxy-secret", default=None)
     relay_enable.set_defaults(func=cmd_relay)
 
+    relay_publish = relay_sub.add_parser("publish", help="publish the current relay into the local directory")
+    relay_publish.add_argument("--name", required=True)
+    relay_publish.add_argument("--profile-id", default=None)
+    relay_publish.add_argument("--peer-id", type=int, default=None)
+    relay_publish.add_argument("--owner", default=None)
+    relay_publish.add_argument("--backend", default=None)
+    relay_publish.add_argument("--transport", default="auto")
+    relay_publish.add_argument("--endpoint", default=None)
+    relay_publish.set_defaults(func=cmd_relay)
+
+    relay_list = relay_sub.add_parser("list", help="list published relays")
+    relay_list.set_defaults(func=cmd_relay)
+
+    relay_remove = relay_sub.add_parser("remove", help="remove a published relay")
+    relay_remove.add_argument("identifier")
+    relay_remove.set_defaults(func=cmd_relay)
+
     relay_disable = relay_sub.add_parser("disable", help="clear relay settings")
     relay_disable.set_defaults(func=cmd_relay)
 
@@ -1615,6 +1817,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     vpn_up = vpn_sub.add_parser("up", help="start the current VPN backend")
     vpn_up.add_argument("--profile-id", default=None)
+    vpn_up.add_argument("--relay", default=None, help="resolve a relay from the local directory by name")
     vpn_up.add_argument("--backend", choices=["packet-tunnel", "proxy", "linux-tun"], default=None)
     vpn_up.set_defaults(func=cmd_vpn)
 
