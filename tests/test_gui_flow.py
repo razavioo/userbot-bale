@@ -45,6 +45,50 @@ def test_control_plane_connect_worker_requires_pairing() -> None:
     assert "No paired relay" in failures[0]
 
 
+def test_status_poller_emits_snapshot() -> None:
+    from types import SimpleNamespace
+
+    from baleobala.gui.workers import StatusPoller
+
+    snapshots: list[dict] = []
+
+    class FakeService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def status(self):
+            self.calls += 1
+            if self.calls == 1:
+                worker.stop()
+            return SimpleNamespace(
+                auth={"state": "configured"},
+                vpn={"state": "configured"},
+                pairing={
+                    "state": "paired",
+                    "name": "home-relay",
+                    "credential_expires_at": "4102444800",
+                },
+                backend={
+                    "backend": "linux-tun",
+                    "state": "running",
+                    "transport_selected": "dc",
+                    "recovery_state": "healthy",
+                    "failover_count": "2",
+                    "carrier_session_id": "sess-1",
+                    "carrier_latency_ms": "12",
+                },
+                connection={"state": "ready"},
+            )
+
+    worker = StatusPoller(FakeService(), interval_seconds=0.01)
+    worker.snapshot.connect(snapshots.append)
+    worker.run()
+
+    assert snapshots
+    assert snapshots[0]["backend"]["transport_selected"] == "dc"
+    assert snapshots[0]["backend"]["failover_count"] == "2"
+
+
 def test_connect_view_creates_pairing_and_persists_profile(qapp, monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
 
@@ -100,6 +144,73 @@ def test_connect_view_creates_pairing_and_persists_profile(qapp, monkeypatch, tm
     assert profile.name == "home-relay"
     assert profile.backend == "packet-tunnel"
     assert profile.proxy_secret == "secret"
+
+
+def test_connect_view_gate_action_creates_pairing(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.gui.app import MainWindow
+
+    win = MainWindow()
+    win.set_jwt("jwt-token", phone="+989")
+
+    created: dict[str, object] = {}
+
+    def fake_begin_pairing(name, **kwargs):  # noqa: ANN001
+        from types import SimpleNamespace
+
+        created["pairing"] = (name, kwargs)
+        return SimpleNamespace(profile_id="pair-1", pair_code="abc123")
+
+    def fake_ensure_profile():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            profile_id="default",
+            name="default",
+            backend="packet-tunnel",
+            role="client",
+            pairing_id=None,
+            peer_id=None,
+            peer_name=None,
+            answer=False,
+            auto_start=False,
+            listen_host="127.0.0.1",
+            listen_port=1080,
+            protocol="fast",
+            volume=50,
+            proxy_secret=None,
+        )
+
+    def fake_save_profile(profile):  # noqa: ANN001
+        created["profile"] = profile
+
+    monkeypatch.setattr(win.service, "load_pairing", lambda profile_id=None: None)
+    monkeypatch.setattr(win.service, "begin_pairing", fake_begin_pairing)
+    monkeypatch.setattr(win.service, "ensure_profile", fake_ensure_profile)
+    monkeypatch.setattr(win.service, "save_profile", fake_save_profile)
+
+    view = win.connect_view
+    view._latest_snapshot = {
+        "auth": {"state": "configured"},
+        "vpn": {"state": "configured"},
+        "pairing": {},
+        "backend": {"backend": "packet-tunnel", "state": "stopped"},
+        "connection": {
+            "state": "blocked",
+            "code": "pairing_missing",
+            "title": "Relay pairing needed",
+            "message": "No relay pairing is ready yet.",
+            "next_step": "Create a pairing first.",
+        },
+    }
+    view.pair_name.setText("home-relay")
+    view.backend.setCurrentIndex(1)
+    view._on_gate_action_clicked()
+
+    assert created["pairing"][0] == "home-relay"
+    profile = created["profile"]
+    assert profile.name == "home-relay"
+    assert view.setup_toggle.isChecked()
 
 
 def test_login_view_validates_phone_and_code(qapp, monkeypatch, tmp_path) -> None:
