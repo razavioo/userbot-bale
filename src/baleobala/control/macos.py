@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import atexit
+import json
+import socket
 import subprocess
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Callable
 
-from baleobala.control.paths import config_dir
+from baleobala.control.paths import APP_GROUP_IDENTIFIER, config_dir, shared_container_dir
 from baleobala.control.store import JsonStore
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 _BYPASS_DOMAINS = ("localhost", "127.0.0.1", "::1")
+_TUNNEL_PROFILE_NAME = "packet_tunnel_profile.json"
+_TUNNEL_INSTALL_REQUEST = "packet_tunnel_install.request.json"
+_APP_CONTROL_SOCKET = "bale_app_control.sock"
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,93 @@ class ServiceSnapshot:
     secure_web: ProxyState
     socks: ProxyState
     bypass_domains: tuple[str, ...] = field(default_factory=tuple)
+
+
+def tunnel_profile_path() -> Path:
+    return shared_container_dir() / _TUNNEL_PROFILE_NAME
+
+
+def tunnel_profile_installed(config: dict[str, object] | None = None) -> bool:
+    payload = load_tunnel_profile()
+    if payload is None:
+        return False
+    if config is None:
+        return True
+    return payload == config
+
+
+def load_tunnel_profile() -> dict[str, object] | None:
+    path = tunnel_profile_path()
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def packet_tunnel_configuration(profile, pairing=None) -> dict[str, object]:  # noqa: ANN001
+    relay_identifier = ""
+    if pairing is not None:
+        relay_identifier = str(getattr(pairing, "relay_id", "") or "")
+    if not relay_identifier:
+        relay_identifier = str(getattr(profile, "pairing_id", "") or "")
+    return {
+        "configurationVersion": 1,
+        "displayName": getattr(profile, "name", "baleobala"),
+        "appGroupIdentifier": APP_GROUP_IDENTIFIER,
+        "providerBundleIdentifier": "com.baleobala.app.packet-tunnel",
+        "serverAddress": APP_GROUP_IDENTIFIER,
+        "includedIPv4Routes": ["0.0.0.0/0"],
+        "includedIPv6Routes": ["::/0"],
+        "excludedRoutes": ["127.0.0.0/8", "::1/128"],
+        "dnsServers": ["1.1.1.1", "9.9.9.9"],
+        "searchDomains": [],
+        "mtu": 1400,
+        "overheadBytes": 80,
+        "carrierSocketPath": "carrier_tunnel.sock",
+        "keychainTokenKey": "auth.jwt",
+        "relayIdentifier": relay_identifier,
+        "packetTunnelHost": getattr(profile, "listen_host", "127.0.0.1"),
+        "packetTunnelPort": getattr(profile, "listen_port", 1080),
+    }
+
+
+def _notify_app(command: dict[str, object]) -> bool:
+    socket_path = shared_container_dir() / _APP_CONTROL_SOCKET
+    if not socket_path.exists():
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(str(socket_path))
+            client.sendall(json.dumps(command, sort_keys=True).encode("utf-8"))
+            return True
+    except OSError:
+        return False
+
+
+def install_tunnel_profile(config: dict[str, object]) -> dict[str, str]:
+    shared_container_dir().mkdir(parents=True, exist_ok=True)
+    path = tunnel_profile_path()
+    payload = dict(config)
+    payload.setdefault("configurationVersion", 1)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    request_path = shared_container_dir() / _TUNNEL_INSTALL_REQUEST
+    request_path.write_text(json.dumps({"type": "install_tunnel_profile", "profile_path": str(path)}, indent=2, sort_keys=True), encoding="utf-8")
+
+    notified = _notify_app({"type": "install_tunnel_profile", "profile_path": str(path)})
+    if not notified and sys.platform == "darwin":
+        try:
+            subprocess.run(["open", "-g", "-a", "BaleobalaApp"], check=False)
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "state": "installed",
+        "profile_path": str(path),
+        "request_path": str(request_path),
+        "notified": "yes" if notified else "no",
+    }
 
 
 class MacOSSystemProxySession:

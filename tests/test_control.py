@@ -293,6 +293,319 @@ def test_control_service_revoked_pairing_is_not_connectable(tmp_path, monkeypatc
     assert service.pairing_store.connectable(record.profile_id) is None
 
 
+def test_control_service_status_keeps_file_based_pairings_ready(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
+
+    class FakeBackend:
+        def status(self):
+            return {
+                "backend": "proxy",
+                "state": "running",
+                "route_ready": "yes",
+                "dns_ready": "yes",
+                "carrier_bypass_ready": "yes",
+                "egress_ready": "yes",
+            }
+
+    pairing_store = PairingStore()
+    pairing = pairing_store.add(
+        PairingRecord(
+            profile_id="pair-compat",
+            name="relay",
+            role="client",
+            pair_code="pair-code",
+            relay_mode="proxy",
+            peer_id=7,
+            peer_name="relay",
+            backend_preference="proxy",
+            transport_preference="auto",
+            provisioning_status="complete",
+            authorization_status="none",
+            status="paired",
+        )
+    )
+    vpn_store = VpnStore()
+    vpn_store.save(
+        VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend="proxy",
+            role="client",
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+        )
+    )
+
+    service = ControlService(
+        pairing_store=pairing_store,
+        vpn_store=vpn_store,
+        backend_factory=lambda profile: FakeBackend(),
+    )
+
+    snapshot = service.status()
+
+    assert snapshot.pairing["authorization_status"] == "none"
+    assert snapshot.connection["state"] == "ready"
+
+
+def test_control_service_status_surfaces_expired_auth_and_revoked_pairing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService, VpnProfile, VpnStore
+
+    class FakeBackend:
+        def status(self):
+            return {
+                "backend": "proxy",
+                "state": "running",
+                "route_ready": "yes",
+                "dns_ready": "yes",
+                "carrier_bypass_ready": "yes",
+                "egress_ready": "yes",
+            }
+
+    now = int(time.time())
+    service = ControlService(backend_factory=lambda profile: FakeBackend())
+    service.save_auth_jwt(_mk_jwt(exp=now + 3600, iat=now - 10), user_id=77, phone="+989")
+
+    enrolled = service.enroll_pairing("relay-a", role="client", relay_mode="proxy")
+    service.request_pairing_access(enrolled.profile_id)
+    approved = service.approve_pairing_access(enrolled.profile_id)
+
+    vpn_store = VpnStore()
+    vpn_store.save(
+        VpnProfile(
+            profile_id=approved.profile_id,
+            name=approved.name,
+            backend="proxy",
+            role="client",
+            pairing_id=approved.profile_id,
+            peer_id=approved.peer_id,
+            peer_name=approved.peer_name,
+        )
+    )
+
+    service.save_auth_jwt(_mk_jwt(exp=now - 1, iat=now - 3600), user_id=77, phone="+989")
+    expired = service.status()
+
+    assert expired.connection["state"] == "blocked"
+    assert expired.connection["code"] == "auth_expired"
+
+    service.save_auth_jwt(_mk_jwt(exp=now + 3600, iat=now - 10), user_id=77, phone="+989")
+    revoked = service.revoke_pairing_device(approved.profile_id)
+    assert revoked.authorization_status == "revoked"
+
+    snapshot = service.status()
+    assert snapshot.connection["state"] == "blocked"
+    assert snapshot.connection["code"] == "access_revoked"
+
+
+def test_control_service_stop_uses_active_backend_once(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
+
+    class FakeProbe:
+        def __init__(self, ok: str = "yes") -> None:
+            self.ok = ok
+
+        def to_dict(self):
+            return {
+                "ok": self.ok,
+                "detail": "probe ok" if self.ok == "yes" else "probe failed",
+            }
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.state = "stopped"
+            self.down_calls = 0
+            self.probe_ok = "yes"
+            self.profile_id = ""
+            self.pairing_id = ""
+
+        def up(self, profile, auth_record=None, pairing=None):  # noqa: ANN001
+            self.state = "running"
+            self.profile_id = profile.profile_id
+            self.pairing_id = pairing.profile_id if pairing is not None else ""
+            return {
+                "backend": "proxy",
+                "state": "running",
+                "profile_id": self.profile_id,
+                "pairing_id": self.pairing_id,
+            }
+
+        def down(self):
+            self.down_calls += 1
+            self.state = "stopped"
+
+        def status(self):
+            return {
+                "backend": "proxy",
+                "state": self.state,
+                "profile_id": self.profile_id,
+                "pairing_id": self.pairing_id,
+            }
+
+        def probe(self):
+            return FakeProbe(self.probe_ok)
+
+    pairing_store = PairingStore()
+    pairing = pairing_store.add(
+        PairingRecord(
+            profile_id="pair-stop",
+            name="relay",
+            role="client",
+            pair_code="pair-code",
+            relay_mode="proxy",
+            peer_id=7,
+            peer_name="relay",
+            backend_preference="proxy",
+            transport_preference="auto",
+            provisioning_status="complete",
+            authorization_status="none",
+            status="paired",
+        )
+    )
+    vpn_store = VpnStore()
+    vpn_store.save(
+        VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend="proxy",
+            role="client",
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+        )
+    )
+
+    backends: list[FakeBackend] = []
+
+    def factory(profile):  # noqa: ANN001
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    service = ControlService(pairing_store=pairing_store, vpn_store=vpn_store, backend_factory=factory)
+
+    snapshot = service.start_connection()
+    assert snapshot.backend["state"] == "running"
+    assert len(backends) == 1
+
+    stopped = service.stop_connection()
+    assert stopped.backend["state"] == "stopped"
+    assert len(backends) == 1
+    assert backends[0].down_calls == 1
+
+
+def test_control_service_reconcile_uses_active_backend_for_probe_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
+
+    class FakeProbe:
+        def __init__(self, ok: str = "yes") -> None:
+            self.ok = ok
+
+        def to_dict(self):
+            return {
+                "ok": self.ok,
+                "detail": "probe ok" if self.ok == "yes" else "probe failed",
+            }
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.state = "stopped"
+            self.down_calls = 0
+            self.probe_ok = "yes"
+            self.profile_id = ""
+            self.pairing_id = ""
+
+        def up(self, profile, auth_record=None, pairing=None):  # noqa: ANN001
+            self.state = "running"
+            self.profile_id = profile.profile_id
+            self.pairing_id = pairing.profile_id if pairing is not None else ""
+            return {
+                "backend": "proxy",
+                "state": "running",
+                "profile_id": self.profile_id,
+                "pairing_id": self.pairing_id,
+            }
+
+        def down(self):
+            self.down_calls += 1
+            self.state = "stopped"
+
+        def status(self):
+            return {
+                "backend": "proxy",
+                "state": self.state,
+                "profile_id": self.profile_id,
+                "pairing_id": self.pairing_id,
+            }
+
+        def probe(self):
+            return FakeProbe(self.probe_ok)
+
+    pairing_store = PairingStore()
+    pairing = pairing_store.add(
+        PairingRecord(
+            profile_id="pair-reconcile",
+            name="relay",
+            role="client",
+            pair_code="pair-code",
+            relay_mode="proxy",
+            peer_id=7,
+            peer_name="relay",
+            backend_preference="proxy",
+            transport_preference="auto",
+            provisioning_status="complete",
+            authorization_status="none",
+            status="paired",
+        )
+    )
+    vpn_store = VpnStore()
+    vpn_store.save(
+        VpnProfile(
+            profile_id=pairing.profile_id,
+            name=pairing.name,
+            backend="proxy",
+            role="client",
+            pairing_id=pairing.profile_id,
+            peer_id=pairing.peer_id,
+            peer_name=pairing.peer_name,
+        )
+    )
+
+    backends: list[FakeBackend] = []
+
+    def factory(profile):  # noqa: ANN001
+        backend = FakeBackend()
+        backends.append(backend)
+        return backend
+
+    service = ControlService(pairing_store=pairing_store, vpn_store=vpn_store, backend_factory=factory)
+
+    snapshot = service.start_connection()
+    assert snapshot.backend["state"] == "running"
+    assert len(backends) == 1
+
+    backends[0].probe_ok = "no"
+    reconciled = service.reconcile_runtime()
+
+    assert len(backends) == 1
+    assert backends[0].down_calls == 1
+    assert reconciled.backend["state"] == "degraded"
+    assert reconciled.backend["last_error"] == "probe failed"
+
+
 def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import TunnelServiceState, VpnProfile
@@ -311,12 +624,22 @@ def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
                 profile_id=profile_id,
                 backend=backend,
                 pairing_id=pairing_id,
+                transport_selected="packet-tunnel",
+                call_established="yes",
+                data_flow_ok="yes",
+                route_ready="yes",
+                dns_ready="yes",
             )
 
         def status(self):
             return TunnelServiceState(
                 state="running" if self.started else "stopped",
                 endpoint="unix:///tmp/packet-tunnel.sock" if self.started else None,
+                transport_selected="packet-tunnel" if self.started else "",
+                call_established="yes" if self.started else "no",
+                data_flow_ok="yes" if self.started else "no",
+                route_ready="yes" if self.started else "no",
+                dns_ready="yes" if self.started else "no",
             )
 
         def stop(self):
@@ -1323,59 +1646,31 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
 
     captured = {}
 
-    class FakeServer:
-        def __init__(self, **kwargs):
-            captured["server_kwargs"] = kwargs
-            self.bound_host = "127.0.0.1"
-            self.bound_port = 1080
+    def fake_start_connection(self, profile_id=None):  # noqa: ANN001,ARG001
+        from baleobala.control import ConnectionSnapshot, VpnStore
 
-        def start(self):
-            captured["server_start"] = True
+        stored = VpnStore().load() or VpnStore().ensure_default()
+        captured["stored_profile"] = stored
+        return ConnectionSnapshot(
+            profile=stored,
+            pairing=active_pairing,
+            backend={
+                "backend": "packet-tunnel",
+                "state": "running",
+                "endpoint": "unix://carrier.sock",
+            },
+            probe={},
+            connection={},
+        )
 
-        def wait_ready(self, timeout=2.0):
-            return True
-
-        def stop(self):
-            captured["server_stop"] = True
-
-    class FakeProxySession:
-        def __init__(self, **kwargs):  # noqa: ANN001
-            captured["proxy_kwargs"] = kwargs
-        def start(self):
-            captured["proxy_start"] = True
-        def stop(self):
-            captured["proxy_stop"] = True
-            def status(self):
-                return {"proxy": "127.0.0.1:1080"}
-
-    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
-    monkeypatch.setattr("baleobala.control.backend.DirectSocks5Server", FakeServer)
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
-
-    def fake_start_packet_tunnel_runtime(profile, auth_record):  # noqa: ANN001,ARG001
-        captured["profile"] = profile
-        class Runtime:
-            def start(self, **kwargs):  # noqa: ANN001
-                captured["runtime_start"] = kwargs
-                return __import__("types").SimpleNamespace(endpoint="unix://carrier.sock")
-
-            def stop(self):
-                captured["runtime_stop"] = True
-
-        class Bridge:
-            def close(self):
-                captured["bridge_close"] = True
-
-        return Runtime(), Bridge()
-
-    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", fake_start_packet_tunnel_runtime)
+    monkeypatch.setattr("baleobala.control.service.ControlService.start_connection", fake_start_connection)
+    monkeypatch.setattr("baleobala.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
     monkeypatch.setattr(cli, "_hold_backend", lambda endpoint, *, label: 0)
 
     import argparse
     assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None)) == 0
-    assert captured["profile"].backend == "packet-tunnel"
-    assert captured["runtime_stop"] is True
-    assert captured["bridge_close"] is True
+    assert captured["stored_profile"].backend == "packet-tunnel"
+    assert captured["stored_profile"].pairing_id == active_pairing.profile_id
     # pairing is applied to profile
     stored = VpnStore().load()
     assert stored is not None
@@ -1401,60 +1696,36 @@ def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -
 
     captured = {}
 
-    class FakeServer:
-        def __init__(self, **kwargs):
-            self.bound_host = "127.0.0.1"
-            self.bound_port = 1080
+    def fake_start_connection(self, profile_id=None):  # noqa: ANN001,ARG001
+        from baleobala.control import ConnectionSnapshot, VpnStore
 
-        def start(self):
-            captured["server_start"] = True
+        stored = VpnStore().load() or VpnStore().ensure_default()
+        captured["stored_profile"] = stored
+        return ConnectionSnapshot(
+            profile=stored,
+            pairing=pairing_store.active(),
+            backend={
+                "backend": "packet-tunnel",
+                "state": "running",
+                "endpoint": "unix://carrier.sock",
+            },
+            probe={},
+            connection={},
+        )
 
-        def wait_ready(self, timeout=2.0):
-            return True
-
-        def stop(self):
-            captured["server_stop"] = True
-
-    class FakeProxySession:
-        def __init__(self, **kwargs):
-            pass
-        def start(self):
-            captured["proxy_start"] = True
-        def stop(self):
-            captured["proxy_stop"] = True
-        def status(self):
-            return {"proxy": "127.0.0.1:1080"}
-
-    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
-    monkeypatch.setattr("baleobala.control.backend.DirectSocks5Server", FakeServer)
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
-    def fake_start_packet_tunnel_runtime(profile, auth_record):  # noqa: ANN001,ARG001
-        class Runtime:
-            def start(self, **kwargs):  # noqa: ANN001
-                captured["runtime_start"] = kwargs
-                return __import__("types").SimpleNamespace(endpoint="unix://carrier.sock")
-
-            def stop(self):
-                captured["runtime_stop"] = True
-
-        class Bridge:
-            def close(self):
-                captured["bridge_close"] = True
-
-        return Runtime(), Bridge()
+    monkeypatch.setattr("baleobala.control.service.ControlService.start_connection", fake_start_connection)
+    monkeypatch.setattr("baleobala.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
 
     def fake_hold_backend(endpoint, *, label):  # noqa: ANN001
         captured["held"] = (endpoint, label)
         return 0
 
-    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", fake_start_packet_tunnel_runtime)
     monkeypatch.setattr(cli, "_hold_backend", fake_hold_backend)
 
     import argparse
     assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
     assert captured["held"][0] == "unix://carrier.sock"
-    assert captured["runtime_stop"] is True
-    assert captured["bridge_close"] is True
+    assert captured["stored_profile"].backend == "packet-tunnel"
 
 
 def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None:
@@ -1473,30 +1744,30 @@ def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None
 
     captured = {}
 
-    def fake_start_packet_tunnel_runtime(profile, auth_record):  # noqa: ANN001,ARG001
-        captured["profile"] = profile
-        class Runtime:
-            def start(self, **kwargs):  # noqa: ANN001
-                captured["runtime_start"] = kwargs
-                return __import__("types").SimpleNamespace(endpoint="unix://carrier.sock")
+    def fake_start_connection(self, profile_id=None):  # noqa: ANN001,ARG001
+        from baleobala.control import ConnectionSnapshot, VpnStore
 
-            def stop(self):
-                captured["runtime_stop"] = True
+        stored = VpnStore().load() or VpnStore().ensure_default()
+        captured["stored_profile"] = stored
+        return ConnectionSnapshot(
+            profile=stored,
+            pairing=None,
+            backend={
+                "backend": "packet-tunnel",
+                "state": "running",
+                "endpoint": "unix://carrier.sock",
+            },
+            probe={},
+            connection={},
+        )
 
-        class Bridge:
-            def close(self):
-                captured["bridge_close"] = True
-
-        return Runtime(), Bridge()
-
-    monkeypatch.setattr(cli, "_start_packet_tunnel_runtime", fake_start_packet_tunnel_runtime)
+    monkeypatch.setattr("baleobala.control.service.ControlService.start_connection", fake_start_connection)
+    monkeypatch.setattr("baleobala.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
     monkeypatch.setattr(cli, "_hold_backend", lambda endpoint, *, label: 0)
 
     import argparse
     assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
-    assert captured["profile"].backend == "packet-tunnel"
-    assert captured["runtime_stop"] is True
-    assert captured["bridge_close"] is True
+    assert captured["stored_profile"].backend == "packet-tunnel"
 
 
 def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
