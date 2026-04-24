@@ -464,12 +464,14 @@ def _build_packet_tunnel_service(profile: VpnProfile, auth_record, pairing) -> T
     keepalive = LiveKitKeepalive(session, interval=20.0)
     keepalive.start()
     args = SimpleNamespace(
-        transport="auto",
-        psk=None,
+        transport=getattr(pairing, "transport_preference", None) or "auto",
+        psk=getattr(profile, "proxy_secret", None),
         psk_file=None,
         protocol=profile.protocol,
         volume=profile.volume,
     )
+    if not args.psk:
+        raise RuntimeError("packet-tunnel backend requires a pairing secret/PSK before starting")
     chain = _build_transport_chain("auto", session, args)
     transport_name, transport = chain.start()
     mtu_floor = min(

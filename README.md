@@ -129,6 +129,7 @@ should stay centered on `doctor`, `auth`, `pair`, `vpn`, and `gui`.
 - [Bale Headless Notes](docs/BALE_HEADLESS.md)
 - [Native macOS Scaffold](native/macos/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [macOS client + Linux VPS production-test](docs/MACOS_VPS_PRODUCTION_TEST.md)
 
 ## Glossary
 

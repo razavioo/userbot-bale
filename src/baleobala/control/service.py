@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import time
 from typing import Callable
 
@@ -108,6 +108,14 @@ class ControlService:
         if profile.pairing_id:
             return self.pairing_store.get(profile.pairing_id)
         return self.pairing_store.active()
+
+    def _profile_with_pairing_secret(self, profile: VpnProfile, pairing: PairingRecord | None) -> VpnProfile:
+        if pairing is None or not pairing.secret_name or profile.proxy_secret:
+            return profile
+        secret = self.pairing_store.load_secret(pairing.profile_id)
+        if not secret:
+            return profile
+        return replace(profile, proxy_secret=secret)
 
     def _connection_gate(
         self,
@@ -738,6 +746,7 @@ class ControlService:
                 raise RuntimeError(gate["message"])
 
         if profile.backend == "packet-tunnel":
+            profile = self._profile_with_pairing_secret(profile, pairing)
             tunnel_config = macos.packet_tunnel_configuration(profile, pairing)
             if not macos.tunnel_profile_installed(tunnel_config):
                 macos.install_tunnel_profile(tunnel_config)

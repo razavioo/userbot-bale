@@ -1,6 +1,8 @@
+import AppKit
 import Combine
 import Foundation
 import NetworkExtension
+import UniformTypeIdentifiers
 
 final class BaleAppController: NSObject, ObservableObject {
     @Published private(set) var statusText = "Not installed"
@@ -110,17 +112,33 @@ final class BaleAppController: NSObject, ObservableObject {
             refreshDerivedAppState()
             return
         }
-        manager.start(manager: tunnelManager) { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if let error = error {
-                    self.statusText = "Tunnel start failed"
-                    self.connectionText = self.friendlyStartFailureMessage(for: error)
-                } else {
-                    self.statusText = "Tunnel start requested"
-                    self.refreshConnectionText()
+        statusText = "Starting carrier runtime"
+        connectionText = "Preparing Bale tunnel"
+        refreshDerivedAppState()
+        appControl.send(command: "connect", payload: [:]) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let response):
+                self.actionMessage = response.message
+                self.manager.start(manager: tunnelManager) { [weak self] error in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        if let error = error {
+                            self.statusText = "Tunnel start failed"
+                            self.connectionText = self.friendlyStartFailureMessage(for: error)
+                            self.appControl.send(command: "disconnect", payload: [:]) { _ in }
+                        } else {
+                            self.statusText = "Tunnel start requested"
+                            self.refreshConnectionText()
+                        }
+                        self.loadAppControlState()
+                    }
                 }
-                self.loadAppControlState()
+            case .failure(let error):
+                self.statusText = "Carrier runtime failed"
+                self.connectionText = error.localizedDescription
+                self.helperText = error.localizedDescription
+                self.refreshDerivedAppState()
             }
         }
     }
@@ -134,7 +152,9 @@ final class BaleAppController: NSObject, ObservableObject {
         manager.stop(manager: tunnelManager)
         statusText = "Tunnel stopped"
         refreshConnectionText()
-        loadAppControlState()
+        appControl.send(command: "disconnect", payload: [:]) { [weak self] _ in
+            self?.loadAppControlState()
+        }
     }
 
     func primaryAction() {
@@ -221,6 +241,20 @@ final class BaleAppController: NSObject, ObservableObject {
             case .success(let response):
                 self.actionMessage = response.message
                 self.loadAppControlState()
+            case .failure(let error):
+                self.actionMessage = error.localizedDescription
+                self.helperText = error.localizedDescription
+            }
+        }
+    }
+
+    func exportDiagnostics() {
+        actionMessage = "Preparing diagnostics export"
+        appControl.send(command: "diagnostics", payload: [:]) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let response):
+                self.presentDiagnosticsExport(response.data)
             case .failure(let error):
                 self.actionMessage = error.localizedDescription
                 self.helperText = error.localizedDescription
@@ -561,5 +595,37 @@ final class BaleAppController: NSObject, ObservableObject {
             return "Approve the VPN profile in System Settings, then press Start again."
         }
         return nsError.localizedDescription
+    }
+
+    private func presentDiagnosticsExport(_ payload: [String: Any]) {
+        var export = payload
+        export["exportedAt"] = ISO8601DateFormatter().string(from: Date())
+        export["format"] = "baleobala-diagnostics-v1"
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = "baleobala-diagnostics-\(Self.exportTimestamp()).json"
+        panel.begin { [weak self] response in
+            guard let self = self else { return }
+            guard response == .OK, let url = panel.url else {
+                self.actionMessage = "Diagnostics export cancelled."
+                return
+            }
+            do {
+                let data = try JSONSerialization.data(withJSONObject: export, options: [.prettyPrinted, .sortedKeys])
+                try data.write(to: url, options: .atomic)
+                self.actionMessage = "Diagnostics exported to \(url.lastPathComponent)."
+            } catch {
+                self.actionMessage = "Diagnostics export failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private static func exportTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 }

@@ -10,12 +10,13 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from baleobala.control.paths import shared_container_dir
+from baleobala.control.paths import app_dir, data_dir, shared_container_dir
 from baleobala.control.service import ConnectionSnapshot, ControlService, ControlSnapshot
 from baleobala.control.store import JsonStore
 from baleobala.control.vpn import VpnProfile
@@ -27,6 +28,12 @@ AUTH_FLOW_FILE_NAME = "macos_auth_flow.json"
 KILL_SWITCH_MODES = {"off", "on", "lockdown"}
 DNS_MODES = {"system", "custom"}
 TRANSPORT_PREFERENCES = {"auto", "dc", "audio", "rpc", "qr", "mtproto_rpc"}
+LOG_SUFFIXES = {".json", ".jsonl", ".log", ".txt"}
+TEXT_REDACTIONS = (
+    (re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "<redacted-jwt>"),
+    (re.compile(r"(?i)(access[_-]?token|jwt|secret|password)([\"'\s:=]+)([^\"'\s,}]+)"), r"\1\2<redacted>"),
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._-]+"), r"\1<redacted>"),
+)
 
 
 @dataclass(frozen=True)
@@ -285,6 +292,7 @@ class AppControlBridge:
         except Exception:  # noqa: BLE001
             tunnel_profile = {}
             tunnel_profile_file = ""
+        socket_path = shared_container_dir() / str(tunnel_profile.get("carrierSocketPath") or "carrier_tunnel.sock")
         return {
             "schemaVersion": 1,
             "generatedAt": time.time(),
@@ -292,7 +300,9 @@ class AppControlBridge:
             "networkPolicy": policy.to_dict(),
             "tunnelProfilePath": tunnel_profile_file,
             "tunnelProfile": _redact(tunnel_profile),
-            "redactedLogs": [],
+            "carrierSocketPath": str(socket_path),
+            "carrierSocketExists": socket_path.exists(),
+            "redactedLogs": redacted_log_entries(),
             "lastError": snapshot.backend.get("last_error", "") or snapshot.connection.get("message", ""),
         }
 
@@ -525,7 +535,44 @@ def _redact(value: Any) -> Any:
         return result
     if isinstance(value, list):
         return [_redact(item) for item in value]
+    if isinstance(value, str):
+        return _redact_text(value)
     return value
+
+
+def _redact_text(text: str) -> str:
+    redacted = text
+    for pattern, replacement in TEXT_REDACTIONS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
+def redacted_log_entries(*, max_files: int = 12, max_chars: int = 4_000) -> list[dict[str, str]]:
+    roots = []
+    for root in (app_dir(), data_dir(), shared_container_dir()):
+        if root.exists() and root not in roots:
+            roots.append(root)
+
+    entries: list[dict[str, str]] = []
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if len(entries) >= max_files:
+                return entries
+            if not path.is_file() or path.suffix not in LOG_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rel = path.relative_to(root)
+            entries.append(
+                {
+                    "root": str(root),
+                    "path": str(rel),
+                    "tail": _redact_text(text[-max_chars:]),
+                }
+            )
+    return entries
 
 
 def friendly_bridge_error(raw: str) -> str:

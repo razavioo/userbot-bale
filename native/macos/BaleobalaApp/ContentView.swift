@@ -405,6 +405,11 @@ struct ContentView: View {
                 } label: {
                     Label("Reinstall Profile", systemImage: "wrench.and.screwdriver")
                 }
+                Button {
+                    controller.exportDiagnostics()
+                } label: {
+                    Label("Export Diagnostics", systemImage: "square.and.arrow.up")
+                }
             }
         }
     }

@@ -50,6 +50,9 @@ def test_app_control_saves_network_policy_and_feeds_packet_tunnel(tmp_path, monk
     assert policy.custom_dns_servers == ["10.10.10.10"]
 
     payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="baleobala"))
+    assert payload["tunnelIPv4Address"] == "10.77.0.2"
+    assert payload["includedIPv4Routes"] == ["0.0.0.0/0"]
+    assert payload["includedIPv6Routes"] == []
     assert payload["killSwitchMode"] == "lockdown"
     assert payload["autoConnect"] is True
     assert payload["allowLAN"] is False
@@ -153,3 +156,26 @@ def test_app_control_auth_flow_survives_one_shot_helper_processes(tmp_path, monk
     assert verify.data["auth"]["provider"] == "bale"
     assert verify.data["auth"]["phone"] == "+989123456789"
     assert not auth_flow_path().exists()
+
+
+def test_app_control_diagnostics_exports_redacted_log_tails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control.app_control import AppControlBridge
+
+    log_dir = tmp_path / "state"
+    log_dir.mkdir()
+    log_dir.joinpath("client.log").write_text(
+        "connected\njwt=eyJhbGciOiJIUzI1NiJ9.secret.payload\nBearer abc.def.ghi\n",
+        encoding="utf-8",
+    )
+
+    result = AppControlBridge().handle({"command": "diagnostics", "payload": {}})
+
+    assert result.ok is True
+    tails = "\n".join(item["tail"] for item in result.data["redactedLogs"])
+    assert "client.log" in {item["path"] for item in result.data["redactedLogs"]}
+    assert "eyJhbGci" not in tails
+    assert "abc.def.ghi" not in tails
+    assert "<redacted" in tails

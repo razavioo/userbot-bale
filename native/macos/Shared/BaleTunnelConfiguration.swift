@@ -6,9 +6,11 @@ struct BaleTunnelConfiguration: Codable {
     var appGroupIdentifier: String = BaleAppGroup.identifier
     var providerBundleIdentifier: String = BaleAppGroup.providerBundleIdentifier
     var serverAddress: String = "127.0.0.1"
+    var tunnelIPv4Address: String = "10.77.0.2"
+    var tunnelIPv4SubnetMask: String = "255.255.255.0"
     var includedIPv4Routes: [String] = ["0.0.0.0/0"]
-    var includedIPv6Routes: [String] = ["::/0"]
-    var excludedRoutes: [String] = ["127.0.0.0/8", "::1/128"]
+    var includedIPv6Routes: [String] = []
+    var excludedRoutes: [String] = ["127.0.0.0/8"]
     var dnsServers: [String] = ["1.1.1.1", "9.9.9.9"]
     var searchDomains: [String] = []
     var mtu: Int = 1400
@@ -26,9 +28,11 @@ struct BaleTunnelConfiguration: Codable {
         appGroupIdentifier: String = BaleAppGroup.identifier,
         providerBundleIdentifier: String = BaleAppGroup.providerBundleIdentifier,
         serverAddress: String = "127.0.0.1",
+        tunnelIPv4Address: String = "10.77.0.2",
+        tunnelIPv4SubnetMask: String = "255.255.255.0",
         includedIPv4Routes: [String] = ["0.0.0.0/0"],
-        includedIPv6Routes: [String] = ["::/0"],
-        excludedRoutes: [String] = ["127.0.0.0/8", "::1/128"],
+        includedIPv6Routes: [String] = [],
+        excludedRoutes: [String] = ["127.0.0.0/8"],
         dnsServers: [String] = ["1.1.1.1", "9.9.9.9"],
         searchDomains: [String] = [],
         mtu: Int = 1400,
@@ -45,6 +49,8 @@ struct BaleTunnelConfiguration: Codable {
         self.appGroupIdentifier = appGroupIdentifier
         self.providerBundleIdentifier = providerBundleIdentifier
         self.serverAddress = serverAddress
+        self.tunnelIPv4Address = tunnelIPv4Address
+        self.tunnelIPv4SubnetMask = tunnelIPv4SubnetMask
         self.includedIPv4Routes = includedIPv4Routes
         self.includedIPv6Routes = includedIPv6Routes
         self.excludedRoutes = excludedRoutes
@@ -70,9 +76,11 @@ struct BaleTunnelConfiguration: Codable {
             appGroupIdentifier: providerConfiguration["appGroupIdentifier"] as? String ?? BaleAppGroup.identifier,
             providerBundleIdentifier: providerConfiguration["providerBundleIdentifier"] as? String ?? BaleAppGroup.providerBundleIdentifier,
             serverAddress: providerConfiguration["serverAddress"] as? String ?? "127.0.0.1",
+            tunnelIPv4Address: providerConfiguration["tunnelIPv4Address"] as? String ?? "10.77.0.2",
+            tunnelIPv4SubnetMask: providerConfiguration["tunnelIPv4SubnetMask"] as? String ?? "255.255.255.0",
             includedIPv4Routes: providerConfiguration["includedIPv4Routes"] as? [String] ?? ["0.0.0.0/0"],
-            includedIPv6Routes: providerConfiguration["includedIPv6Routes"] as? [String] ?? ["::/0"],
-            excludedRoutes: providerConfiguration["excludedRoutes"] as? [String] ?? ["127.0.0.0/8", "::1/128"],
+            includedIPv6Routes: providerConfiguration["includedIPv6Routes"] as? [String] ?? [],
+            excludedRoutes: providerConfiguration["excludedRoutes"] as? [String] ?? ["127.0.0.0/8"],
             dnsServers: providerConfiguration["dnsServers"] as? [String] ?? ["1.1.1.1", "9.9.9.9"],
             searchDomains: providerConfiguration["searchDomains"] as? [String] ?? [],
             mtu: providerConfiguration["mtu"] as? Int ?? (providerConfiguration["mtu"] as? NSNumber)?.intValue ?? 1400,
@@ -104,6 +112,8 @@ extension BaleTunnelConfiguration {
             "providerBundleIdentifier": providerBundleIdentifier,
             "searchDomains": searchDomains,
             "serverAddress": serverAddress,
+            "tunnelIPv4Address": tunnelIPv4Address,
+            "tunnelIPv4SubnetMask": tunnelIPv4SubnetMask,
             "packetTunnelHost": packetTunnelHost,
             "packetTunnelPort": packetTunnelPort,
             "overheadBytes": overheadBytes,

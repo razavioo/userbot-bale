@@ -144,5 +144,7 @@ struct DiagnosticSnapshot: Codable, Equatable {
     var generatedAt: Double = 0
     var lastError: String = ""
     var tunnelProfilePath: String = ""
+    var carrierSocketPath: String = ""
+    var carrierSocketExists: Bool = false
     var status: BaleAppState = BaleAppState()
 }

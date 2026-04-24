@@ -134,7 +134,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
               !routes.isEmpty else {
             return nil
         }
-        let settings = NEIPv4Settings(addresses: ["10.7.0.2"], subnetMasks: ["255.255.255.0"])
+        let settings = NEIPv4Settings(
+            addresses: [stringValue("tunnelIPv4Address", default: "10.77.0.2", configuration: configuration)],
+            subnetMasks: [stringValue("tunnelIPv4SubnetMask", default: "255.255.255.0", configuration: configuration)]
+        )
         settings.includedRoutes = routes.compactMap { Self.ipv4Route(from: $0) }
         if let excluded = stringArray("excludedRoutes", configuration: configuration) {
             settings.excludedRoutes = excluded.compactMap { Self.ipv4Route(from: $0) }
