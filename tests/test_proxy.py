@@ -62,6 +62,15 @@ def _start_socks_client(proxy_port: int, target_port: int, payload: bytes) -> by
         return _recv_exact(sock, len(payload))
 
 
+def _wait_for_empty_proxy_queues(*hubs: ProxyHub) -> None:
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if all(not hub._queues for hub in hubs):  # noqa: SLF001
+            return
+        time.sleep(0.01)
+    assert all(not hub._queues for hub in hubs)  # noqa: SLF001
+
+
 def test_proxy_packet_roundtrip() -> None:
     packet = ProxyPacket(
         packet_type=ProxyPacketType.OPEN,
@@ -141,6 +150,8 @@ def test_socks5_proxy_roundtrip_over_memory_tunnel() -> None:
         assert reply[:2] == b"\x05\x00"
         sock.sendall(b"proxy hello")
         assert _recv_exact(sock, len(b"proxy hello")) == b"proxy hello"
+
+    _wait_for_empty_proxy_queues(server._hub, relay._hub)  # noqa: SLF001
 
     server.stop()
     relay.stop()
