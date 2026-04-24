@@ -34,9 +34,12 @@ def test_packet_tunnel_bundle_identifier_is_consistent() -> None:
     provider_bundle = _match(r'static let providerBundleIdentifier = "([^"]+)"', swift)
     xcconfig = _read("native/macos/Config/PacketTunnel.xcconfig")
     info_plist = plistlib.loads((REPO_ROOT / "native/macos/BaleobalaPacketTunnel/Info.plist").read_bytes())
+    tunnel_manager = _read("native/macos/Shared/BaleTunnelManager.swift")
 
     assert provider_bundle in xcconfig
     assert info_plist["CFBundleIdentifier"] in {"$(PRODUCT_BUNDLE_IDENTIFIER)", provider_bundle}
+    assert "first(where:" in tunnel_manager
+    assert "providerBundleIdentifier == BaleAppGroup.providerBundleIdentifier" in tunnel_manager
 
 
 def test_packet_tunnel_provider_implements_control_status_contract() -> None:

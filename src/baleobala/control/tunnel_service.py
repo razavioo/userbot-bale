@@ -6,7 +6,6 @@ import json
 import hashlib
 import os
 import socket
-import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -24,7 +23,7 @@ def _socket_path(candidate: Path, *, prefix: str) -> Path:
     if len(raw.encode("utf-8")) <= 100:
         return candidate
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-    short_dir = Path(tempfile.gettempdir()) / "baleobala"
+    short_dir = Path("/tmp") / "baleobala"
     return short_dir / f"{prefix}-{digest}.sock"
 
 

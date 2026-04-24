@@ -98,6 +98,17 @@ def classify_failure(
     if legacy in legacy_map:
         return legacy_map[legacy]
 
+    if _contains_any(text, "no paired relay is ready", "no relay pairing is ready", "pairing missing", "relay pairing needed"):
+        return FailureInfo("auth", "pairing_missing")
+    if _contains_any(text, "saved bale session expired", "session expired", "auth expired", "jwt_expired"):
+        return FailureInfo("auth", "jwt_expired")
+    if _contains_any(text, "relay access was revoked", "device revoked", "access_revoked"):
+        return FailureInfo("auth", "device_revoked")
+    if _contains_any(text, "relay provisioning is not complete", "relay provisioning is incomplete", "provisioning_pending", "waiting for relay-owner approval"):
+        return FailureInfo("auth", "relay_provisioning_pending")
+    if _contains_any(text, "relay credentials need a refresh", "relay credentials are missing", "credentials missing", "credentials expired"):
+        return FailureInfo("auth", "relay_credentials_missing")
+
     if _contains_any(text, "expired", "jwt", "credential expired", "token expired"):
         return FailureInfo("auth", "jwt_expired")
     if _contains_any(text, "permission denied", "operation not permitted"):

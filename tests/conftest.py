@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 import os
 
@@ -11,3 +12,4 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 os.environ.setdefault("BALEOBALA_SECRET_BACKEND", "file")
+os.environ.setdefault("BALEOBALA_HOME", tempfile.mkdtemp(prefix="baleobala-tests-"))
