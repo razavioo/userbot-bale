@@ -57,7 +57,10 @@ def test_native_app_declares_product_shell_and_json_models() -> None:
     content = _read("native/macos/BaleobalaApp/ContentView.swift")
     models = _read("native/macos/Shared/BaleAppModels.swift")
     client = _read("native/macos/BaleobalaApp/BaleAppControlClient.swift")
+    helper = _read("native/macos/BaleobalaApp/Resources/baleobala-app-control")
     project = _read("native/macos/Baleobala.xcodeproj/project.pbxproj")
+    scheme = _read("native/macos/Baleobala.xcodeproj/xcshareddata/xcschemes/Baleobala.xcscheme")
+    gitignore = _read(".gitignore")
 
     assert "MenuBarExtra" in app
     for section in ("Overview", "Relays", "Privacy", "Settings", "Diagnostics"):
@@ -65,8 +68,13 @@ def test_native_app_declares_product_shell_and_json_models() -> None:
     for model in ("BaleAppState", "ConnectionState", "ReadinessGate", "BaleNetworkPolicy", "DiagnosticSnapshot"):
         assert model in models
     assert "baleobala.control.app_control" in client
+    assert "baleobala.control.app_control" in helper
     assert "BaleAppModels.swift in Sources" in project
     assert "BaleAppControlClient.swift in Sources" in project
+    assert "baleobala-app-control in Resources" in project
+    assert "baleobala in Resources" in project
+    assert "BlueprintName = \"Baleobala\"" in scheme
+    assert "/native/macos/Baleobala.xcodeproj/" not in gitignore
 
 
 def test_tunnel_configuration_carries_network_policy() -> None:
