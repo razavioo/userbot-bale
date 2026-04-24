@@ -269,10 +269,14 @@ def connect_readiness(
 
 def summarize_doctor(checks: list[tuple[str, bool, str]]) -> tuple[str, list[str], str]:
     missing = [name for name, ok, _detail in checks if not ok]
-    critical = [name for name in missing if name in {"python", "pactl", "sounddevice"}]
+    critical_names = {"python"} if sys.platform == "darwin" else {"python", "pactl", "sounddevice"}
+    critical = [name for name in missing if name in critical_names]
     if critical:
         headline = "Setup needs attention before first run."
         next_step = "Install the missing critical dependencies, then run `baleobala doctor` again."
+    elif sys.platform == "darwin" and "codesign" in missing:
+        headline = "Core runtime is ready; macOS tunnel signing needs attention."
+        next_step = "Configure an Apple code-signing identity before installing or starting the packet tunnel."
     elif missing:
         headline = "Core setup looks usable, with optional extras missing."
         next_step = "You can continue with sign-in now. Install optional extras later if you need their features."

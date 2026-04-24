@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 
 
@@ -16,6 +17,7 @@ def test_app_control_status_has_native_app_shape(tmp_path, monkeypatch) -> None:
     assert payload["schemaVersion"] == 1
     assert payload["connectionState"] in {"signedOut", "firstRun", "blocked", "disconnected"}
     assert "networkPolicy" in payload
+    assert "codeSigning" in payload
     assert any(item["key"] == "profile" for item in payload["readiness"])
 
 
@@ -174,8 +176,50 @@ def test_app_control_diagnostics_exports_redacted_log_tails(tmp_path, monkeypatc
     result = AppControlBridge().handle({"command": "diagnostics", "payload": {}})
 
     assert result.ok is True
+    assert result.data["carrierSocketExists"] is False
+    assert result.data["carrierSocketReachable"] is False
+    assert result.data["carrierSocketState"] == "missing"
     tails = "\n".join(item["tail"] for item in result.data["redactedLogs"])
     assert "client.log" in {item["path"] for item in result.data["redactedLogs"]}
     assert "eyJhbGci" not in tails
     assert "abc.def.ghi" not in tails
     assert "<redacted" in tails
+    assert "codeSigning" in result.data
+
+
+def test_macos_code_signing_status_parses_security_identities(monkeypatch) -> None:
+    from baleobala.control import macos
+
+    monkeypatch.setattr(macos.sys, "platform", "darwin")
+
+    def no_identities(cmd, *, check, capture_output, text):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="     0 valid identities found\n", stderr="")
+
+    missing = macos.code_signing_status(runner=no_identities)
+    assert missing.state == "missing-identity"
+    assert missing.valid_identities == 0
+
+    def one_identity(cmd, *, check, capture_output, text):  # noqa: ANN001
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout='  1) ABCDEF1234567890 "Apple Development: Example (TEAMID)"\n     1 valid identities found\n',
+            stderr="",
+        )
+
+    ready = macos.code_signing_status(runner=one_identity)
+    assert ready.state == "ready"
+    assert ready.valid_identities == 1
+
+
+def test_cleanup_stale_carrier_socket_only_removes_unreachable_socket(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+
+    from baleobala.control import macos
+
+    socket_path = macos.carrier_socket_path({"carrierSocketPath": "carrier.sock"})
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.write_text("", encoding="utf-8")
+
+    assert macos.cleanup_stale_carrier_socket({"carrierSocketPath": "carrier.sock"}) is True
+    assert not socket_path.exists()

@@ -145,6 +145,7 @@ class MacOSPacketTunnelBackend(VpnBackend):
         if self._service is not None:
             self._service.stop()
         self._state = BackendState(backend="packet-tunnel")
+        macos.cleanup_stale_carrier_socket()
         try:
             self._state_store.path.unlink()
         except FileNotFoundError:

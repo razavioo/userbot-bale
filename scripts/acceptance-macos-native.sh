@@ -48,23 +48,25 @@ check_release_inputs() {
   fi
 }
 
-app_group="$(python3 - <<'PY' "${app_group_swift}"
+app_group="$(python3 - <<'PY' "${base_xcconfig}"
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-match = re.search(r'static let identifier = "([^"]+)"', text)
+match = re.search(r'^BALEOBALA_APP_GROUP_IDENTIFIER\s*=\s*(\S+)\s*$', text, re.M)
 if not match:
     raise SystemExit(1)
 print(match.group(1))
 PY
 )"
 
-provider_bundle="$(python3 - <<'PY' "${app_group_swift}"
+provider_bundle="$(python3 - <<'PY' "${base_xcconfig}"
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-match = re.search(r'static let providerBundleIdentifier = "([^"]+)"', text)
-if not match:
+values = dict(re.findall(r'^(BALEOBALA_[A-Z_]+)\s*=\s*(\S+)\s*$', text, re.M))
+provider = values.get("BALEOBALA_PACKET_TUNNEL_BUNDLE_ID", "")
+app = values.get("BALEOBALA_APP_BUNDLE_ID", "")
+if not provider:
     raise SystemExit(1)
-print(match.group(1))
+print(provider.replace("$(BALEOBALA_APP_BUNDLE_ID)", app))
 PY
 )"
 
@@ -77,13 +79,14 @@ PY
 )}"
 
 for path in "${app_entitlements}" "${tunnel_entitlements}"; do
-  if ! plutil -convert xml1 -o - "${path}" | grep -q "${app_group}"; then
+  entitlements_xml="$(plutil -convert xml1 -o - "${path}")"
+  if ! grep -Fq "${app_group}" <<<"${entitlements_xml}" && ! grep -Fq '$(BALEOBALA_APP_GROUP_IDENTIFIER)' <<<"${entitlements_xml}"; then
     echo "app group ${app_group} missing from ${path}" >&2
     exit 3
   fi
 done
 
-require_pattern "${provider_bundle}" "${packet_xcconfig}" "provider bundle ${provider_bundle} missing from PacketTunnel.xcconfig"
+require_pattern "BALEOBALA_PACKET_TUNNEL_BUNDLE_ID" "${packet_xcconfig}" "provider bundle setting missing from PacketTunnel.xcconfig"
 require_pattern "com.apple.developer.networking.networkextension" "${tunnel_entitlements}" "packet-tunnel entitlement missing network extension capability"
 require_pattern "packet-tunnel-provider" "${tunnel_entitlements}" "packet-tunnel entitlement missing packet-tunnel-provider value"
 require_pattern "com.apple.security.application-groups" "${app_entitlements}" "app entitlements missing application-groups capability"
@@ -101,11 +104,11 @@ xcodebuild \
   build >/dev/null
 
 if [[ "${mode}" == "release" ]]; then
+  check_release_inputs
   if [[ -z "${effective_team}" ]]; then
     echo "effective DEVELOPMENT_TEAM is empty; macOS packaging is still in scaffold mode" >&2
     exit 4
   fi
-  check_release_inputs
   if ! plutil -extract method raw -o - "${export_options_plist}" | grep -q '^developer-id$'; then
     echo "export options plist must use developer-id for direct distribution" >&2
     exit 4

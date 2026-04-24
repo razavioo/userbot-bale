@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "baleobala"
-APP_GROUP_IDENTIFIER = "group.com.baleobala.vpn"
+APP_GROUP_IDENTIFIER = os.environ.get("BALEOBALA_APP_GROUP_IDENTIFIER", "group.com.baleobala.vpn")
 
 
 def app_dir() -> Path:

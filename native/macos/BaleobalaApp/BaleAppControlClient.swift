@@ -75,6 +75,7 @@ final class BaleAppControlClient {
                 process.standardInput = input
                 process.standardOutput = output
                 process.standardError = error
+                process.environment = helperEnvironment(from: ProcessInfo.processInfo.environment)
 
                 try process.run()
                 input.fileHandleForWriting.write(data)
@@ -121,6 +122,17 @@ final class BaleAppControlClient {
         }
         return nil
     }
+}
+
+private func helperEnvironment(from base: [String: String]) -> [String: String] {
+    var env = base
+    if let appGroup = Bundle.main.object(forInfoDictionaryKey: "BaleAppGroupIdentifier") as? String, !appGroup.isEmpty {
+        env["BALEOBALA_APP_GROUP_IDENTIFIER"] = appGroup
+    }
+    if let provider = Bundle.main.object(forInfoDictionaryKey: "BaleProviderBundleIdentifier") as? String, !provider.isEmpty {
+        env["BALEOBALA_PROVIDER_BUNDLE_ID"] = provider
+    }
+    return env
 }
 
 private func decodeState(_ data: [String: Any], decoder: JSONDecoder) -> Result<BaleAppState, Error> {

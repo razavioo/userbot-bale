@@ -71,6 +71,12 @@ class KeychainSecretBackend(SecretBackend):
         self.service = service
         self.account = account
 
+    def _security_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        for key in ("PYTHONHOME", "PYTHONPATH"):
+            env.pop(key, None)
+        return env
+
     def load(self, name: str) -> str | None:
         account = self._account(name)
         cmd = [
@@ -83,7 +89,7 @@ class KeychainSecretBackend(SecretBackend):
             "-w",
         ]
         try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True, env=self._security_env())
         except (FileNotFoundError, subprocess.CalledProcessError):
             return None
         value = result.stdout.strip()
@@ -102,7 +108,7 @@ class KeychainSecretBackend(SecretBackend):
             "-w",
             value,
         ]
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, env=self._security_env())
 
     def delete(self, name: str) -> None:
         account = self._account(name)
@@ -115,7 +121,7 @@ class KeychainSecretBackend(SecretBackend):
             self.service,
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, env=self._security_env())
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
 

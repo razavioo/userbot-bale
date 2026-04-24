@@ -120,8 +120,8 @@ The supported ship-ready path is direct distribution outside the Mac App Store.
 ### 1. Apple-side prerequisites
 
 - Create Developer ID signing assets for the macOS app.
-- Create provisioning profiles for both `com.baleobala.app` and `com.baleobala.app.packet-tunnel`.
-- Enable the app group `group.com.baleobala.vpn` for both targets.
+- Create provisioning profiles for both app bundle identifiers. Defaults are `com.baleobala.app` and `com.baleobala.app.packet-tunnel`; use a team-owned prefix when those identifiers are unavailable.
+- Enable the app group for both targets. The default is `group.com.baleobala.vpn`; use the matching team-owned app group when you override the bundle identifiers.
 - Enable the `packet-tunnel-provider` Network Extension entitlement for the packet-tunnel target.
 - Configure a notarytool keychain profile on the release machine.
 
@@ -135,6 +135,14 @@ export MACOS_CODE_SIGN_IDENTITY="Developer ID Application: Your Name (YOURTEAMID
 export MACOS_APP_PROFILE_SPECIFIER="Baleobala Direct App"
 export MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER="Baleobala Packet Tunnel"
 export MACOS_NOTARY_PROFILE="baleobala-notary"
+```
+
+Optional bundle/app-group overrides for a team-owned identifier namespace:
+
+```bash
+export MACOS_APP_BUNDLE_ID="com.example.baleobala"
+export MACOS_PACKET_TUNNEL_BUNDLE_ID="com.example.baleobala.packet-tunnel"
+export MACOS_APP_GROUP_IDENTIFIER="group.com.example.baleobala"
 ```
 
 `EXPORT_OPTIONS_PLIST` defaults to `native/macos/ExportOptions.direct.plist`. The build script expands that template into a generated plist with the resolved team and provisioning-profile values at export time. Override it only when the release machine needs a different direct-distribution export configuration.

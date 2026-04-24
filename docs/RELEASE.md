@@ -21,6 +21,12 @@ Required release inputs:
 - `MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER` or `MACOS_PACKET_TUNNEL_PROFILE_UUID`
 - `MACOS_NOTARY_PROFILE`
 
+Optional inputs when the default bundle namespace is not available in your Apple Developer team:
+
+- `MACOS_APP_BUNDLE_ID`
+- `MACOS_PACKET_TUNNEL_BUNDLE_ID`
+- `MACOS_APP_GROUP_IDENTIFIER`
+
 Validate and build with:
 
 ```bash
