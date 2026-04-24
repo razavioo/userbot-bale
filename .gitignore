@@ -46,6 +46,5 @@ native/macos/*.xcodeproj/xcuserdata/
 /search_js.py
 
 # macOS Xcode project build + local config
-/native/macos/Baleobala.xcodeproj/
 /native/macos/Config/
 /native/Config/

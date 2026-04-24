@@ -117,7 +117,7 @@ final class BaleAppControlClient {
             return HelperCommand(executable: python, arguments: ["-m", "baleobala.control.app_control"])
         }
         if let helper = Bundle.main.url(forResource: "baleobala-app-control", withExtension: nil) {
-            return HelperCommand(executable: helper.path, arguments: [])
+            return HelperCommand(executable: "/bin/sh", arguments: [helper.path])
         }
         return nil
     }

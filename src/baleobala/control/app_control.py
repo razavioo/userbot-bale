@@ -23,6 +23,7 @@ from baleobala.control.vpn import VpnProfile
 
 POLICY_VERSION = 1
 POLICY_FILE_NAME = "macos_network_policy.json"
+AUTH_FLOW_FILE_NAME = "macos_auth_flow.json"
 KILL_SWITCH_MODES = {"off", "on", "lockdown"}
 DNS_MODES = {"system", "custom"}
 TRANSPORT_PREFERENCES = {"auto", "dc", "audio", "rpc", "qr", "mtproto_rpc"}
@@ -101,6 +102,10 @@ def network_policy_path() -> Path:
     return shared_container_dir() / POLICY_FILE_NAME
 
 
+def auth_flow_path() -> Path:
+    return shared_container_dir() / AUTH_FLOW_FILE_NAME
+
+
 def load_network_policy() -> NetworkPolicy:
     payload = JsonStore(network_policy_path()).load(default=None)
     if isinstance(payload, dict):
@@ -111,6 +116,23 @@ def load_network_policy() -> NetworkPolicy:
 def save_network_policy(policy: NetworkPolicy) -> NetworkPolicy:
     JsonStore(network_policy_path()).save(policy.to_dict())
     return policy
+
+
+def load_auth_flow() -> dict[str, Any]:
+    payload = JsonStore(auth_flow_path()).load(default={})
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_auth_flow(payload: dict[str, Any]) -> dict[str, Any]:
+    JsonStore(auth_flow_path()).save(payload)
+    return payload
+
+
+def clear_auth_flow() -> None:
+    try:
+        auth_flow_path().unlink()
+    except FileNotFoundError:
+        pass
 
 
 def validate_network_policy(policy: NetworkPolicy) -> list[str]:
@@ -342,32 +364,43 @@ class AppControlBridge:
         phone = str(payload.get("phone", "")).strip()
         if not phone:
             return ActionResult(False, "Enter a phone number to sign in.", data=self.app_state())
-        auth = self._make_auth()
+        session_id = str(int(time.time() * 1000))
+        auth = self._make_auth(session_id=session_id)
         tx = auth.start_phone_auth(int(phone.lstrip("+")))
-        self._auth_sessions[str(tx)] = auth
-        return ActionResult(True, "SMS code sent.", data={"transactionHash": str(tx)})
+        if self._auth_factory is not None:
+            self._auth_sessions[str(tx)] = auth
+        save_auth_flow(
+            {
+                "transaction_hash": str(tx),
+                "session_id": session_id,
+                "phone": phone,
+                "created_at": time.time(),
+            }
+        )
+        return ActionResult(True, "SMS code sent.", data={"transactionHash": str(tx), "sessionID": session_id})
 
     def verify_auth(self, payload: dict[str, Any]) -> ActionResult:
-        tx = str(payload.get("transactionHash", payload.get("transaction_hash", "")) or "")
+        flow = load_auth_flow()
+        tx = str(payload.get("transactionHash", payload.get("transaction_hash", flow.get("transaction_hash", ""))) or "")
         code = str(payload.get("code", "") or "").strip()
         auth = self._auth_sessions.get(tx)
         if auth is None:
-            return ActionResult(False, "Auth session expired. Request a new SMS code.", data=self.app_state())
-        session = auth.validate_code(code)
-        record = self.service.save_auth_jwt(session.jwt, phone=str(payload.get("phone", "") or "") or None)
+            session_id = str(flow.get("session_id", "") or "")
+            if not tx or not session_id:
+                return ActionResult(False, "Auth session expired. Request a new SMS code.", data=self.app_state())
+            auth = self._make_auth(session_id=session_id)
+        session = auth.validate_code(code, transaction_hash=tx)
+        phone = str(payload.get("phone", flow.get("phone", "")) or "") or None
+        record = self.service.save_auth_jwt(session.jwt, phone=phone)
+        clear_auth_flow()
         return ActionResult(True, "Signed in.", data={"auth": asdict(record), "status": self.app_state()})
 
-    def _make_auth(self) -> Any:
+    def _make_auth(self, *, session_id: str | None = None) -> Any:
         if self._auth_factory is not None:
             return self._auth_factory()
-        try:
-            from baleobala.bale.auth_browser import BaleAuthBrowser
+        from baleobala.bale.auth import BaleAuth
 
-            return BaleAuthBrowser()
-        except ImportError:
-            from baleobala.bale.auth import BaleAuth
-
-            return BaleAuth()
+        return BaleAuth(session_id=session_id)
 
 
 def connection_state(snapshot: ControlSnapshot, policy: NetworkPolicy | None = None) -> str:

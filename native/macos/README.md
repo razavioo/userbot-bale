@@ -37,6 +37,12 @@ The agreed contract is:
 
 That keeps the macOS extension responsible for routing, while Python remains the carrier payload engine.
 
+## App-Control Helper
+
+The app target bundles a small `baleobala-app-control` wrapper in `Contents/Resources` together with the `baleobala` Python package. Swift launches that wrapper through `Bundle.main` and exchanges JSON with `baleobala.control.app_control`; development builds can still override the helper with `BALEOBALA_APP_CONTROL_HELPER` or `BALEOBALA_PYTHON`.
+
+The wrapper is packaged as an app resource and is covered by the app signature. Release machines still need a suitable Python 3 runtime available, or a future standalone helper binary can replace the wrapper without changing the Swift JSON contract.
+
 ## Build Modes
 
 For a quick local debug build without signing:

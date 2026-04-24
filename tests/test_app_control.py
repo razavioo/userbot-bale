@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 
 def test_app_control_status_has_native_app_shape(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
@@ -115,3 +117,39 @@ def test_app_control_pair_command_creates_relay_summary(tmp_path, monkeypatch) -
     assert status["relays"][0]["name"] == "home-relay"
     assert status["relays"][0]["transportPreference"] == "dc"
     assert status["vpn"]["backend"] == "packet-tunnel"
+
+
+def test_app_control_auth_flow_survives_one_shot_helper_processes(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+
+    from baleobala.control.app_control import AppControlBridge, auth_flow_path
+
+    @dataclass(frozen=True)
+    class FakeSession:
+        jwt: str
+        response_body: bytes = b""
+
+    class FakeAuth:
+        def start_phone_auth(self, phone: int) -> str:
+            assert phone == 989123456789
+            return "tx-123"
+
+        def validate_code(self, code: str, *, transaction_hash: str | None = None) -> FakeSession:
+            assert code == "12345"
+            assert transaction_hash == "tx-123"
+            return FakeSession(jwt="jwt-token")
+
+    start = AppControlBridge(auth_factory=FakeAuth).handle(
+        {"command": "startAuth", "payload": {"phone": "+989123456789"}}
+    )
+    verify = AppControlBridge(auth_factory=FakeAuth).handle(
+        {"command": "verifyAuth", "payload": {"code": "12345"}}
+    )
+
+    assert start.ok is True
+    assert start.data["transactionHash"] == "tx-123"
+    assert verify.ok is True
+    assert verify.data["auth"]["provider"] == "bale"
+    assert verify.data["auth"]["phone"] == "+989123456789"
+    assert not auth_flow_path().exists()
