@@ -20,6 +20,7 @@ from baleobala.control.store import JsonStore
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 _BYPASS_DOMAINS = ("localhost", "127.0.0.1", "::1")
+_PROXY_SERVICES_ENV = "BALEOBALA_MACOS_PROXY_SERVICES"
 _TUNNEL_PROFILE_NAME = "packet_tunnel_profile.json"
 _TUNNEL_INSTALL_REQUEST = "packet_tunnel_install.request.json"
 _APP_CONTROL_SOCKET = "bale_app_control.sock"
@@ -226,12 +227,20 @@ class MacOSSystemProxySession:
     ) -> None:
         self.listen_host = listen_host
         self.listen_port = listen_port
-        self._services = services
+        self._services = services if services is not None else self._services_from_env()
         self._state_store = JsonStore(state_path or (config_dir() / "macos_system_proxy.json"))
         self._runner = runner or subprocess.run
         self._snapshots: list[ServiceSnapshot] = []
         self._active = False
         self._atexit_registered = False
+
+    @staticmethod
+    def _services_from_env() -> list[str] | None:
+        raw = os.environ.get(_PROXY_SERVICES_ENV, "").strip()
+        if not raw:
+            return None
+        services = [item.strip() for item in raw.split(",") if item.strip()]
+        return services or None
 
     def __enter__(self) -> "MacOSSystemProxySession":
         self.start()
