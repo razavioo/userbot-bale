@@ -1532,12 +1532,15 @@ def test_macos_system_proxy_session_roundtrip(monkeypatch) -> None:
     session.stop()
     assert session.active is False
 
-    assert ("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "1080", "on") in calls
-    assert ("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", "1080", "on") in calls
-    assert ("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", "1080", "on") in calls
-    assert ("networksetup", "-setwebproxy", "Wi-Fi", "off") in calls
-    assert ("networksetup", "-setsecurewebproxy", "Wi-Fi", "off") in calls
-    assert ("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "off") in calls
+    assert ("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "1080") in calls
+    assert ("networksetup", "-setwebproxystate", "Wi-Fi", "on") in calls
+    assert ("networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", "1080") in calls
+    assert ("networksetup", "-setsecurewebproxystate", "Wi-Fi", "on") in calls
+    assert ("networksetup", "-setsocksfirewallproxy", "Wi-Fi", "127.0.0.1", "1080") in calls
+    assert ("networksetup", "-setsocksfirewallproxystate", "Wi-Fi", "on") in calls
+    assert ("networksetup", "-setwebproxystate", "Wi-Fi", "off") in calls
+    assert ("networksetup", "-setsecurewebproxystate", "Wi-Fi", "off") in calls
+    assert ("networksetup", "-setsocksfirewallproxystate", "Wi-Fi", "off") in calls
 
 
 def test_macos_system_proxy_restore_saved_state(tmp_path, monkeypatch) -> None:
@@ -1571,7 +1574,7 @@ def test_macos_system_proxy_restore_saved_state(tmp_path, monkeypatch) -> None:
     restored = MacOSSystemProxySession.restore_saved_state(state_path=state_file, runner=fake_run)
     assert restored is True
     assert not state_file.exists()
-    assert ("networksetup", "-setwebproxy", "Wi-Fi", "off") in calls
+    assert ("networksetup", "-setwebproxystate", "Wi-Fi", "off") in calls
 
 
 def test_macos_system_proxy_services_from_env(monkeypatch) -> None:
@@ -1592,8 +1595,82 @@ def test_macos_system_proxy_services_from_env(monkeypatch) -> None:
     session.stop()
 
     assert ("networksetup", "-listallnetworkservices") not in calls
-    assert ("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "1080", "on") in calls
-    assert ("networksetup", "-setwebproxy", "V2BOX", "127.0.0.1", "1080", "on") in calls
+    assert ("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "1080") in calls
+    assert ("networksetup", "-setwebproxystate", "Wi-Fi", "on") in calls
+    assert ("networksetup", "-setwebproxy", "V2BOX", "127.0.0.1", "1080") in calls
+    assert ("networksetup", "-setwebproxystate", "V2BOX", "on") in calls
+
+
+def test_macos_system_proxy_privileged_setters_use_osascript(monkeypatch) -> None:
+    from baleobala.control.macos import MacOSSystemProxySession
+
+    monkeypatch.setenv("BALEOBALA_MACOS_PROXY_PRIVILEGED", "1")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001
+        calls.append(tuple(cmd))
+        stdout = ""
+        if cmd[:2] != ["osascript", "-e"] and cmd[1].startswith("-get"):
+            stdout = "Enabled: No\nServer: \nPort: 0\n"
+        return __import__("subprocess").CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    session = MacOSSystemProxySession(
+        listen_host="127.0.0.1",
+        listen_port=1080,
+        services=["Wi-Fi"],
+        runner=fake_run,
+    )
+    session.start()
+
+    assert ("networksetup", "-getwebproxy", "Wi-Fi") in calls
+    privileged_calls = [call for call in calls if call[:2] == ("osascript", "-e")]
+    assert len(privileged_calls) == 1
+    assert "with administrator privileges" in privileged_calls[0][2]
+    assert "networksetup -setwebproxy Wi-Fi 127.0.0.1 1080" in privileged_calls[0][2]
+    assert "networksetup -setwebproxystate Wi-Fi on" in privileged_calls[0][2]
+    assert "networksetup -setsocksfirewallproxystate Wi-Fi on" in privileged_calls[0][2]
+
+
+def test_macos_system_proxy_privileged_restore_is_batched(tmp_path, monkeypatch) -> None:
+    from baleobala.control.macos import MacOSSystemProxySession
+
+    monkeypatch.setenv("BALEOBALA_MACOS_PROXY_PRIVILEGED", "1")
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    state_file = tmp_path / "macos_system_proxy.json"
+    state_file.write_text(
+        __import__("json").dumps(
+            {
+                "items": [
+                    {
+                        "name": "Wi-Fi",
+                        "web": {"enabled": False, "server": None, "port": None},
+                        "secure_web": {"enabled": False, "server": None, "port": None},
+                        "socks": {"enabled": False, "server": None, "port": None},
+                        "bypass_domains": [],
+                    },
+                    {
+                        "name": "V2BOX",
+                        "web": {"enabled": False, "server": None, "port": None},
+                        "secure_web": {"enabled": False, "server": None, "port": None},
+                        "socks": {"enabled": False, "server": None, "port": None},
+                        "bypass_domains": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001
+        calls.append(tuple(cmd))
+        return __import__("subprocess").CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    assert MacOSSystemProxySession.restore_saved_state(state_path=state_file, runner=fake_run) is True
+    privileged_calls = [call for call in calls if call[:2] == ("osascript", "-e")]
+    assert len(privileged_calls) == 1
+    assert "networksetup -setwebproxystate Wi-Fi off" in privileged_calls[0][2]
+    assert "networksetup -setwebproxystate V2BOX off" in privileged_calls[0][2]
 
 
 def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> None:

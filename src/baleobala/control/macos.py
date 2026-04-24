@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import shlex
 import json
 import os
 import socket
@@ -21,6 +22,7 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 _BYPASS_DOMAINS = ("localhost", "127.0.0.1", "::1")
 _PROXY_SERVICES_ENV = "BALEOBALA_MACOS_PROXY_SERVICES"
+_PROXY_PRIVILEGED_ENV = "BALEOBALA_MACOS_PROXY_PRIVILEGED"
 _TUNNEL_PROFILE_NAME = "packet_tunnel_profile.json"
 _TUNNEL_INSTALL_REQUEST = "packet_tunnel_install.request.json"
 _APP_CONTROL_SOCKET = "bale_app_control.sock"
@@ -222,12 +224,14 @@ class MacOSSystemProxySession:
         listen_host: str = "127.0.0.1",
         listen_port: int = 1080,
         services: list[str] | None = None,
+        privileged: bool | None = None,
         state_path: Path | None = None,
         runner: Runner | None = None,
     ) -> None:
         self.listen_host = listen_host
         self.listen_port = listen_port
         self._services = services if services is not None else self._services_from_env()
+        self._privileged = self._privileged_from_env() if privileged is None else privileged
         self._state_store = JsonStore(state_path or (config_dir() / "macos_system_proxy.json"))
         self._runner = runner or subprocess.run
         self._snapshots: list[ServiceSnapshot] = []
@@ -242,6 +246,10 @@ class MacOSSystemProxySession:
         services = [item.strip() for item in raw.split(",") if item.strip()]
         return services or None
 
+    @staticmethod
+    def _privileged_from_env() -> bool:
+        return os.environ.get(_PROXY_PRIVILEGED_ENV, "").strip().lower() in {"1", "yes", "true", "on"}
+
     def __enter__(self) -> "MacOSSystemProxySession":
         self.start()
         return self
@@ -254,11 +262,13 @@ class MacOSSystemProxySession:
             return
         self._snapshots = [self._snapshot_service(name) for name in self._resolve_services()]
         self._persist_state()
+        commands: list[list[str]] = []
         for name in self._service_names():
-            self._set_proxy(name, "web", True, self.listen_host, self.listen_port)
-            self._set_proxy(name, "secureweb", True, self.listen_host, self.listen_port)
-            self._set_proxy(name, "socksfirewall", True, self.listen_host, self.listen_port)
-            self._set_bypass_domains(name, _BYPASS_DOMAINS)
+            commands.extend(self._set_proxy_commands(name, "web", True, self.listen_host, self.listen_port))
+            commands.extend(self._set_proxy_commands(name, "secureweb", True, self.listen_host, self.listen_port))
+            commands.extend(self._set_proxy_commands(name, "socksfirewall", True, self.listen_host, self.listen_port))
+            commands.append(self._set_bypass_domains_command(name, _BYPASS_DOMAINS))
+        self._run_mutating_commands(commands)
         self._flush_dns()
         self._active = True
         if not self._atexit_registered:
@@ -268,8 +278,7 @@ class MacOSSystemProxySession:
     def stop(self) -> None:
         if not self._active:
             return
-        for snapshot in self._snapshots:
-            self._restore_service(snapshot)
+        self._run_mutating_commands(self._restore_service_commands(snapshot) for snapshot in self._snapshots)
         self._flush_dns()
         try:
             self._state_store.path.unlink()
@@ -312,9 +321,11 @@ class MacOSSystemProxySession:
             return False
         session = cls(state_path=state_path, runner=runner)
         try:
+            commands: list[list[str]] = []
             for item in payload.get("items", []):
                 snapshot = cls._snapshot_from_dict(item)
-                session._restore_service(snapshot)
+                commands.extend(session._restore_service_commands(snapshot))
+            session._run_mutating_commands(commands)
             session._flush_dns()
             return True
         finally:
@@ -350,23 +361,32 @@ class MacOSSystemProxySession:
         )
 
     def _restore_service(self, snapshot: ServiceSnapshot) -> None:
-        self._set_proxy(snapshot.name, "web", snapshot.web.enabled, snapshot.web.server, snapshot.web.port)
-        self._set_proxy(
-            snapshot.name,
-            "secureweb",
-            snapshot.secure_web.enabled,
-            snapshot.secure_web.server,
-            snapshot.secure_web.port,
-        )
-        self._set_proxy(
-            snapshot.name,
-            "socksfirewall",
-            snapshot.socks.enabled,
-            snapshot.socks.server,
-            snapshot.socks.port,
-        )
+        self._run_mutating_commands(self._restore_service_commands(snapshot))
+
+    def _restore_service_commands(self, snapshot: ServiceSnapshot) -> list[list[str]]:
         domains = snapshot.bypass_domains or ()
-        self._set_bypass_domains(snapshot.name, domains)
+        commands: list[list[str]] = []
+        commands.extend(self._set_proxy_commands(snapshot.name, "web", snapshot.web.enabled, snapshot.web.server, snapshot.web.port))
+        commands.extend(
+            self._set_proxy_commands(
+                snapshot.name,
+                "secureweb",
+                snapshot.secure_web.enabled,
+                snapshot.secure_web.server,
+                snapshot.secure_web.port,
+            )
+        )
+        commands.extend(
+            self._set_proxy_commands(
+                snapshot.name,
+                "socksfirewall",
+                snapshot.socks.enabled,
+                snapshot.socks.server,
+                snapshot.socks.port,
+            )
+        )
+        commands.append(self._set_bypass_domains_command(snapshot.name, domains))
+        return commands
 
     def _persist_state(self) -> None:
         self._state_store.save(
@@ -447,25 +467,38 @@ class MacOSSystemProxySession:
         return domains
 
     def _set_proxy(self, service: str, kind: str, enabled: bool, server: str | None, port: int | None) -> None:
+        self._run_mutating_commands(self._set_proxy_commands(service, kind, enabled, server, port))
+
+    def _set_proxy_commands(self, service: str, kind: str, enabled: bool, server: str | None, port: int | None) -> list[list[str]]:
         suffix = {
             "web": "-setwebproxy",
             "secureweb": "-setsecurewebproxy",
             "socksfirewall": "-setsocksfirewallproxy",
         }[kind]
+        state_suffix = {
+            "web": "-setwebproxystate",
+            "secureweb": "-setsecurewebproxystate",
+            "socksfirewall": "-setsocksfirewallproxystate",
+        }[kind]
         if enabled:
             if server is None or port is None:
                 raise ValueError(f"cannot enable {kind} proxy without server and port")
-            self._run(["networksetup", suffix, service, server, str(port), "on"])
-            return
-        self._run(["networksetup", suffix, service, "off"])
+            return [
+                ["networksetup", suffix, service, server, str(port)],
+                ["networksetup", state_suffix, service, "on"],
+            ]
+        return [["networksetup", state_suffix, service, "off"]]
 
     def _set_bypass_domains(self, service: str, domains: tuple[str, ...] | list[str]) -> None:
+        self._run_mutating_commands([self._set_bypass_domains_command(service, domains)])
+
+    def _set_bypass_domains_command(self, service: str, domains: tuple[str, ...] | list[str]) -> list[str]:
         cmd = ["networksetup", "-setproxybypassdomains", service]
         if domains:
             cmd.extend(domains)
         else:
             cmd.append("Empty")
-        self._run(cmd)
+        return cmd
 
     def _flush_dns(self) -> None:
         for cmd in (["dscacheutil", "-flushcache"], ["killall", "-HUP", "mDNSResponder"]):
@@ -476,6 +509,32 @@ class MacOSSystemProxySession:
 
     def _run(self, cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return self._runner(cmd, check=check, capture_output=True, text=True)
+
+    def _run_mutating(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        return self._run_mutating_commands([cmd])
+
+    def _run_mutating_commands(self, commands) -> subprocess.CompletedProcess[str]:  # noqa: ANN001
+        flattened: list[list[str]] = []
+        for item in commands:
+            if not item:
+                continue
+            if isinstance(item[0], str):
+                flattened.append(item)
+            else:
+                flattened.extend(item)
+        if not flattened:
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        if not self._privileged:
+            result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            for cmd in flattened:
+                result = self._run(cmd)
+            return result
+        return self._run_with_administrator_privileges(flattened)
+
+    def _run_with_administrator_privileges(self, commands: list[list[str]]) -> subprocess.CompletedProcess[str]:
+        shell_cmd = " && ".join(" ".join(shlex.quote(part) for part in cmd) for cmd in commands)
+        script = f'do shell script {json.dumps(shell_cmd)} with administrator privileges'
+        return self._run(["osascript", "-e", script])
 
     @staticmethod
     def _parse_key_values(text: str) -> dict[str, str]:
