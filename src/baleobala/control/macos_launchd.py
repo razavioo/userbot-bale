@@ -111,7 +111,10 @@ class MacOSLaunchAgentManager:
         )
         environment = {
             "BALEOBALA_HOME": str(config_dir()),
+            "HOME": str(Path.home()),
+            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "PYTHONUNBUFFERED": "1",
+            "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
         }
         if ssl_cert_file:
             environment["SSL_CERT_FILE"] = str(Path(ssl_cert_file).expanduser())
