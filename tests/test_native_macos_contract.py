@@ -55,6 +55,7 @@ def test_packet_tunnel_provider_implements_control_status_contract() -> None:
 def test_native_app_declares_product_shell_and_json_models() -> None:
     app = _read("native/macos/BaleobalaApp/BaleobalaApp.swift")
     content = _read("native/macos/BaleobalaApp/ContentView.swift")
+    controller = _read("native/macos/BaleobalaApp/BaleAppController.swift")
     models = _read("native/macos/Shared/BaleAppModels.swift")
     client = _read("native/macos/BaleobalaApp/BaleAppControlClient.swift")
     helper = _read("native/macos/BaleobalaApp/Resources/baleobala-app-control")
@@ -65,6 +66,9 @@ def test_native_app_declares_product_shell_and_json_models() -> None:
     assert "MenuBarExtra" in app
     for section in ("Overview", "Relays", "Privacy", "Settings", "Diagnostics"):
         assert section in content
+    assert "Export Diagnostics" in content
+    assert "exportDiagnostics" in controller
+    assert "NSSavePanel" in controller
     for model in ("BaleAppState", "ConnectionState", "ReadinessGate", "BaleNetworkPolicy", "DiagnosticSnapshot"):
         assert model in models
     assert "baleobala.control.app_control" in client
@@ -82,6 +86,8 @@ def test_tunnel_configuration_carries_network_policy() -> None:
     manager = _read("native/macos/Shared/BaleTunnelManager.swift")
 
     for field in (
+        "tunnelIPv4Address",
+        "tunnelIPv4SubnetMask",
         "killSwitchMode",
         "autoConnect",
         "allowLAN",
@@ -96,6 +102,16 @@ def test_tunnel_configuration_carries_network_policy() -> None:
     assert "enforceRoutes" in manager
     assert "excludeLocalNetworks" in manager
     assert "NEOnDemandRuleConnect" in manager
+
+
+def test_packet_tunnel_defaults_are_ipv4_only_for_vps_client() -> None:
+    config = _read("native/macos/Shared/BaleTunnelConfiguration.swift")
+    provider = _read("native/macos/BaleobalaPacketTunnel/PacketTunnelProvider.swift")
+
+    assert 'tunnelIPv4Address: String = "10.77.0.2"' in config
+    assert 'includedIPv6Routes: [String] = []' in config
+    assert '"tunnelIPv4Address"' in provider
+    assert '"10.7.0.2"' not in provider
 
 
 def test_build_and_acceptance_scripts_cover_archive_and_validation() -> None:

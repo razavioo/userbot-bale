@@ -673,6 +673,10 @@ def test_macos_install_tunnel_profile_writes_shared_container(tmp_path, monkeypa
     from baleobala.control.vpn import VpnProfile
 
     payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="baleobala"))
+    assert payload["tunnelIPv4Address"] == "10.77.0.2"
+    assert payload["includedIPv4Routes"] == ["0.0.0.0/0"]
+    assert payload["includedIPv6Routes"] == []
+    assert payload["excludedRoutes"] == ["127.0.0.0/8"]
     result = install_tunnel_profile(payload)
     assert result["state"] == "installed"
     assert tunnel_profile_path().exists()
