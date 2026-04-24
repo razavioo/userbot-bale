@@ -1497,6 +1497,49 @@ def test_macos_launch_agent_install_writes_plist(tmp_path, monkeypatch) -> None:
     assert ("launchctl", "bootstrap", f"gui/{__import__('os').getuid()}", str(plist_path)) in calls
 
 
+def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import VpnProfile, VpnStore
+    from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+
+    VpnStore().save(
+        VpnProfile(
+            profile_id="relay-1",
+            name="relay",
+            backend="proxy",
+            role="client",
+            pairing_id="relay-1",
+            peer_id=1519372475,
+            listen_host="127.0.0.1",
+            listen_port=1080,
+        )
+    )
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001
+        calls.append(tuple(cmd))
+        return __import__("subprocess").CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    plist_path = tmp_path / "LaunchAgents" / "com.baleobala.proxy-client.plist"
+    manager = MacOSLaunchAgentManager(label="com.baleobala.proxy-client", plist_path=plist_path, runner=fake_run)
+    installed = manager.install(
+        mode="proxy-client",
+        jwt_file="~/.bale_jwt_b",
+        proxy_secret_file="/tmp/baleobala-vpn.psk",
+        ssl_cert_file="/tmp/baleobala-macos-ca.pem",
+    )
+
+    assert installed == plist_path
+    payload = plist_path.read_bytes()
+    assert b"bale-proxy" in payload
+    assert b"--peer-id" in payload
+    assert b"1519372475" in payload
+    assert b"/tmp/baleobala-vpn.psk" in payload
+    assert b"SSL_CERT_FILE" in payload
+    assert ("launchctl", "bootstrap", f"gui/{__import__('os').getuid()}", str(plist_path)) in calls
+
+
 def test_macos_launch_agent_status(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control.macos_launchd import MacOSLaunchAgentManager

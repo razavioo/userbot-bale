@@ -773,9 +773,16 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     if args.vpn_cmd == "agent":
         if sys.platform != "darwin":
             raise SystemExit("vpn agent is only available on macOS.")
-        manager = MacOSLaunchAgentManager()
+        label = args.label or ("com.baleobala.proxy-client" if getattr(args, "mode", "vpn") == "proxy-client" else "com.baleobala.vpn")
+        manager = MacOSLaunchAgentManager(label=label)
         if args.agent_cmd == "install":
-            path = manager.install(profile_id=args.profile_id)
+            path = manager.install(
+                profile_id=args.profile_id,
+                mode=args.mode,
+                jwt_file=args.jwt_file,
+                proxy_secret_file=args.proxy_secret_file,
+                ssl_cert_file=args.ssl_cert_file,
+            )
             print(f"installed launch agent: {path}")
             return 0
         if args.agent_cmd == "remove":
@@ -2037,18 +2044,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     vpn_agent_install = vpn_agent_sub.add_parser("install", help="install the LaunchAgent")
     vpn_agent_install.add_argument("--profile-id", default=None)
+    vpn_agent_install.add_argument("--mode", choices=["vpn", "proxy-client"], default="vpn")
+    vpn_agent_install.add_argument("--label", default=None)
+    vpn_agent_install.add_argument("--jwt-file", default=None)
+    vpn_agent_install.add_argument("--proxy-secret-file", default=None)
+    vpn_agent_install.add_argument("--ssl-cert-file", default=None)
     vpn_agent_install.set_defaults(func=cmd_vpn)
 
     vpn_agent_remove = vpn_agent_sub.add_parser("remove", help="remove the LaunchAgent")
+    vpn_agent_remove.add_argument("--mode", choices=["vpn", "proxy-client"], default="vpn")
+    vpn_agent_remove.add_argument("--label", default=None)
     vpn_agent_remove.set_defaults(func=cmd_vpn)
 
     vpn_agent_start = vpn_agent_sub.add_parser("start", help="start the LaunchAgent")
+    vpn_agent_start.add_argument("--mode", choices=["vpn", "proxy-client"], default="vpn")
+    vpn_agent_start.add_argument("--label", default=None)
     vpn_agent_start.set_defaults(func=cmd_vpn)
 
     vpn_agent_stop = vpn_agent_sub.add_parser("stop", help="stop the LaunchAgent")
+    vpn_agent_stop.add_argument("--mode", choices=["vpn", "proxy-client"], default="vpn")
+    vpn_agent_stop.add_argument("--label", default=None)
     vpn_agent_stop.set_defaults(func=cmd_vpn)
 
     vpn_agent_status = vpn_agent_sub.add_parser("status", help="show LaunchAgent state")
+    vpn_agent_status.add_argument("--mode", choices=["vpn", "proxy-client"], default="vpn")
+    vpn_agent_status.add_argument("--label", default=None)
     vpn_agent_status.set_defaults(func=cmd_vpn)
 
     v = sub.add_parser("virtmic", help="debug: create a virtual microphone and hold it open")
