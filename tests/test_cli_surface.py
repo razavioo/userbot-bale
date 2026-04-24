@@ -70,6 +70,36 @@ def test_vpn_status_summary_guides_next_step(monkeypatch, capsys, tmp_path) -> N
     assert "Next step:" in captured.out
 
 
+def test_vpn_status_prints_path_health_when_backend_exposes_it(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.cli import cmd_vpn
+
+    class FakeBackend:
+        def status(self):
+            return {
+                "backend": "linux-tun",
+                "state": "running",
+                "route_ready": "yes",
+                "dns_ready": "yes",
+                "carrier_bypass_ready": "no",
+                "egress_ready": "yes",
+            }
+
+    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", lambda profile: FakeBackend())
+
+    class Args:
+        vpn_cmd = "status"
+
+    assert cmd_vpn(Args()) == 0
+    captured = capsys.readouterr()
+    assert "Details:" in captured.out
+    assert "path_health:" in captured.out
+    assert "route: yes" in captured.out
+    assert "dns: yes" in captured.out
+    assert "carrier_bypass: no" in captured.out
+    assert "egress: yes" in captured.out
+
+
 def test_bale_auth_warns_and_still_prints_jwt(monkeypatch, capsys) -> None:
     from baleobala.cli import cmd_bale_auth
 
@@ -123,3 +153,254 @@ def test_marker_emitter_writes_exact_line(capsys) -> None:
     _emit_marker("call_established")
     captured = capsys.readouterr()
     assert captured.err.strip() == "call_established"
+
+
+def test_vpn_verdict_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.cli import cmd_vpn
+
+    class FakeBackend:
+        def status(self):
+            return {
+                "backend": "linux-tun",
+                "state": "running",
+                "call_established": "yes",
+                "transport_selected": "dc",
+                "data_flow_ok": "yes",
+                "teardown_clean": "yes",
+                "route_ready": "yes",
+                "dns_ready": "yes",
+                "carrier_bypass_ready": "yes",
+                "egress_ready": "yes",
+                "failure_class": "",
+                "artifact_bundle": "/tmp/bundle",
+            }
+
+    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", lambda profile: FakeBackend())
+    monkeypatch.setattr(
+        "baleobala.control.build_product_verdict",
+        lambda status, bundle_analysis=None: __import__("baleobala.control.analyzer", fromlist=["ProductVerdict"]).ProductVerdict(
+            ok="yes",
+            backend="linux-tun",
+            state="running",
+            call_established="yes",
+            transport_selected="dc",
+            data_flow_ok="yes",
+            teardown_clean="yes",
+            route_ready="yes",
+            dns_ready="yes",
+            carrier_bypass_ready="yes",
+            egress_ready="yes",
+            failure_class="",
+            artifact_bundle="/tmp/bundle",
+            analysis_classification="accepted_flow",
+            analysis_reason="bundle indicates accepted flow",
+        ),
+    )
+
+    class Args:
+        vpn_cmd = "verdict"
+        bundle_path = ""
+        json = False
+
+    assert cmd_vpn(Args()) == 0
+    captured = capsys.readouterr()
+    assert "vpn verdict summary" in captured.out
+    assert "analysis_reason: bundle indicates accepted flow" in captured.out
+    assert "path_health:" in captured.out
+    assert "route: yes" in captured.out
+    assert "dns: yes" in captured.out
+    assert "carrier_bypass: yes" in captured.out
+    assert "egress: yes" in captured.out
+
+
+def test_vpn_smoke_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.cli import cmd_vpn
+
+    class FakeBackend:
+        def status(self):
+            return {
+                "backend": "linux-tun",
+                "state": "running",
+                "control_ready": "yes",
+                "data_path_ready": "yes",
+                "route_ready": "yes",
+                "dns_ready": "no",
+                "carrier_bypass_ready": "yes",
+                "egress_ready": "no",
+                "last_error": "",
+            }
+
+    class FakeSmokeReport:
+        ok = False
+
+        def to_dict(self):
+            return {
+                "ok": "no",
+                "backend": "linux-tun",
+                "state": "running",
+                "endpoint": "",
+                "control_ready": "yes",
+                "data_path_ready": "yes",
+                "route_ready": "yes",
+                "dns_ready": "no",
+                "carrier_bypass_ready": "yes",
+                "egress_ready": "no",
+                "probe_ok": "yes",
+                "probe_kind": "none",
+                "probe_detail": "connected",
+                "last_error": "",
+            }
+
+    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", lambda profile: FakeBackend())
+    monkeypatch.setattr("baleobala.control.smoke_backend_status", lambda status, timeout=1.0: FakeSmokeReport())
+
+    class Args:
+        vpn_cmd = "smoke"
+        timeout = 1.0
+        json = False
+
+    assert cmd_vpn(Args()) == 2
+    captured = capsys.readouterr()
+    assert "vpn smoke summary" in captured.out
+    assert "path_health:" in captured.out
+    assert "route: yes" in captured.out
+    assert "dns: no" in captured.out
+    assert "carrier_bypass: yes" in captured.out
+    assert "egress: no" in captured.out
+    assert "path_hints:" in captured.out
+    assert "DNS mismatch in bundle snapshot" in captured.out
+    assert "TCP egress probe did not pass" in captured.out
+
+
+def test_vpn_analyze_bundle_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.cli import cmd_vpn
+
+    monkeypatch.setattr(
+        "baleobala.control.analyze_bundle",
+        lambda bundle_path: __import__("baleobala.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
+            classification="accepted_flow",
+            reason="bundle indicates accepted flow",
+            bundle_path=str(bundle_path),
+            ok="yes",
+            failure_code="",
+            last_success_stage="teardown",
+            failed_stage="",
+            transport_selected="dc",
+            retry_count="0",
+        ),
+    )
+    monkeypatch.setattr(
+        "baleobala.control.bundle_status",
+        lambda bundle_path: {
+            "artifact_bundle": str(bundle_path),
+            "route_ready": "yes",
+            "dns_ready": "yes",
+            "carrier_bypass_ready": "yes",
+            "egress_ready": "yes",
+        },
+    )
+
+    class Args:
+        vpn_cmd = "analyze-bundle"
+        bundle_path = "/tmp/fake-bundle"
+        json = False
+
+    assert cmd_vpn(Args()) == 0
+    captured = capsys.readouterr()
+    assert "vpn analyze-bundle result" in captured.out
+    assert "transport_selected: dc" in captured.out
+    assert "path_health:" in captured.out
+    assert "route: yes" in captured.out
+    assert "dns: yes" in captured.out
+    assert "carrier_bypass: yes" in captured.out
+    assert "egress: yes" in captured.out
+
+
+def test_vpn_analyze_bundle_json_includes_path_health(monkeypatch, capsys, tmp_path) -> None:
+    import json
+
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.cli import cmd_vpn
+
+    monkeypatch.setattr(
+        "baleobala.control.analyze_bundle",
+        lambda bundle_path: __import__("baleobala.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
+            classification="infra_flake",
+            reason="dns_config_failed",
+            bundle_path=str(bundle_path),
+            ok="no",
+            failure_code="dns_config_failed",
+            last_success_stage="smoke",
+            failed_stage="smoke",
+            transport_selected="dc",
+            retry_count="1",
+        ),
+    )
+    monkeypatch.setattr(
+        "baleobala.control.bundle_status",
+        lambda bundle_path: {
+            "artifact_bundle": str(bundle_path),
+            "route_ready": "yes",
+            "dns_ready": "no",
+            "carrier_bypass_ready": "no",
+            "egress_ready": "yes",
+        },
+    )
+
+    class Args:
+        vpn_cmd = "analyze-bundle"
+        bundle_path = "/tmp/fake-bundle"
+        json = True
+
+    assert cmd_vpn(Args()) == 2
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["classification"] == "infra_flake"
+    assert payload["route_ready"] == "yes"
+    assert payload["dns_ready"] == "no"
+    assert payload["carrier_bypass_ready"] == "no"
+    assert payload["egress_ready"] == "yes"
+
+
+def test_vpn_analyze_bundle_prints_failure_hints(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.cli import cmd_vpn
+
+    monkeypatch.setattr(
+        "baleobala.control.analyze_bundle",
+        lambda bundle_path: __import__("baleobala.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
+            classification="product_bug",
+            reason="route_program_failed",
+            bundle_path=str(bundle_path),
+            ok="no",
+            failure_code="route_program_failed",
+            last_success_stage="runtime_setup",
+            failed_stage="smoke",
+            transport_selected="dc",
+            retry_count="0",
+        ),
+    )
+    monkeypatch.setattr(
+        "baleobala.control.bundle_status",
+        lambda bundle_path: {
+            "artifact_bundle": str(bundle_path),
+            "route_ready": "no",
+            "dns_ready": "yes",
+            "carrier_bypass_ready": "no",
+            "egress_ready": "yes",
+        },
+    )
+
+    class Args:
+        vpn_cmd = "analyze-bundle"
+        bundle_path = "/tmp/fake-bundle"
+        json = False
+
+    assert cmd_vpn(Args()) == 2
+    captured = capsys.readouterr()
+    assert "path_hints:" in captured.out
+    assert "tunnel route programming looks incomplete" in captured.out
+    assert "carrier bypass route is missing" in captured.out

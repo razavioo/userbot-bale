@@ -95,6 +95,15 @@ class ControlService:
             return self._profile_from_pairing(profile, pairing)
         return profile
 
+    def _current_profile(self, profile_id: str | None = None) -> VpnProfile:
+        if profile_id is not None:
+            return self._runtime_profile(profile_id)
+        if self._active_profile_id is not None:
+            active_profile = self._runtime_profile(self._active_profile_id)
+            if active_profile.profile_id == self._active_profile_id:
+                return active_profile
+        return self._runtime_profile()
+
     def _pairing_for_profile(self, profile: VpnProfile) -> PairingRecord | None:
         if profile.pairing_id:
             return self.pairing_store.get(profile.pairing_id)
@@ -123,7 +132,7 @@ class ControlService:
             "provisioning_status": pairing.provisioning_status if pairing is not None else "",
         }
 
-        if profile.backend in {"direct", "proxy", "packet-tunnel"}:
+        if profile.backend == "direct":
             gate["title"] = "Direct proxy ready"
             gate["message"] = "This backend does not require relay provisioning."
             return gate
@@ -759,7 +768,7 @@ class ControlService:
         return ConnectionSnapshot(profile=profile, pairing=pairing, backend=status, probe=probe, connection=gate)
 
     def stop_connection(self, profile_id: str | None = None) -> ConnectionSnapshot:
-        profile = self._runtime_profile(profile_id)
+        profile = self._current_profile(profile_id)
         pairing = self._pairing_for_profile(profile)
         gate = self._connection_gate(profile, pairing)
         backend = self._active_backend or self.backend(profile)
@@ -780,12 +789,12 @@ class ControlService:
         )
 
     def probe_connection(self, profile_id: str | None = None) -> ProbeResult:
-        profile = self._runtime_profile(profile_id)
+        profile = self._current_profile(profile_id)
         backend = self._active_backend or self.backend(profile)
         return backend.probe()
 
     def reconcile_runtime(self) -> ConnectionSnapshot:
-        profile = self._runtime_profile()
+        profile = self._current_profile()
         pairing = self._pairing_for_profile(profile)
         gate = self._connection_gate(profile, pairing)
         backend = self._active_backend or self.backend(profile)
@@ -810,7 +819,7 @@ class ControlService:
         return ConnectionSnapshot(profile=profile, pairing=pairing, backend=status, probe=probe, connection=gate)
 
     def status(self) -> ControlSnapshot:
-        profile = self._runtime_profile()
+        profile = self._current_profile()
         pairing = self._pairing_for_profile(profile)
         backend = self._active_backend or self._backend_factory(profile)
         gate = self._connection_gate(profile, pairing)

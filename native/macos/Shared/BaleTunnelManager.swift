@@ -11,7 +11,14 @@ final class BaleTunnelManager {
                 completion(nil)
                 return
             }
-            completion(managers?.first)
+            completion(
+                managers?.first(where: { manager in
+                    guard let protocolConfiguration = manager.protocolConfiguration as? NETunnelProviderProtocol else {
+                        return false
+                    }
+                    return protocolConfiguration.providerBundleIdentifier == BaleAppGroup.providerBundleIdentifier
+                })
+            )
         }
     }
 

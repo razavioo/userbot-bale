@@ -49,6 +49,30 @@ def friendly_error_message(raw: str, *, context: str) -> str:
             "Why this usually happens: this device has not created or accepted a pairing.\n"
             "Next step: create a pairing in the app or run `baleobala pair enroll --name home-relay`."
         )
+    if "session expired" in lowered or "auth expired" in lowered or "jwt_expired" in lowered or "saved bale session expired" in lowered:
+        return (
+            "Your saved Bale session expired.\n"
+            "Why this usually happens: the local JWT is expired or missing from the secret store.\n"
+            "Next step: sign in again with `baleobala auth bale-login --phone +98912xxxxxxx --save`."
+        )
+    if "relay access was revoked" in lowered or "device revoked" in lowered or "access_revoked" in lowered:
+        return (
+            "Relay access was revoked for this device.\n"
+            "Why this usually happens: the relay owner removed this device from the provisioning list.\n"
+            "Next step: ask the relay owner to approve the device again, then sync the pairing."
+        )
+    if "provisioning" in lowered and ("pending" in lowered or "missing" in lowered or "incomplete" in lowered or "approval" in lowered):
+        return (
+            "Relay provisioning is not complete yet.\n"
+            "Why this usually happens: the device has not been approved or the local pairing cache is stale.\n"
+            "Next step: request access, approve it, then run `baleobala pair sync --profile-id <id>`."
+        )
+    if "credentials" in lowered and ("missing" in lowered or "expired" in lowered or "refresh" in lowered):
+        return (
+            "Relay credentials need a refresh.\n"
+            "Why this usually happens: the local secret is missing or the credential epoch expired.\n"
+            "Next step: run `baleobala pair sync --profile-id <id>` to refresh the saved secret."
+        )
     if "network" in lowered or "timed out" in lowered or "timeout" in lowered:
         return (
             "The network request did not complete.\n"
@@ -131,8 +155,35 @@ def connect_timeline(*, signed_in: bool, paired: bool, phase: str) -> list[Timel
     ]
 
 
-def connect_banner(*, signed_in: bool, paired: bool, phase: str, detail: str = "") -> Banner:
+def connect_banner(
+    *,
+    signed_in: bool,
+    paired: bool,
+    phase: str,
+    detail: str = "",
+    auth_state: str = "",
+    connection: dict[str, str] | None = None,
+) -> Banner:
+    connection = connection or {}
+    if connection.get("state") == "blocked":
+        title = connection.get("title") or "Connection needs attention"
+        body = connection.get("message") or detail or "Review the message below, fix the issue, and try again."
+        return Banner(title, body, "err")
+    if connection.get("state") == "ready":
+        body = detail
+        if not body:
+            if connection.get("backend") == "direct":
+                body = "Your direct proxy backend is ready. Start the secure connection when you are ready."
+            else:
+                body = "Your account is signed in and a relay pairing is available. Start the secure connection when you are ready."
+        return Banner("Ready to connect", body, "ok")
     if not signed_in:
+        if auth_state == "expired":
+            return Banner(
+                "Session expired",
+                "Your Bale session expired. Sign in again to refresh relay provisioning.",
+                "err",
+            )
         return Banner(
             "Step 1: Sign in",
             "Use your Bale phone number to sign in first. After that, we can create or reuse a relay pairing.",
@@ -164,20 +215,42 @@ def connect_banner(*, signed_in: bool, paired: bool, phase: str, detail: str = "
     )
 
 
-def connect_readiness(*, signed_in: bool, paired: bool, saved_profile: bool, phase: str) -> list[ReadinessItem]:
+def connect_readiness(
+    *,
+    signed_in: bool,
+    paired: bool,
+    saved_profile: bool,
+    phase: str,
+    auth_state: str = "",
+    pairing_state: str = "",
+    connection: dict[str, str] | None = None,
+) -> list[ReadinessItem]:
+    connection = connection or {}
     connecting = phase in {"connecting", "connected", "stopping"}
+    pairing_detail = "Ready" if paired else "Create a new relay pairing or enter an existing pairing code."
+    if pairing_state in {"revoked"}:
+        pairing_detail = "Relay access was revoked for this device. Ask the relay owner to approve it again."
+    elif pairing_state in {"rejected"}:
+        pairing_detail = "Relay access was rejected. Request approval again from the relay owner."
+    elif pairing_state in {"pending", "enrolled"}:
+        pairing_detail = "Relay access is waiting for approval."
+    elif connection.get("state") == "blocked" and connection.get("message"):
+        pairing_detail = str(connection["message"])
+    auth_detail = "Ready" if signed_in else "Sign in with your Bale phone number first."
+    if auth_state == "expired":
+        auth_detail = "Your saved Bale session expired. Sign in again to refresh relay provisioning."
     return [
         ReadinessItem(
             key="auth",
             label="Bale sign-in",
             ready=signed_in,
-            detail="Ready" if signed_in else "Sign in with your Bale phone number first.",
+            detail=auth_detail,
         ),
         ReadinessItem(
             key="pairing",
             label="Relay pairing",
             ready=paired,
-            detail="Ready" if paired else "Create a new relay pairing or enter an existing pairing code.",
+            detail=pairing_detail,
         ),
         ReadinessItem(
             key="profile",
@@ -213,7 +286,12 @@ def summarize_snapshot(snapshot: ControlSnapshot) -> list[str]:
     lines: list[str] = []
     auth_state = snapshot.auth.get("state", "empty")
     pairing_state = snapshot.pairing.get("state", "empty")
+    pairing_auth = snapshot.pairing.get("authorization_status", "")
+    pairing_provisioning = snapshot.pairing.get("provisioning_status", "")
+    pairing_revoked = snapshot.pairing.get("revoked_at", "") not in {"", "none"} or pairing_auth == "revoked" or pairing_provisioning == "revoked"
+    pairing_rejected = pairing_auth == "rejected" or pairing_provisioning == "rejected"
     backend_state = snapshot.backend.get("state", "stopped")
+    connection = getattr(snapshot, "connection", {}) or {}
     if auth_state == "configured":
         who = snapshot.auth.get("phone", "saved account")
         lines.append(f"Signed in: yes ({who})")
@@ -222,9 +300,13 @@ def summarize_snapshot(snapshot: ControlSnapshot) -> list[str]:
     else:
         lines.append("Signed in: no")
 
-    if pairing_state in {"paired", "accepted", "complete"}:
+    if pairing_revoked:
+        lines.append(f"Relay pairing: revoked ({snapshot.pairing.get('name', 'saved relay')})")
+    elif pairing_rejected:
+        lines.append(f"Relay pairing: rejected ({snapshot.pairing.get('name', 'saved relay')})")
+    elif pairing_state in {"paired", "accepted", "complete"} and pairing_provisioning in {"complete", "accepted"}:
         lines.append(f"Relay pairing: ready ({snapshot.pairing.get('name', 'saved relay')})")
-    elif pairing_state == "pending":
+    elif pairing_state == "pending" or pairing_provisioning in {"pending", "enrolled"} or pairing_auth == "pending":
         lines.append(f"Relay pairing: waiting ({snapshot.pairing.get('name', 'unnamed relay')})")
     else:
         lines.append("Relay pairing: none")
@@ -236,7 +318,11 @@ def summarize_snapshot(snapshot: ControlSnapshot) -> list[str]:
     else:
         lines.append("Connection: idle")
 
-    if auth_state != "configured":
+    if connection.get("state") == "blocked":
+        lines.append(f"Connection gate: {connection.get('message', 'blocked')}")
+    if connection.get("next_step"):
+        lines.append(f"Next step: {connection.get('next_step')}")
+    elif auth_state != "configured":
         lines.append("Next step: `baleobala auth bale-login --phone +98912xxxxxxx --save`")
     elif pairing_state not in {"paired", "accepted", "complete"}:
         lines.append("Next step: `baleobala pair enroll --name home-relay`")

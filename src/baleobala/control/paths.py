@@ -33,7 +33,11 @@ def data_dir() -> Path:
 
 
 def shared_container_dir() -> Path:
-    override = os.environ.get("BALEOBALA_SHARED_CONTAINER") or os.environ.get("BALEOBALA_APP_GROUP_DIR")
+    override = (
+        os.environ.get("BALEOBALA_SHARED_CONTAINER")
+        or os.environ.get("BALEOBALA_APP_GROUP_DIR")
+        or os.environ.get("BALEOBALA_HOME")
+    )
     if override:
         return Path(override).expanduser()
     if sys.platform == "darwin":
