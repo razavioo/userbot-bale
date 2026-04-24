@@ -1539,6 +1539,7 @@ def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypa
     assert b"SSL_CERT_FILE" in payload
     assert b"HOME" in payload
     assert b"PATH" in payload
+    assert b"ThrottleInterval" in payload
     assert ("launchctl", "bootstrap", f"gui/{__import__('os').getuid()}", str(plist_path)) in calls
 
 
