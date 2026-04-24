@@ -48,6 +48,46 @@ def test_packet_tunnel_provider_implements_control_status_contract() -> None:
     assert '"type": "status"' in provider
     assert '"type": "pong"' in provider
     assert "statusVersion" in provider
+    assert "dnsMode" in provider
+    assert "customDNSServers" in provider
+
+
+def test_native_app_declares_product_shell_and_json_models() -> None:
+    app = _read("native/macos/BaleobalaApp/BaleobalaApp.swift")
+    content = _read("native/macos/BaleobalaApp/ContentView.swift")
+    models = _read("native/macos/Shared/BaleAppModels.swift")
+    client = _read("native/macos/BaleobalaApp/BaleAppControlClient.swift")
+    project = _read("native/macos/Baleobala.xcodeproj/project.pbxproj")
+
+    assert "MenuBarExtra" in app
+    for section in ("Overview", "Relays", "Privacy", "Settings", "Diagnostics"):
+        assert section in content
+    for model in ("BaleAppState", "ConnectionState", "ReadinessGate", "BaleNetworkPolicy", "DiagnosticSnapshot"):
+        assert model in models
+    assert "baleobala.control.app_control" in client
+    assert "BaleAppModels.swift in Sources" in project
+    assert "BaleAppControlClient.swift in Sources" in project
+
+
+def test_tunnel_configuration_carries_network_policy() -> None:
+    config = _read("native/macos/Shared/BaleTunnelConfiguration.swift")
+    manager = _read("native/macos/Shared/BaleTunnelManager.swift")
+
+    for field in (
+        "killSwitchMode",
+        "autoConnect",
+        "allowLAN",
+        "dnsMode",
+        "customDNSServers",
+        "splitTunnelExclusions",
+        "transportPreference",
+        "fallbackProxyEnabled",
+    ):
+        assert field in config
+    assert "includeAllNetworks" in manager
+    assert "enforceRoutes" in manager
+    assert "excludeLocalNetworks" in manager
+    assert "NEOnDemandRuleConnect" in manager
 
 
 def test_build_and_acceptance_scripts_cover_archive_and_validation() -> None:

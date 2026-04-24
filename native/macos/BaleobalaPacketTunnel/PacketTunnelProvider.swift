@@ -33,7 +33,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func configureNetwork(completionHandler: @escaping (Error?) -> Void) {
         let configuration = tunnelProviderConfiguration()
         let settings = NEPacketTunnelNetworkSettings(
-            tunnelRemoteAddress: stringValue("serverAddress", default: BaleAppGroup.identifier, configuration: configuration)
+            tunnelRemoteAddress: stringValue("serverAddress", default: "127.0.0.1", configuration: configuration)
         )
         let ipv4Settings = makeIPv4Settings(configuration: configuration)
         let ipv6Settings = makeIPv6Settings(configuration: configuration)
@@ -43,7 +43,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let ipv6Settings = ipv6Settings {
             settings.ipv6Settings = ipv6Settings
         }
-        if let dns = stringArray("dnsServers", configuration: configuration), !dns.isEmpty {
+        let dnsMode = stringValue("dnsMode", default: "custom", configuration: configuration)
+        let configuredDNS = stringArray("customDNSServers", configuration: configuration) ?? stringArray("dnsServers", configuration: configuration)
+        if dnsMode != "system", let dns = configuredDNS, !dns.isEmpty {
             let dnsSettings = NEDNSSettings(servers: dns)
             if let search = stringArray("searchDomains", configuration: configuration), !search.isEmpty {
                 dnsSettings.matchDomains = search

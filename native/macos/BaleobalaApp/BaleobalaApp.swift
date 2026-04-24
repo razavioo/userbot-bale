@@ -8,5 +8,10 @@ struct BaleobalaApp: App {
         WindowGroup {
             ContentView(controller: controller)
         }
+        .windowResizability(.contentMinSize)
+
+        MenuBarExtra("Baleobala", systemImage: controller.isTunnelRunning ? "lock.shield.fill" : "lock.open") {
+            MenuBarStatusView(controller: controller)
+        }
     }
 }
