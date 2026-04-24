@@ -40,38 +40,90 @@ class MacOSLaunchAgentManager:
         self._plist_path = plist_path or (Path.home() / "Library" / "LaunchAgents" / f"{label}.plist")
         self._runner = runner or subprocess.run
 
-    def spec(self, profile_id: str | None = None) -> LaunchAgentSpec:
+    def spec(
+        self,
+        profile_id: str | None = None,
+        *,
+        mode: str = "vpn",
+        jwt_file: str | None = None,
+        proxy_secret_file: str | None = None,
+    ) -> LaunchAgentSpec:
         profile = VpnStore().load()
-        args = [
-            sys.executable,
-            "-m",
-            "baleobala.cli",
-            "vpn",
-            "up",
-        ]
-        if profile_id:
-            args.extend(["--profile-id", profile_id])
-        elif profile is not None and profile.profile_id:
-            args.extend(["--profile-id", profile.profile_id])
+        if mode == "vpn":
+            args = [
+                sys.executable,
+                "-m",
+                "baleobala.cli",
+                "vpn",
+                "up",
+            ]
+            if profile_id:
+                args.extend(["--profile-id", profile_id])
+            elif profile is not None and profile.profile_id:
+                args.extend(["--profile-id", profile.profile_id])
+        elif mode == "proxy-client":
+            if profile is None or profile.peer_id is None:
+                raise ValueError("proxy-client LaunchAgent requires a saved profile with peer_id")
+            args = [
+                sys.executable,
+                "-m",
+                "baleobala.cli",
+                "bale-proxy",
+                "client",
+                "--transport",
+                "dc",
+                "--bale-jwt-file",
+                str(Path(jwt_file or "~/.bale_jwt_b").expanduser()),
+                "--peer-id",
+                str(profile.peer_id),
+                "--listen-host",
+                profile.listen_host,
+                "--listen-port",
+                str(profile.listen_port),
+            ]
+            if proxy_secret_file:
+                args.extend(["--proxy-secret-file", str(Path(proxy_secret_file).expanduser())])
+            elif profile.proxy_secret:
+                args.extend(["--proxy-secret", profile.proxy_secret])
+        else:
+            raise ValueError(f"unknown LaunchAgent mode: {mode}")
         return LaunchAgentSpec(
             label=self.label,
             program_arguments=args,
             working_directory=str(Path.cwd()),
         )
 
-    def install(self, profile_id: str | None = None) -> Path:
+    def install(
+        self,
+        profile_id: str | None = None,
+        *,
+        mode: str = "vpn",
+        jwt_file: str | None = None,
+        proxy_secret_file: str | None = None,
+        ssl_cert_file: str | None = None,
+    ) -> Path:
         self._plist_path.parent.mkdir(parents=True, exist_ok=True)
-        spec = self.spec(profile_id=profile_id)
+        spec = self.spec(
+            profile_id=profile_id,
+            mode=mode,
+            jwt_file=jwt_file,
+            proxy_secret_file=proxy_secret_file,
+        )
+        environment = {
+            "BALEOBALA_HOME": str(config_dir()),
+            "PYTHONUNBUFFERED": "1",
+        }
+        if ssl_cert_file:
+            environment["SSL_CERT_FILE"] = str(Path(ssl_cert_file).expanduser())
         payload = {
             "Label": spec.label,
             "ProgramArguments": spec.program_arguments,
             "RunAtLoad": spec.run_at_load,
             "KeepAlive": spec.keep_alive,
             "WorkingDirectory": spec.working_directory or str(Path.cwd()),
-            "EnvironmentVariables": {
-                "BALEOBALA_HOME": str(config_dir()),
-                "PYTHONUNBUFFERED": "1",
-            },
+            "EnvironmentVariables": environment,
+            "StandardOutPath": str(config_dir() / f"{self.label}.out.log"),
+            "StandardErrorPath": str(config_dir() / f"{self.label}.err.log"),
         }
         with self._plist_path.open("wb") as fh:
             plistlib.dump(payload, fh)
