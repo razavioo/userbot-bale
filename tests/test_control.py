@@ -1537,6 +1537,8 @@ def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypa
     assert b"1519372475" in payload
     assert b"/tmp/baleobala-vpn.psk" in payload
     assert b"SSL_CERT_FILE" in payload
+    assert b"HOME" in payload
+    assert b"PATH" in payload
     assert ("launchctl", "bootstrap", f"gui/{__import__('os').getuid()}", str(plist_path)) in calls
 
 
