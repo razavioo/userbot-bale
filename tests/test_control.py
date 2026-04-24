@@ -1574,6 +1574,28 @@ def test_macos_system_proxy_restore_saved_state(tmp_path, monkeypatch) -> None:
     assert ("networksetup", "-setwebproxy", "Wi-Fi", "off") in calls
 
 
+def test_macos_system_proxy_services_from_env(monkeypatch) -> None:
+    from baleobala.control.macos import MacOSSystemProxySession
+
+    monkeypatch.setenv("BALEOBALA_MACOS_PROXY_SERVICES", "Wi-Fi, V2BOX")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001
+        calls.append(tuple(cmd))
+        stdout = ""
+        if cmd[1].startswith("-get"):
+            stdout = "Enabled: No\nServer: \nPort: 0\n"
+        return __import__("subprocess").CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    session = MacOSSystemProxySession(listen_host="127.0.0.1", listen_port=1080, runner=fake_run)
+    session.start()
+    session.stop()
+
+    assert ("networksetup", "-listallnetworkservices") not in calls
+    assert ("networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "1080", "on") in calls
+    assert ("networksetup", "-setwebproxy", "V2BOX", "127.0.0.1", "1080", "on") in calls
+
+
 def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
