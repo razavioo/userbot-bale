@@ -68,16 +68,25 @@ def packet_tunnel_configuration(profile, pairing=None) -> dict[str, object]:  # 
         relay_identifier = str(getattr(pairing, "relay_id", "") or "")
     if not relay_identifier:
         relay_identifier = str(getattr(profile, "pairing_id", "") or "")
+    try:
+        from baleobala.control.app_control import load_network_policy, packet_tunnel_policy_payload
+
+        policy = load_network_policy()
+        policy_payload = packet_tunnel_policy_payload(policy)
+        dns_servers = policy.custom_dns_servers if policy.dns_mode != "system" else []
+    except Exception:  # noqa: BLE001
+        policy_payload = {}
+        dns_servers = ["1.1.1.1", "9.9.9.9"]
     return {
         "configurationVersion": 1,
         "displayName": getattr(profile, "name", "baleobala"),
         "appGroupIdentifier": APP_GROUP_IDENTIFIER,
         "providerBundleIdentifier": "com.baleobala.app.packet-tunnel",
-        "serverAddress": APP_GROUP_IDENTIFIER,
+        "serverAddress": "127.0.0.1",
         "includedIPv4Routes": ["0.0.0.0/0"],
         "includedIPv6Routes": ["::/0"],
         "excludedRoutes": ["127.0.0.0/8", "::1/128"],
-        "dnsServers": ["1.1.1.1", "9.9.9.9"],
+        "dnsServers": dns_servers,
         "searchDomains": [],
         "mtu": 1400,
         "overheadBytes": 80,
@@ -86,6 +95,7 @@ def packet_tunnel_configuration(profile, pairing=None) -> dict[str, object]:  # 
         "relayIdentifier": relay_identifier,
         "packetTunnelHost": getattr(profile, "listen_host", "127.0.0.1"),
         "packetTunnelPort": getattr(profile, "listen_port", 1080),
+        **policy_payload,
     }
 
 

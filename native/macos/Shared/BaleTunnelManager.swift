@@ -37,10 +37,14 @@ final class BaleTunnelManager {
         protocolConfiguration.providerBundleIdentifier = tunnel.providerBundleIdentifier
         protocolConfiguration.serverAddress = tunnel.serverAddress
         protocolConfiguration.providerConfiguration = tunnel.providerConfiguration()
+        protocolConfiguration.includeAllNetworks = tunnel.networkPolicy.killSwitchMode != "off"
+        protocolConfiguration.enforceRoutes = tunnel.networkPolicy.killSwitchMode == "lockdown"
+        protocolConfiguration.excludeLocalNetworks = !tunnel.networkPolicy.allowLAN
         manager.protocolConfiguration = protocolConfiguration
         manager.localizedDescription = tunnel.displayName
         manager.isEnabled = true
-        manager.isOnDemandEnabled = false
+        manager.isOnDemandEnabled = tunnel.networkPolicy.autoConnect
+        manager.onDemandRules = tunnel.networkPolicy.autoConnect ? [NEOnDemandRuleConnect()] : []
     }
 
     func save(manager: NETunnelProviderManager, completion: @escaping (Error?) -> Void) {

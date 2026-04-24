@@ -5,7 +5,7 @@ struct BaleTunnelConfiguration: Codable {
     var displayName: String
     var appGroupIdentifier: String = BaleAppGroup.identifier
     var providerBundleIdentifier: String = BaleAppGroup.providerBundleIdentifier
-    var serverAddress: String = BaleAppGroup.identifier
+    var serverAddress: String = "127.0.0.1"
     var includedIPv4Routes: [String] = ["0.0.0.0/0"]
     var includedIPv6Routes: [String] = ["::/0"]
     var excludedRoutes: [String] = ["127.0.0.0/8", "::1/128"]
@@ -18,13 +18,14 @@ struct BaleTunnelConfiguration: Codable {
     var relayIdentifier: String?
     var packetTunnelHost: String = "127.0.0.1"
     var packetTunnelPort: Int = 1080
+    var networkPolicy: BaleNetworkPolicy = BaleNetworkPolicy()
 
     init(
         displayName: String,
         configurationVersion: Int = 1,
         appGroupIdentifier: String = BaleAppGroup.identifier,
         providerBundleIdentifier: String = BaleAppGroup.providerBundleIdentifier,
-        serverAddress: String = BaleAppGroup.identifier,
+        serverAddress: String = "127.0.0.1",
         includedIPv4Routes: [String] = ["0.0.0.0/0"],
         includedIPv6Routes: [String] = ["::/0"],
         excludedRoutes: [String] = ["127.0.0.0/8", "::1/128"],
@@ -36,7 +37,8 @@ struct BaleTunnelConfiguration: Codable {
         keychainTokenKey: String = "auth.jwt",
         relayIdentifier: String? = nil,
         packetTunnelHost: String = "127.0.0.1",
-        packetTunnelPort: Int = 1080
+        packetTunnelPort: Int = 1080,
+        networkPolicy: BaleNetworkPolicy = BaleNetworkPolicy()
     ) {
         self.configurationVersion = configurationVersion
         self.displayName = displayName
@@ -55,6 +57,7 @@ struct BaleTunnelConfiguration: Codable {
         self.relayIdentifier = relayIdentifier
         self.packetTunnelHost = packetTunnelHost
         self.packetTunnelPort = packetTunnelPort
+        self.networkPolicy = networkPolicy
     }
 
     init?(providerConfiguration: [String: Any]) {
@@ -66,7 +69,7 @@ struct BaleTunnelConfiguration: Codable {
             configurationVersion: providerConfiguration["configurationVersion"] as? Int ?? 1,
             appGroupIdentifier: providerConfiguration["appGroupIdentifier"] as? String ?? BaleAppGroup.identifier,
             providerBundleIdentifier: providerConfiguration["providerBundleIdentifier"] as? String ?? BaleAppGroup.providerBundleIdentifier,
-            serverAddress: providerConfiguration["serverAddress"] as? String ?? BaleAppGroup.identifier,
+            serverAddress: providerConfiguration["serverAddress"] as? String ?? "127.0.0.1",
             includedIPv4Routes: providerConfiguration["includedIPv4Routes"] as? [String] ?? ["0.0.0.0/0"],
             includedIPv6Routes: providerConfiguration["includedIPv6Routes"] as? [String] ?? ["::/0"],
             excludedRoutes: providerConfiguration["excludedRoutes"] as? [String] ?? ["127.0.0.0/8", "::1/128"],
@@ -78,7 +81,8 @@ struct BaleTunnelConfiguration: Codable {
             keychainTokenKey: providerConfiguration["keychainTokenKey"] as? String ?? "auth.jwt",
             relayIdentifier: providerConfiguration["relayIdentifier"] as? String,
             packetTunnelHost: providerConfiguration["packetTunnelHost"] as? String ?? "127.0.0.1",
-            packetTunnelPort: providerConfiguration["packetTunnelPort"] as? Int ?? (providerConfiguration["packetTunnelPort"] as? NSNumber)?.intValue ?? 1080
+            packetTunnelPort: providerConfiguration["packetTunnelPort"] as? Int ?? (providerConfiguration["packetTunnelPort"] as? NSNumber)?.intValue ?? 1080,
+            networkPolicy: BaleNetworkPolicy(providerConfiguration: providerConfiguration)
         )
     }
 }
@@ -103,6 +107,43 @@ extension BaleTunnelConfiguration {
             "packetTunnelHost": packetTunnelHost,
             "packetTunnelPort": packetTunnelPort,
             "overheadBytes": overheadBytes,
+            "networkPolicyVersion": networkPolicy.policyVersion,
+            "killSwitchMode": networkPolicy.killSwitchMode,
+            "autoConnect": networkPolicy.autoConnect,
+            "launchAtLogin": networkPolicy.launchAtLogin,
+            "allowLAN": networkPolicy.allowLAN,
+            "dnsMode": networkPolicy.dnsMode,
+            "customDNSServers": networkPolicy.customDNSServers,
+            "trustedWiFiAction": networkPolicy.trustedWiFiAction,
+            "untrustedWiFiAction": networkPolicy.untrustedWiFiAction,
+            "trustedWiFiNetworks": networkPolicy.trustedWiFiNetworks,
+            "splitTunnelMode": networkPolicy.splitTunnelMode,
+            "splitTunnelExclusions": networkPolicy.splitTunnelExclusions,
+            "transportPreference": networkPolicy.transportPreference,
+            "fallbackProxyEnabled": networkPolicy.fallbackProxyEnabled,
+            "pauseUntil": networkPolicy.pauseUntil ?? 0,
         ]
+    }
+}
+
+extension BaleNetworkPolicy {
+    init(providerConfiguration: [String: Any]) {
+        self.init()
+        policyVersion = providerConfiguration["networkPolicyVersion"] as? Int ?? (providerConfiguration["networkPolicyVersion"] as? NSNumber)?.intValue ?? 1
+        killSwitchMode = providerConfiguration["killSwitchMode"] as? String ?? "off"
+        autoConnect = providerConfiguration["autoConnect"] as? Bool ?? (providerConfiguration["autoConnect"] as? NSNumber)?.boolValue ?? false
+        launchAtLogin = providerConfiguration["launchAtLogin"] as? Bool ?? (providerConfiguration["launchAtLogin"] as? NSNumber)?.boolValue ?? false
+        allowLAN = providerConfiguration["allowLAN"] as? Bool ?? (providerConfiguration["allowLAN"] as? NSNumber)?.boolValue ?? true
+        dnsMode = providerConfiguration["dnsMode"] as? String ?? "custom"
+        customDNSServers = providerConfiguration["customDNSServers"] as? [String] ?? providerConfiguration["dnsServers"] as? [String] ?? ["1.1.1.1", "9.9.9.9"]
+        trustedWiFiAction = providerConfiguration["trustedWiFiAction"] as? String ?? "ask"
+        untrustedWiFiAction = providerConfiguration["untrustedWiFiAction"] as? String ?? "connect"
+        trustedWiFiNetworks = providerConfiguration["trustedWiFiNetworks"] as? [String] ?? []
+        splitTunnelMode = providerConfiguration["splitTunnelMode"] as? String ?? "off"
+        splitTunnelExclusions = providerConfiguration["splitTunnelExclusions"] as? [String] ?? []
+        transportPreference = providerConfiguration["transportPreference"] as? String ?? "auto"
+        fallbackProxyEnabled = providerConfiguration["fallbackProxyEnabled"] as? Bool ?? (providerConfiguration["fallbackProxyEnabled"] as? NSNumber)?.boolValue ?? false
+        let pause = providerConfiguration["pauseUntil"] as? Double ?? (providerConfiguration["pauseUntil"] as? NSNumber)?.doubleValue ?? 0
+        pauseUntil = pause > 0 ? pause : nil
     }
 }
