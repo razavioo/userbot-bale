@@ -127,6 +127,7 @@ class MacOSLaunchAgentManager:
             "ThrottleInterval": spec.throttle_interval,
             "WorkingDirectory": spec.working_directory or str(Path.cwd()),
             "EnvironmentVariables": environment,
+            "StandardInPath": "/dev/null",
             "StandardOutPath": str(config_dir() / f"{self.label}.out.log"),
             "StandardErrorPath": str(config_dir() / f"{self.label}.err.log"),
         }
