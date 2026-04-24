@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from baleobala.control.paths import app_dir, data_dir, shared_container_dir
+from baleobala.control.probe import probe_endpoint
 from baleobala.control.service import ConnectionSnapshot, ControlService, ControlSnapshot
 from baleobala.control.store import JsonStore
 from baleobala.control.vpn import VpnProfile
@@ -262,6 +263,7 @@ class AppControlBridge:
         snapshot = self.service.status()
         policy = load_network_policy()
         state = connection_state(snapshot, policy)
+        signing = signing_payload()
         return {
             "schemaVersion": 1,
             "generatedAt": time.time(),
@@ -279,20 +281,23 @@ class AppControlBridge:
             "readiness": readiness_items(snapshot),
             "relays": relay_summaries(snapshot),
             "networkPolicy": policy.to_dict(),
+            "codeSigning": signing,
         }
 
     def diagnostics(self) -> dict[str, Any]:
         snapshot = self.service.status()
         policy = load_network_policy()
         try:
-            from baleobala.control.macos import load_tunnel_profile, tunnel_profile_path
+            from baleobala.control.macos import code_signing_status, load_tunnel_profile, tunnel_profile_path
 
             tunnel_profile = load_tunnel_profile() or {}
             tunnel_profile_file = str(tunnel_profile_path())
         except Exception:  # noqa: BLE001
             tunnel_profile = {}
             tunnel_profile_file = ""
+        signing = signing_payload()
         socket_path = shared_container_dir() / str(tunnel_profile.get("carrierSocketPath") or "carrier_tunnel.sock")
+        socket_probe = probe_endpoint(f"unix://{socket_path}", timeout=0.2) if socket_path.exists() else None
         return {
             "schemaVersion": 1,
             "generatedAt": time.time(),
@@ -300,8 +305,11 @@ class AppControlBridge:
             "networkPolicy": policy.to_dict(),
             "tunnelProfilePath": tunnel_profile_file,
             "tunnelProfile": _redact(tunnel_profile),
+            "codeSigning": signing,
             "carrierSocketPath": str(socket_path),
             "carrierSocketExists": socket_path.exists(),
+            "carrierSocketReachable": socket_probe.ok if socket_probe is not None else False,
+            "carrierSocketState": socket_probe.detail if socket_probe is not None else "missing",
             "redactedLogs": redacted_log_entries(),
             "lastError": snapshot.backend.get("last_error", "") or snapshot.connection.get("message", ""),
         }
@@ -511,6 +519,16 @@ def relay_summaries(snapshot: ControlSnapshot) -> list[dict[str, Any]]:
             "backendPreference": pairing.get("backend_preference", "packet-tunnel"),
         }
     ]
+
+
+def signing_payload() -> dict[str, str]:
+    try:
+        from baleobala.control.macos import code_signing_status
+
+        raw = code_signing_status().to_dict()
+    except Exception as exc:  # noqa: BLE001
+        raw = {"state": "unknown", "validIdentities": 0, "detail": str(exc)}
+    return {str(key): str(value) for key, value in raw.items()}
 
 
 def _connection_snapshot_payload(snapshot: ConnectionSnapshot) -> dict[str, Any]:

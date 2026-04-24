@@ -13,31 +13,43 @@ def _read(path: str) -> str:
 
 
 def _match(pattern: str, text: str) -> str:
-    found = re.search(pattern, text)
+    found = re.search(pattern, text, re.M)
     assert found is not None
     return found.group(1)
 
 
+def _xcconfig_value(path: str, key: str) -> str:
+    text = _read(path)
+    return _match(rf"^{re.escape(key)}\s*=\s*(\S+)\s*$", text)
+
+
 def test_macos_app_group_is_consistent() -> None:
     swift = _read("native/macos/Shared/BaleAppGroup.swift")
-    app_group = _match(r'static let identifier = "([^"]+)"', swift)
+    app_group = _xcconfig_value("native/macos/Config/Base.xcconfig", "BALEOBALA_APP_GROUP_IDENTIFIER")
 
     app_entitlements = plistlib.loads((REPO_ROOT / "native/macos/BaleobalaApp/BaleobalaApp.entitlements").read_bytes())
     tunnel_entitlements = plistlib.loads((REPO_ROOT / "native/macos/BaleobalaPacketTunnel/BaleobalaPacketTunnel.entitlements").read_bytes())
 
-    assert app_group in app_entitlements["com.apple.security.application-groups"]
-    assert app_group in tunnel_entitlements["com.apple.security.application-groups"]
+    assert "BaleAppGroupIdentifier" in _read("native/macos/BaleobalaApp/Info.plist")
+    assert "BaleAppGroupIdentifier" in _read("native/macos/BaleobalaPacketTunnel/Info.plist")
+    assert "infoValue(\"BaleAppGroupIdentifier\"" in swift
+    assert app_group == "group.com.baleobala.vpn"
+    assert "$(BALEOBALA_APP_GROUP_IDENTIFIER)" in app_entitlements["com.apple.security.application-groups"]
+    assert "$(BALEOBALA_APP_GROUP_IDENTIFIER)" in tunnel_entitlements["com.apple.security.application-groups"]
 
 
 def test_packet_tunnel_bundle_identifier_is_consistent() -> None:
     swift = _read("native/macos/Shared/BaleAppGroup.swift")
-    provider_bundle = _match(r'static let providerBundleIdentifier = "([^"]+)"', swift)
+    provider_bundle = _xcconfig_value("native/macos/Config/Base.xcconfig", "BALEOBALA_PACKET_TUNNEL_BUNDLE_ID")
     xcconfig = _read("native/macos/Config/PacketTunnel.xcconfig")
     info_plist = plistlib.loads((REPO_ROOT / "native/macos/BaleobalaPacketTunnel/Info.plist").read_bytes())
     tunnel_manager = _read("native/macos/Shared/BaleTunnelManager.swift")
 
-    assert provider_bundle in xcconfig
-    assert info_plist["CFBundleIdentifier"] in {"$(PRODUCT_BUNDLE_IDENTIFIER)", provider_bundle}
+    assert provider_bundle == "$(BALEOBALA_APP_BUNDLE_ID).packet-tunnel"
+    assert "PRODUCT_BUNDLE_IDENTIFIER = $(BALEOBALA_PACKET_TUNNEL_BUNDLE_ID)" in xcconfig
+    assert info_plist["CFBundleIdentifier"] == "$(PRODUCT_BUNDLE_IDENTIFIER)"
+    assert "BaleProviderBundleIdentifier" in info_plist
+    assert "infoValue(\"BaleProviderBundleIdentifier\"" in swift
     assert "first(where:" in tunnel_manager
     assert "providerBundleIdentifier == BaleAppGroup.providerBundleIdentifier" in tunnel_manager
 

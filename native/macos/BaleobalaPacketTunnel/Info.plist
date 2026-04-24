@@ -7,7 +7,7 @@
     <key>CFBundleExecutable</key>
     <string>BaleobalaPacketTunnel</string>
     <key>CFBundleIdentifier</key>
-    <string>com.baleobala.app.packet-tunnel</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -20,6 +20,10 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>BaleAppGroupIdentifier</key>
+    <string>$(BALEOBALA_APP_GROUP_IDENTIFIER)</string>
+    <key>BaleProviderBundleIdentifier</key>
+    <string>$(BALEOBALA_PACKET_TUNNEL_BUNDLE_ID)</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

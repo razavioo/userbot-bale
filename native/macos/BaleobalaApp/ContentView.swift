@@ -378,6 +378,8 @@ struct ContentView: View {
                     InfoRow(title: "Last action", value: controller.actionMessage.isEmpty ? "None" : controller.actionMessage)
                     InfoRow(title: "Profile", value: controller.profileText)
                     InfoRow(title: "Tunnel", value: controller.connectionText)
+                    InfoRow(title: "Code signing", value: codeSigningText)
+                    InfoRow(title: "Carrier socket", value: carrierSocketText)
                 }
             }
 
@@ -438,6 +440,20 @@ struct ContentView: View {
                 )
             }
         }
+    }
+
+    private var codeSigningText: String {
+        let signing = controller.appState.codeSigning
+        let state = signing["state"] ?? "unknown"
+        let detail = signing["detail"] ?? ""
+        return detail.isEmpty ? state : "\(state): \(detail)"
+    }
+
+    private var carrierSocketText: String {
+        let backend = controller.appState.backend
+        let endpoint = backend["endpoint"] ?? "not running"
+        let state = backend["carrier_ready"] ?? backend["state"] ?? "unknown"
+        return "\(state) · \(endpoint)"
     }
 
     private func draftBinding(_ keyPath: WritableKeyPath<BaleTunnelConfiguration, String>) -> Binding<String> {

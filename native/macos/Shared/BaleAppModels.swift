@@ -131,6 +131,7 @@ struct BaleAppState: Codable, Equatable {
     var readiness: [ReadinessGate] = []
     var relays: [RelaySummary] = []
     var networkPolicy: BaleNetworkPolicy = BaleNetworkPolicy()
+    var codeSigning: [String: String] = [:]
 }
 
 struct AppControlResponse: Codable {
@@ -146,5 +147,8 @@ struct DiagnosticSnapshot: Codable, Equatable {
     var tunnelProfilePath: String = ""
     var carrierSocketPath: String = ""
     var carrierSocketExists: Bool = false
+    var carrierSocketReachable: Bool = false
+    var carrierSocketState: String = ""
+    var codeSigning: [String: String] = [:]
     var status: BaleAppState = BaleAppState()
 }

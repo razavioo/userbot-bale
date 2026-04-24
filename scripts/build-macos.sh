@@ -40,6 +40,9 @@ append_setting_if_present() {
 append_setting_if_present "DEVELOPMENT_TEAM" "${MACOS_DEVELOPMENT_TEAM:-}"
 append_setting_if_present "CODE_SIGN_IDENTITY" "${MACOS_CODE_SIGN_IDENTITY:-}"
 append_setting_if_present "OTHER_CODE_SIGN_FLAGS" "${MACOS_OTHER_CODE_SIGN_FLAGS:-}"
+append_setting_if_present "BALEOBALA_APP_BUNDLE_ID" "${MACOS_APP_BUNDLE_ID:-}"
+append_setting_if_present "BALEOBALA_PACKET_TUNNEL_BUNDLE_ID" "${MACOS_PACKET_TUNNEL_BUNDLE_ID:-}"
+append_setting_if_present "BALEOBALA_APP_GROUP_IDENTIFIER" "${MACOS_APP_GROUP_IDENTIFIER:-}"
 
 validate_release_env() {
   local missing=()
@@ -80,6 +83,8 @@ prepare_export_options_plist() {
   fi
 
   mkdir -p "$(dirname "${generated_export_options_plist}")"
+  app_bundle_id="${MACOS_APP_BUNDLE_ID:-com.baleobala.app}"
+  packet_tunnel_bundle_id="${MACOS_PACKET_TUNNEL_BUNDLE_ID:-${app_bundle_id}.packet-tunnel}"
   cat > "${generated_export_options_plist}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -91,9 +96,9 @@ prepare_export_options_plist() {
     <string>developer-id</string>
     <key>provisioningProfiles</key>
     <dict>
-        <key>com.baleobala.app</key>
+        <key>${app_bundle_id}</key>
         <string>${MACOS_APP_PROFILE_SPECIFIER:-${MACOS_APP_PROFILE_UUID:-}}</string>
-        <key>com.baleobala.app.packet-tunnel</key>
+        <key>${packet_tunnel_bundle_id}</key>
         <string>${MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER:-${MACOS_PACKET_TUNNEL_PROFILE_UUID:-}}</string>
     </dict>
     <key>signingStyle</key>
@@ -128,8 +133,11 @@ case "${mode}" in
     ;;
   debug-local)
     xcodebuild \
-      "${common_args[@]}" \
+      -project "${project}" \
+      -scheme "${scheme}" \
       -configuration Debug \
+      -derivedDataPath "${derived_data}" \
+      -destination "${destination}" \
       CODE_SIGNING_ALLOWED=NO \
       CODE_SIGNING_REQUIRED=NO \
       build

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from baleobala.control.paths import APP_GROUP_IDENTIFIER, config_dir, shared_container_dir
+from baleobala.control.probe import probe_endpoint
 from baleobala.control.store import JsonStore
 
 
@@ -21,6 +23,7 @@ _BYPASS_DOMAINS = ("localhost", "127.0.0.1", "::1")
 _TUNNEL_PROFILE_NAME = "packet_tunnel_profile.json"
 _TUNNEL_INSTALL_REQUEST = "packet_tunnel_install.request.json"
 _APP_CONTROL_SOCKET = "bale_app_control.sock"
+_DEFAULT_PROVIDER_BUNDLE_ID = "com.baleobala.app.packet-tunnel"
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,20 @@ class ServiceSnapshot:
     secure_web: ProxyState
     socks: ProxyState
     bypass_domains: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class CodeSigningStatus:
+    state: str
+    valid_identities: int = 0
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "state": self.state,
+            "validIdentities": self.valid_identities,
+            "detail": self.detail,
+        }
 
 
 def tunnel_profile_path() -> Path:
@@ -62,6 +79,40 @@ def load_tunnel_profile() -> dict[str, object] | None:
         return None
 
 
+def code_signing_status(*, runner: Runner | None = None) -> CodeSigningStatus:
+    if sys.platform != "darwin":
+        return CodeSigningStatus("not-applicable", detail="Code signing is only required for the macOS packet tunnel app.")
+    run = runner or subprocess.run
+    try:
+        result = run(
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return CodeSigningStatus("missing-tool", detail="macOS security tool is unavailable.")
+    except Exception as exc:  # noqa: BLE001
+        return CodeSigningStatus("error", detail=str(exc))
+
+    output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    valid_count = 0
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.endswith("valid identities found"):
+            try:
+                valid_count = int(stripped.split(" ", 1)[0])
+            except (IndexError, ValueError):
+                pass
+            break
+        if ")" in stripped and '"' in stripped:
+            valid_count += 1
+    if valid_count > 0:
+        return CodeSigningStatus("ready", valid_identities=valid_count, detail=f"{valid_count} valid code-signing identity found.")
+    detail = output or "No valid code-signing identities found."
+    return CodeSigningStatus("missing-identity", detail=detail)
+
+
 def packet_tunnel_configuration(profile, pairing=None) -> dict[str, object]:  # noqa: ANN001
     relay_identifier = ""
     if pairing is not None:
@@ -81,7 +132,7 @@ def packet_tunnel_configuration(profile, pairing=None) -> dict[str, object]:  # 
         "configurationVersion": 1,
         "displayName": getattr(profile, "name", "baleobala"),
         "appGroupIdentifier": APP_GROUP_IDENTIFIER,
-        "providerBundleIdentifier": "com.baleobala.app.packet-tunnel",
+        "providerBundleIdentifier": provider_bundle_identifier(),
         "serverAddress": "127.0.0.1",
         "tunnelIPv4Address": "10.77.0.2",
         "tunnelIPv4SubnetMask": "255.255.255.0",
@@ -99,6 +150,29 @@ def packet_tunnel_configuration(profile, pairing=None) -> dict[str, object]:  # 
         "packetTunnelPort": getattr(profile, "listen_port", 1080),
         **policy_payload,
     }
+
+
+def provider_bundle_identifier() -> str:
+    return os.environ.get("BALEOBALA_PROVIDER_BUNDLE_ID", _DEFAULT_PROVIDER_BUNDLE_ID)
+
+
+def carrier_socket_path(config: dict[str, object] | None = None) -> Path:
+    payload = config or load_tunnel_profile() or {}
+    return shared_container_dir() / str(payload.get("carrierSocketPath") or "carrier_tunnel.sock")
+
+
+def cleanup_stale_carrier_socket(config: dict[str, object] | None = None, *, timeout: float = 0.2) -> bool:
+    path = carrier_socket_path(config)
+    if not path.exists():
+        return False
+    probe = probe_endpoint(f"unix://{path}", timeout=timeout)
+    if probe.ok:
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def _notify_app(command: dict[str, object]) -> bool:

@@ -7,7 +7,7 @@
     <key>CFBundleExecutable</key>
     <string>Baleobala</string>
     <key>CFBundleIdentifier</key>
-    <string>com.baleobala.app</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -24,5 +24,9 @@
     <string>14.0</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>BaleAppGroupIdentifier</key>
+    <string>$(BALEOBALA_APP_GROUP_IDENTIFIER)</string>
+    <key>BaleProviderBundleIdentifier</key>
+    <string>$(BALEOBALA_PACKET_TUNNEL_BUNDLE_ID)</string>
 </dict>
 </plist>

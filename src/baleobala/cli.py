@@ -204,6 +204,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("numpy", _module_available("numpy"), "available" if _module_available("numpy") else "missing"))
     checks.append(("ggwave", _module_available("ggwave"), "available" if _module_available("ggwave") else "missing"))
     checks.append(("PySide6", _module_available("PySide6"), "available" if _module_available("PySide6") else "missing"))
+    if sys.platform == "darwin":
+        from baleobala.control.macos import code_signing_status
+
+        signing = code_signing_status()
+        checks.append(("codesign", signing.state == "ready", signing.detail))
 
     headline, _missing, next_step = summarize_doctor(checks)
     print("baleobala doctor")
