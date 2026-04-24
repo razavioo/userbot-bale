@@ -124,6 +124,7 @@ def test_socks5_proxy_roundtrip_over_memory_tunnel() -> None:
     deadline = time.time() + 2.0
     while server.bound_port is None and time.time() < deadline:
         time.sleep(0.01)
+    assert server.bound_host == "127.0.0.1"
     assert server.bound_port is not None
 
     with socket.create_connection(("127.0.0.1", server.bound_port), timeout=2.0) as sock:
