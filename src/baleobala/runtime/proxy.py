@@ -422,6 +422,7 @@ class Socks5ProxyServer:
         listen_port: int = 1080,
         handshake_timeout: float = 15.0,
         max_chunk_size: int = MAX_DATA_LEN,
+        max_active_connections: int = 128,
         secret: bytes | None = None,
         on_listen=None,
     ) -> None:
@@ -431,6 +432,7 @@ class Socks5ProxyServer:
         self._handshake_timeout = handshake_timeout
         self._max_chunk_size = max_chunk_size
         self._on_listen = on_listen
+        self._client_slots = threading.BoundedSemaphore(max_active_connections)
         self._stop = threading.Event()
         self._conn_lock = threading.Lock()
         self._conn_seq = 0
@@ -478,6 +480,10 @@ class Socks5ProxyServer:
                     if self._transport_closed():
                         break
                     continue
+                if not self._client_slots.acquire(blocking=False):
+                    log.warning("proxy_client_rejected reason=too_many_connections")
+                    client.close()
+                    continue
                 threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
 
     def _transport_closed(self) -> bool:
@@ -500,6 +506,10 @@ class Socks5ProxyServer:
                 client.close()
             except Exception:
                 pass
+            try:
+                self._client_slots.release()
+            except ValueError:
+                pass
 
     def _open_proxy_stream(self, client: socket.socket, target_host: str, target_port: int) -> int | None:
         with self._conn_lock:
@@ -516,6 +526,7 @@ class Socks5ProxyServer:
         )
         ok, _reason = self._wait_open_result(conn_id)
         if not ok:
+            self._hub.unregister(conn_id)
             return None
         return conn_id
 
@@ -573,6 +584,7 @@ class Socks5ProxyServer:
         finally:
             stop.set()
             worker.join(timeout=1.0)
+            self._hub.unregister(conn_id)
 
     def _handle_http_connect(self, client: socket.socket, first_byte: bytes) -> None:
         target_host, target_port = _read_http_connect_target(client, first_byte)
@@ -621,6 +633,7 @@ class Socks5ProxyServer:
         finally:
             stop.set()
             worker.join(timeout=1.0)
+            self._hub.unregister(conn_id)
 
     def _wait_open_result(self, conn_id: int) -> tuple[bool, str | None]:
         while not self._stop.is_set():
@@ -806,12 +819,14 @@ class TunnelTcpRelay:
         connect_timeout: float = 5.0,
         handshake_timeout: float = 15.0,
         max_chunk_size: int = MAX_DATA_LEN,
+        max_active_connections: int = 64,
         secret: bytes | None = None,
     ) -> None:
         self._hub = ProxyHub(transport, secret=secret)
         self._connect_timeout = connect_timeout
         self._handshake_timeout = handshake_timeout
         self._max_chunk_size = max_chunk_size
+        self._slots = threading.BoundedSemaphore(max_active_connections)
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -841,27 +856,47 @@ class TunnelTcpRelay:
             packet = self._hub.accept_open(timeout=0.25)
             if packet is None:
                 continue
+            if packet.packet_type != ProxyPacketType.OPEN:
+                continue
             threading.Thread(target=self._handle_connection, args=(packet,), daemon=True).start()
 
     def _transport_closed(self) -> bool:
         return self._hub.closed
 
     def _handle_connection(self, packet: ProxyPacket) -> None:
+        if not self._slots.acquire(blocking=False):
+            log.warning("proxy_open_rejected target=%s:%s conn_id=%s reason=too_many_connections", packet.host, packet.port, packet.conn_id)
+            try:
+                self._hub.send(
+                    ProxyPacket(
+                        packet_type=ProxyPacketType.ERROR,
+                        conn_id=packet.conn_id,
+                        payload=b"relay overloaded",
+                    )
+                )
+            finally:
+                self._hub.unregister(packet.conn_id)
+            return
         log.info("proxy_open target=%s:%s conn_id=%s", packet.host, packet.port, packet.conn_id)
         try:
             sock = socket.create_connection((packet.host, packet.port), timeout=self._connect_timeout)
         except OSError as exc:
             log.warning("proxy_open_failed target=%s:%s conn_id=%s error=%s", packet.host, packet.port, packet.conn_id, exc)
-            self._hub.send(
-                ProxyPacket(
-                    packet_type=ProxyPacketType.ERROR,
-                    conn_id=packet.conn_id,
-                    payload=str(exc).encode("utf-8", errors="replace"),
+            try:
+                self._hub.send(
+                    ProxyPacket(
+                        packet_type=ProxyPacketType.ERROR,
+                        conn_id=packet.conn_id,
+                        payload=str(exc).encode("utf-8", errors="replace"),
+                    )
                 )
-            )
+            finally:
+                self._hub.unregister(packet.conn_id)
+                self._slots.release()
             return
 
         with sock:
+            sock.settimeout(0.25)
             log.info("proxy_open_ok target=%s:%s conn_id=%s", packet.host, packet.port, packet.conn_id)
             self._hub.send(ProxyPacket(packet_type=ProxyPacketType.OPEN_OK, conn_id=packet.conn_id))
             stop = threading.Event()
@@ -908,3 +943,5 @@ class TunnelTcpRelay:
             finally:
                 stop.set()
                 worker.join(timeout=1.0)
+                self._hub.unregister(packet.conn_id)
+                self._slots.release()
