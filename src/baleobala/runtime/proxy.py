@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import logging
 import os
 import queue
 import socket
 import struct
 import threading
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 
 from baleobala.runtime.interfaces import TunnelTransport
+
+log = logging.getLogger(__name__)
 
 MAGIC = b"PX"
 VERSION = 1
@@ -345,14 +349,19 @@ class ProxyHub:
         if self.closed:
             return False
         self._ready.clear()
-        self.send(
-            ProxyPacket(
-                packet_type=ProxyPacketType.HELLO,
-                conn_id=0,
-                payload=b"proxy-v1",
+        deadline = time.monotonic() + timeout
+        while not self.closed and time.monotonic() < deadline:
+            self.send(
+                ProxyPacket(
+                    packet_type=ProxyPacketType.HELLO,
+                    conn_id=0,
+                    payload=b"proxy-v1",
+                )
             )
-        )
-        return self._ready.wait(timeout=timeout)
+            remaining = max(0.0, deadline - time.monotonic())
+            if self._ready.wait(timeout=min(0.5, remaining)):
+                return True
+        return self._ready.is_set()
 
     def register(self, conn_id: int) -> "queue.Queue[ProxyPacket | object]":
         with self._send_lock:
@@ -411,16 +420,21 @@ class Socks5ProxyServer:
         *,
         listen_host: str = "127.0.0.1",
         listen_port: int = 1080,
+        handshake_timeout: float = 15.0,
         max_chunk_size: int = MAX_DATA_LEN,
         secret: bytes | None = None,
+        on_listen=None,
     ) -> None:
         self._hub = ProxyHub(transport, secret=secret)
         self._listen_host = listen_host
         self._listen_port = listen_port
+        self._handshake_timeout = handshake_timeout
         self._max_chunk_size = max_chunk_size
+        self._on_listen = on_listen
         self._stop = threading.Event()
         self._conn_lock = threading.Lock()
         self._conn_seq = 0
+        self.bound_host: str | None = None
         self.bound_port: int | None = None
         self._listen_backlog = 16
 
@@ -429,12 +443,13 @@ class Socks5ProxyServer:
         self._hub.close()
 
     def serve_once(self) -> None:
-        if not self._hub.negotiate():
+        if not self._hub.negotiate(timeout=self._handshake_timeout):
             raise TimeoutError("proxy handshake failed")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._listen_host, self._listen_port))
-            self.bound_port = listener.getsockname()[1]
+            self.bound_host, self.bound_port = listener.getsockname()[:2]
+            self._emit_listen_ready()
             listener.listen(self._listen_backlog)
             listener.settimeout(0.25)
             while not self._stop.is_set():
@@ -447,12 +462,13 @@ class Socks5ProxyServer:
                 return
 
     def serve_forever(self) -> None:
-        if not self._hub.negotiate():
+        if not self._hub.negotiate(timeout=self._handshake_timeout):
             raise TimeoutError("proxy handshake failed")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._listen_host, self._listen_port))
-            self.bound_port = listener.getsockname()[1]
+            self.bound_host, self.bound_port = listener.getsockname()[:2]
+            self._emit_listen_ready()
             listener.listen(self._listen_backlog)
             listener.settimeout(0.25)
             while not self._stop.is_set():
@@ -466,6 +482,11 @@ class Socks5ProxyServer:
 
     def _transport_closed(self) -> bool:
         return self._hub.closed
+
+    def _emit_listen_ready(self) -> None:
+        if self._on_listen is None:
+            return
+        self._on_listen(self.bound_host, self.bound_port)
 
     def _handle_client(self, client: socket.socket) -> None:
         try:
@@ -783,11 +804,13 @@ class TunnelTcpRelay:
         transport: TunnelTransport,
         *,
         connect_timeout: float = 5.0,
+        handshake_timeout: float = 15.0,
         max_chunk_size: int = MAX_DATA_LEN,
         secret: bytes | None = None,
     ) -> None:
         self._hub = ProxyHub(transport, secret=secret)
         self._connect_timeout = connect_timeout
+        self._handshake_timeout = handshake_timeout
         self._max_chunk_size = max_chunk_size
         self._stop = threading.Event()
 
@@ -796,7 +819,7 @@ class TunnelTcpRelay:
         self._hub.close()
 
     def serve_once(self) -> None:
-        if not self._hub.negotiate():
+        if not self._hub.negotiate(timeout=self._handshake_timeout):
             raise TimeoutError("proxy handshake failed")
         while not self._stop.is_set():
             packet = self._hub.accept_open(timeout=0.25)
@@ -810,7 +833,7 @@ class TunnelTcpRelay:
             return
 
     def serve_forever(self) -> None:
-        if not self._hub.negotiate():
+        if not self._hub.negotiate(timeout=self._handshake_timeout):
             raise TimeoutError("proxy handshake failed")
         while not self._stop.is_set():
             if self._transport_closed():
@@ -824,9 +847,11 @@ class TunnelTcpRelay:
         return self._hub.closed
 
     def _handle_connection(self, packet: ProxyPacket) -> None:
+        log.info("proxy_open target=%s:%s conn_id=%s", packet.host, packet.port, packet.conn_id)
         try:
             sock = socket.create_connection((packet.host, packet.port), timeout=self._connect_timeout)
         except OSError as exc:
+            log.warning("proxy_open_failed target=%s:%s conn_id=%s error=%s", packet.host, packet.port, packet.conn_id, exc)
             self._hub.send(
                 ProxyPacket(
                     packet_type=ProxyPacketType.ERROR,
@@ -837,6 +862,7 @@ class TunnelTcpRelay:
             return
 
         with sock:
+            log.info("proxy_open_ok target=%s:%s conn_id=%s", packet.host, packet.port, packet.conn_id)
             self._hub.send(ProxyPacket(packet_type=ProxyPacketType.OPEN_OK, conn_id=packet.conn_id))
             stop = threading.Event()
 

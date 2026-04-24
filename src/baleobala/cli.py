@@ -1568,6 +1568,9 @@ def _open_audio_tunnel(args: argparse.Namespace, role):
 
 def _resolve_proxy_secret(args: argparse.Namespace) -> bytes | None:
     secret = getattr(args, "proxy_secret", None) or os.environ.get("BALE_PROXY_SECRET")
+    secret_file = getattr(args, "proxy_secret_file", None) or os.environ.get("BALE_PROXY_SECRET_FILE")
+    if not secret and secret_file:
+        secret = Path(secret_file).expanduser().read_text(encoding="utf-8").strip()
     if not secret:
         return None
     return secret.encode("utf-8")
@@ -1577,50 +1580,111 @@ def _emit_marker(marker: str) -> None:
     print(marker, file=sys.stderr)
 
 
+class _ProxyTransportAdapter:
+    """Adapt VPN byte transports to the proxy runtime's send/recv shape."""
+
+    def __init__(self, inner, *, cleanup) -> None:  # noqa: ANN001
+        self._inner = inner
+        self._cleanup = cleanup
+        self._closed = False
+
+    def send(self, data: bytes) -> None:
+        self._inner.send_bytes(data)
+
+    def recv(self, timeout: float | None = None) -> bytes | None:
+        return self._inner.recv_bytes(timeout=timeout)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._inner.close()
+        finally:
+            self._cleanup()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed or bool(getattr(self._inner, "closed", False))
+
+
+def _open_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN001
+    from baleobala.bale import LiveKitSession
+    from baleobala.vpn.cli import _build_transport_chain
+    from baleobala.vpn.keepalive import LiveKitKeepalive
+
+    url, token = _resolve_livekit_credentials(args)
+    session = LiveKitSession(url=url, token=token, identity=args.identity)
+    session.start()
+    keepalive = LiveKitKeepalive(session, interval=20.0)
+    keepalive.start()
+    if not hasattr(args, "psk"):
+        args.psk = None
+    if not hasattr(args, "psk_file"):
+        args.psk_file = None
+    if not hasattr(args, "transport"):
+        args.transport = "dc"
+    chain = _build_transport_chain(args.transport, session, args)
+    try:
+        transport_name, transport = chain.start()
+    except Exception:
+        keepalive.stop()
+        session.stop()
+        raise
+
+    def cleanup() -> None:
+        try:
+            chain.close()
+        finally:
+            keepalive.stop()
+            session.stop()
+
+    return transport_name, _ProxyTransportAdapter(transport, cleanup=cleanup)
+
+
 def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
     """Run a local SOCKS5/HTTP CONNECT server over Bale-backed transport."""
-    from baleobala.runtime import QueuedTunnelTransport, Socks5ProxyServer
+    from baleobala.runtime import Socks5ProxyServer
     from baleobala.runtime.frame import TunnelRole
 
-    bridge = _open_audio_tunnel(args, TunnelRole.CLIENT)
-    transport = QueuedTunnelTransport(bridge)
+    transport_name, transport = _open_proxy_transport(args, TunnelRole.CLIENT)
     server = Socks5ProxyServer(
         transport,
         listen_host=args.listen_host,
         listen_port=args.listen_port,
         secret=_resolve_proxy_secret(args),
+        on_listen=lambda host, port: _emit_marker(
+            f"proxy_listening={host or args.listen_host}:{port or args.listen_port}"
+        ),
     )
     try:
         _emit_marker("call_established")
+        _emit_marker(f"transport_selected={transport_name}")
         server.serve_forever()
     except KeyboardInterrupt:
         server.stop()
     finally:
-        _emit_marker(f"proxy_listening={server.bound_host or args.listen_host}:{server.bound_port or args.listen_port}")
         _emit_marker("teardown_done")
         transport.close()
-        bridge.close()
     return 0
 
 
 def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
     """Run the remote TCP relay over Bale-backed transport."""
-    from baleobala.runtime import QueuedTunnelTransport, TunnelTcpRelay
+    from baleobala.runtime import TunnelTcpRelay
     from baleobala.runtime.frame import TunnelRole
 
-    bridge = _open_audio_tunnel(args, TunnelRole.SERVER)
-    transport = QueuedTunnelTransport(bridge)
+    transport_name, transport = _open_proxy_transport(args, TunnelRole.SERVER)
     relay = TunnelTcpRelay(transport, secret=_resolve_proxy_secret(args))
     try:
         _emit_marker("call_established")
+        _emit_marker(f"transport_selected={transport_name}")
         relay.serve_forever()
     except KeyboardInterrupt:
         relay.stop()
     finally:
-        _emit_marker(f"transport_selected={getattr(args, 'protocol', 'fast')}")
         _emit_marker("teardown_done")
         transport.close()
-        bridge.close()
     return 0
 
 
@@ -2043,7 +2107,9 @@ def build_parser() -> argparse.ArgumentParser:
     bp_client.add_argument("--identity", default="baleobala")
     bp_client.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_client.add_argument("--volume", type=int, default=50)
+    bp_client.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
     bp_client.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
+    bp_client.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_client.set_defaults(func=cmd_bale_proxy_client)
 
     bp_relay = bp_sub.add_parser("relay", help="relay proxy traffic to TCP targets")
@@ -2060,7 +2126,9 @@ def build_parser() -> argparse.ArgumentParser:
     bp_relay.add_argument("--identity", default="baleobala")
     bp_relay.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_relay.add_argument("--volume", type=int, default=50)
+    bp_relay.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
     bp_relay.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
+    bp_relay.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_relay.set_defaults(func=cmd_bale_proxy_relay)
 
     bc = sub.add_parser(
