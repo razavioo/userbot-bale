@@ -23,6 +23,7 @@ class LaunchAgentSpec:
     program_arguments: list[str]
     run_at_load: bool = True
     keep_alive: bool = True
+    throttle_interval: int = 30
     working_directory: str | None = None
 
 
@@ -123,6 +124,7 @@ class MacOSLaunchAgentManager:
             "ProgramArguments": spec.program_arguments,
             "RunAtLoad": spec.run_at_load,
             "KeepAlive": spec.keep_alive,
+            "ThrottleInterval": spec.throttle_interval,
             "WorkingDirectory": spec.working_directory or str(Path.cwd()),
             "EnvironmentVariables": environment,
             "StandardOutPath": str(config_dir() / f"{self.label}.out.log"),
