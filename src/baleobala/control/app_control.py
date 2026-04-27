@@ -20,7 +20,7 @@ from baleobala.control.paths import app_dir, data_dir, shared_container_dir
 from baleobala.control.probe import probe_endpoint
 from baleobala.control.service import ConnectionSnapshot, ControlService, ControlSnapshot
 from baleobala.control.store import JsonStore
-from baleobala.control.vpn import VpnProfile
+from baleobala.control.vpn import VpnProfile, default_vpn_backend
 
 
 POLICY_VERSION = 1
@@ -338,7 +338,7 @@ class AppControlBridge:
         name = str(payload.get("name") or "home-relay").strip() or "home-relay"
         role = str(payload.get("role") or "client").strip() or "client"
         pair_code = str(payload.get("pairCode", payload.get("pair_code", "")) or "").strip()
-        backend = str(payload.get("backend") or "packet-tunnel").strip() or "packet-tunnel"
+        backend = str(payload.get("backend") or default_vpn_backend()).strip() or default_vpn_backend()
         transport = str(
             payload.get("transportPreference", payload.get("transport_preference", load_network_policy().transport_preference))
             or "auto"
@@ -499,7 +499,7 @@ def readiness_items(snapshot: ControlSnapshot) -> list[dict[str, Any]]:
     return [
         {"key": "auth", "label": "Bale sign-in", "ready": auth_ready, "detail": "Ready" if auth_ready else "Sign in with Bale."},
         {"key": "pairing", "label": "Relay pairing", "ready": pairing_ready, "detail": pairing.get("name", "Create or sync a relay pairing.")},
-        {"key": "profile", "label": "System profile", "ready": profile_ready, "detail": snapshot.vpn.get("name", "Install the macOS VPN profile.")},
+        {"key": "profile", "label": "System profile", "ready": profile_ready, "detail": snapshot.vpn.get("name", "Install the system VPN profile.")},
         {"key": "route", "label": "Route", "ready": route_ready, "detail": snapshot.backend.get("route_ready", "idle")},
         {"key": "dns", "label": "DNS", "ready": dns_ready, "detail": snapshot.backend.get("dns_ready", "idle")},
     ]
@@ -516,7 +516,7 @@ def relay_summaries(snapshot: ControlSnapshot) -> list[dict[str, Any]]:
             "role": pairing.get("role", "client"),
             "status": pairing.get("provisioning_status", pairing.get("state", "")),
             "transportPreference": pairing.get("transport_preference", "auto"),
-            "backendPreference": pairing.get("backend_preference", "packet-tunnel"),
+            "backendPreference": pairing.get("backend_preference", default_vpn_backend()),
         }
     ]
 

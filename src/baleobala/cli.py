@@ -197,10 +197,12 @@ def _module_available(name: str) -> bool:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Print a readiness report for the current machine."""
+    from baleobala.control.paths import is_android_runtime
+
     checks: list[tuple[str, bool, str]] = []
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     checks.append(("python", sys.version_info >= (3, 9), f"{sys.version_info.major}.{sys.version_info.minor}"))
-    if sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux") and not is_android_runtime():
         checks.append(("pactl", shutil.which("pactl") is not None, shutil.which("pactl") or "missing"))
     checks.append(("sounddevice", _module_available("sounddevice"), "available" if _module_available("sounddevice") else "missing"))
     checks.append(("numpy", _module_available("numpy"), "available" if _module_available("numpy") else "missing"))
@@ -227,7 +229,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if not ok and name in {"python", "pactl", "sounddevice", "powershell"}:
             missing_critical.append(name)
 
-    if sys.platform == "darwin":
+    if is_android_runtime():
+        print("")
+        print("Android path: sign in, pair a relay if needed, grant VPN permission, then start `baleobala vpn up`.")
+    elif sys.platform == "darwin":
         print("")
         print("macOS path: use `baleobala gui` for sign-in and pairing, then the native app for system tunnel control.")
     elif sys.platform == "win32":
@@ -753,6 +758,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     )
     from baleobala.control.backend import backend_for_profile, default_backend_name
     from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+    from baleobala.control.paths import is_android_runtime
     from baleobala.control.relay_directory import RelayDirectory
 
     vpn_store = VpnStore()
@@ -767,7 +773,10 @@ def cmd_vpn(args: argparse.Namespace) -> int:
 
     if args.vpn_cmd == "plan":
         print("baleobala vpn plan")
-        if sys.platform == "darwin":
+        if is_android_runtime():
+            print("default: Android VpnService backend with shared route/DNS policy")
+            print("runtime: native VpnService owns system routing while the shared carrier tunnel handles Bale transport")
+        elif sys.platform == "darwin":
             print("default: macOS packet-tunnel backend with shared route/DNS profile")
             print("alt: --backend proxy bridges to a paired Bale relay over LiveKit")
             print("fallback: direct/proxy backends remain available for debugging and recovery")
@@ -1129,6 +1138,9 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         if sys.platform == "darwin":
             print("stopped macOS packet-tunnel backend")
             return 0
+        if is_android_runtime() and profile.backend == "android-vpn":
+            print("stopped Android VPN backend")
+            return 0
         print("vpn down: stop the foreground session with Ctrl-C if it is running, and clear saved runtime state.")
         return 0
 
@@ -1275,12 +1287,13 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         finally:
             backend.down()
 
-    if profile.backend == "packet-tunnel":
+    if profile.backend in {"packet-tunnel", "android-vpn"}:
         snapshot = control_service.start_connection(profile.profile_id)
         try:
+            label = "macOS packet-tunnel backend active" if profile.backend == "packet-tunnel" else "Android VPN backend active"
             return _hold_backend(
-                snapshot.backend.get("endpoint", "packet-tunnel"),
-                label="macOS packet-tunnel backend active",
+                snapshot.backend.get("endpoint", profile.backend),
+                label=label,
             )
         finally:
             try:
@@ -1882,7 +1895,7 @@ def build_parser() -> argparse.ArgumentParser:
     relay_enable = relay_sub.add_parser("enable", help="save relay settings")
     relay_enable.add_argument("--profile-id", default=None)
     relay_enable.add_argument("--name", default=None)
-    relay_enable.add_argument("--backend", choices=["packet-tunnel", "proxy", "linux-tun"], default=None)
+    relay_enable.add_argument("--backend", choices=["packet-tunnel", "android-vpn", "proxy", "linux-tun"], default=None)
     relay_enable.add_argument("--auto-start", action="store_true")
     relay_enable.add_argument("--listen-host", default="127.0.0.1")
     relay_enable.add_argument("--listen-port", type=int, default=1080)
@@ -1920,7 +1933,7 @@ def build_parser() -> argparse.ArgumentParser:
     vpn_up = vpn_sub.add_parser("up", help="start the current VPN backend")
     vpn_up.add_argument("--profile-id", default=None)
     vpn_up.add_argument("--relay", default=None, help="resolve a relay from the local directory by name")
-    vpn_up.add_argument("--backend", choices=["packet-tunnel", "proxy", "linux-tun"], default=None)
+    vpn_up.add_argument("--backend", choices=["packet-tunnel", "android-vpn", "proxy", "linux-tun"], default=None)
     vpn_up.set_defaults(func=cmd_vpn)
 
     vpn_down = vpn_sub.add_parser("down", help="stop the current VPN backend")

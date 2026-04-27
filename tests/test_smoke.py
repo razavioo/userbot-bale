@@ -44,3 +44,16 @@ def test_smoke_backend_status_requires_probe_when_endpoint_present() -> None:
     )
     assert not report.ok
     assert report.probe_ok == "no"
+
+
+def test_smoke_backend_status_requires_call_for_android_vpn() -> None:
+    report = smoke_backend_status(
+        {
+            "backend": "android-vpn",
+            "state": "running",
+            "control_ready": "yes",
+            "call_established": "no",
+            "last_error": "",
+        }
+    )
+    assert not report.ok

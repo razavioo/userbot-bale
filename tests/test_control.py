@@ -661,6 +661,61 @@ def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
     assert backend.status()["state"] == "stopped"
 
 
+def test_android_vpn_backend_tracks_state(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control import TunnelServiceState, VpnProfile
+    from baleobala.control.backend import AndroidVpnBackend
+
+    class FakeService:
+        def __init__(self) -> None:
+            self.started = False
+            self._state_store = type("Store", (), {"save": lambda self, payload: None})()
+
+        def start(self, *, profile_id: str, backend: str, pairing_id: str | None = None):  # noqa: ANN001
+            self.started = True
+            return TunnelServiceState(
+                state="running",
+                endpoint="unix:///tmp/android-vpn.sock",
+                profile_id=profile_id,
+                backend=backend,
+                pairing_id=pairing_id,
+                transport_selected="dc",
+                call_established="yes",
+                data_flow_ok="yes",
+                route_ready="yes",
+                dns_ready="yes",
+            )
+
+        def status(self):
+            return TunnelServiceState(
+                state="running" if self.started else "stopped",
+                endpoint="unix:///tmp/android-vpn.sock" if self.started else None,
+                transport_selected="dc" if self.started else "",
+                call_established="yes" if self.started else "no",
+                data_flow_ok="yes" if self.started else "no",
+                route_ready="yes" if self.started else "no",
+                dns_ready="yes" if self.started else "no",
+            )
+
+        def stop(self):
+            self.started = False
+
+    backend = AndroidVpnBackend(service=FakeService())
+    profile = VpnProfile(profile_id="p1", name="android", backend="android-vpn")
+
+    status = backend.up(profile)
+    assert status["backend"] == "android-vpn"
+    assert status["state"] == "running"
+    assert status["transport_selected"] == "dc"
+    assert status["call_established"] == "yes"
+    assert status["data_flow_ok"] == "yes"
+    assert status["route_ready"] == "yes"
+    assert status["dns_ready"] == "yes"
+    assert status["profile_id"] == "p1"
+    backend.down()
+    assert backend.status()["state"] == "stopped"
+
+
 def test_macos_install_tunnel_profile_writes_shared_container(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control.macos import (
@@ -682,6 +737,29 @@ def test_macos_install_tunnel_profile_writes_shared_container(tmp_path, monkeypa
     assert tunnel_profile_path().exists()
     assert load_tunnel_profile() == payload
     assert tunnel_profile_installed(payload) is True
+
+
+def test_android_install_vpn_profile_writes_shared_container(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    from baleobala.control.android import (
+        install_vpn_profile,
+        load_vpn_profile,
+        vpn_profile_installed,
+        vpn_profile_path,
+        vpn_service_configuration,
+    )
+    from baleobala.control.vpn import VpnProfile
+
+    payload = vpn_service_configuration(VpnProfile(profile_id="p1", name="baleobala", backend="android-vpn"))
+    assert payload["tunnelIPv4Address"] == "10.77.0.2"
+    assert payload["includedIPv4Routes"] == ["0.0.0.0/0"]
+    assert payload["includedIPv6Routes"] == []
+    assert payload["excludedRoutes"] == ["127.0.0.0/8"]
+    result = install_vpn_profile(payload)
+    assert result["state"] == "installed"
+    assert vpn_profile_path().exists()
+    assert load_vpn_profile() == payload
+    assert vpn_profile_installed(payload) is True
 
 
 def test_pairing_store_tracks_managed_provisioning_metadata(tmp_path, monkeypatch) -> None:
@@ -1397,6 +1475,7 @@ def test_build_parser_exposes_control_plane_commands() -> None:
 
     vpn_up_parser = vpn_subcommands["up"]
     assert "linux-tun" in _arg_choices(vpn_up_parser, "backend")
+    assert "android-vpn" in _arg_choices(vpn_up_parser, "backend")
     live_smoke_parser = vpn_subcommands["live-smoke"]
     live_smoke_opts = {action.dest for action in live_smoke_parser._actions}
     assert "ws_ca_file" in live_smoke_opts
@@ -1414,6 +1493,7 @@ def test_build_parser_exposes_control_plane_commands() -> None:
     relay_subcommands = _subparser_choices(relay_parser)
     relay_enable_parser = relay_subcommands["enable"]
     assert "linux-tun" in _arg_choices(relay_enable_parser, "backend")
+    assert "android-vpn" in _arg_choices(relay_enable_parser, "backend")
     assert "publish" in relay_subcommands
     assert "list" in relay_subcommands
     assert "remove" in relay_subcommands
@@ -1433,12 +1513,29 @@ def test_build_parser_exposes_control_plane_commands() -> None:
 
 
 def test_default_backends_choose_linux_tun_on_linux(monkeypatch) -> None:
+    monkeypatch.delenv("BALEOBALA_FORCE_ANDROID", raising=False)
+    monkeypatch.delenv("ANDROID_ROOT", raising=False)
+    monkeypatch.delenv("ANDROID_DATA", raising=False)
+    monkeypatch.delenv("ANDROID_ARGUMENT", raising=False)
     monkeypatch.setattr("sys.platform", "linux")
     from baleobala.control.backend import default_backend_name
     from baleobala.control.vpn import default_vpn_backend
 
     assert default_backend_name() == "linux-tun"
     assert default_vpn_backend() == "linux-tun"
+
+
+def test_default_backends_choose_android_vpn_on_android_runtime(monkeypatch) -> None:
+    monkeypatch.delenv("BALEOBALA_VPN_BACKEND", raising=False)
+    monkeypatch.delenv("BALEOBALA_FORCE_ANDROID", raising=False)
+    monkeypatch.setenv("ANDROID_ROOT", "/system")
+    monkeypatch.setenv("ANDROID_DATA", "/data")
+    monkeypatch.setattr("sys.platform", "linux")
+    from baleobala.control.backend import default_backend_name
+    from baleobala.control.vpn import default_vpn_backend
+
+    assert default_backend_name() == "android-vpn"
+    assert default_vpn_backend() == "android-vpn"
 
 
 def test_default_backends_choose_windows_proxy_on_win32(monkeypatch) -> None:

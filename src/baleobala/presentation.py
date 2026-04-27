@@ -6,6 +6,7 @@ import re
 import sys
 from dataclasses import dataclass
 
+from baleobala.control.paths import is_android_runtime
 from baleobala.control.service import ControlSnapshot
 
 
@@ -269,7 +270,9 @@ def connect_readiness(
 
 def summarize_doctor(checks: list[tuple[str, bool, str]]) -> tuple[str, list[str], str]:
     missing = [name for name, ok, _detail in checks if not ok]
-    if sys.platform == "darwin":
+    if is_android_runtime():
+        critical_names = {"python"}
+    elif sys.platform == "darwin":
         critical_names = {"python"}
     elif sys.platform.startswith("linux"):
         critical_names = {"python", "pactl", "sounddevice"}
@@ -343,6 +346,8 @@ def summarize_snapshot(snapshot: ControlSnapshot) -> list[str]:
 
 
 def capability_note() -> str:
+    if is_android_runtime():
+        return "Platform: Android uses the shared control plane with a native VpnService-backed full-tunnel runtime."
     if sys.platform == "darwin":
         return "Platform: macOS uses the desktop app for sign-in/pairing and the native app for system tunnel control."
     if sys.platform.startswith("linux"):

@@ -10,6 +10,22 @@ APP_NAME = "baleobala"
 APP_GROUP_IDENTIFIER = os.environ.get("BALEOBALA_APP_GROUP_IDENTIFIER", "group.com.baleobala.vpn")
 
 
+def is_android_runtime() -> bool:
+    override = os.environ.get("BALEOBALA_FORCE_ANDROID", "").strip().lower()
+    if override:
+        return override in {"1", "true", "yes", "on"}
+    if sys.platform != "linux":
+        return False
+    return any(
+        os.environ.get(name)
+        for name in (
+            "ANDROID_ROOT",
+            "ANDROID_DATA",
+            "ANDROID_ARGUMENT",
+        )
+    )
+
+
 def app_dir() -> Path:
     override = os.environ.get("BALEOBALA_HOME")
     if override:
