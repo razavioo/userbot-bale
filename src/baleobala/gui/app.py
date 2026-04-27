@@ -687,6 +687,13 @@ class ConnectView(QWidget):
         self.backend = QComboBox()
         self.backend.addItem("Use saved default", "")
         self.backend.addItem("Packet tunnel", "packet-tunnel")
+        try:
+            from baleobala.control.paths import is_android_runtime
+
+            if is_android_runtime():
+                self.backend.addItem("Android VPN", "android-vpn")
+        except Exception:  # noqa: BLE001
+            pass
         self.backend.addItem("Linux TUN", "linux-tun")
         self.backend.addItem("Proxy fallback", "proxy")
         self.backend.addItem("Direct proxy", "direct")
