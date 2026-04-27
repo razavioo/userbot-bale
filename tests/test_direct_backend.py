@@ -195,3 +195,13 @@ def test_packet_tunnel_is_default_backend_on_darwin(monkeypatch) -> None:
 
     assert default_backend_name() == "packet-tunnel"
     assert default_vpn_backend() == "packet-tunnel"
+
+
+def test_windows_proxy_is_default_backend_on_win32(monkeypatch) -> None:
+    monkeypatch.delenv("BALEOBALA_VPN_BACKEND", raising=False)
+    monkeypatch.setattr("sys.platform", "win32")
+    from baleobala.control.backend import default_backend_name
+    from baleobala.control.vpn import default_vpn_backend
+
+    assert default_backend_name() == "windows-proxy"
+    assert default_vpn_backend() == "windows-proxy"

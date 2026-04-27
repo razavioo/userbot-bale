@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 import baleobala.control.macos as macos
+import baleobala.control.windows as windows
 from baleobala.control.paths import config_dir
 from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.readiness import BackendReadiness
@@ -382,6 +383,102 @@ class DirectProxyBackend(VpnBackend):
             pass
 
 
+class WindowsProxyBackend(VpnBackend):
+    """Windows development backend using a local SOCKS5 listener plus WinHTTP proxy."""
+
+    def __init__(
+        self,
+        *,
+        listen_host: str = "127.0.0.1",
+        listen_port: int = 1080,
+        state_path: Path | None = None,
+        server_factory=None,
+        session_factory=None,
+    ) -> None:
+        self._listen_host = listen_host
+        self._listen_port = listen_port
+        self._state_store = JsonStore(state_path or (config_dir() / "windows_proxy.json"))
+        self._state = BackendState(backend="windows-proxy")
+        self._server: DirectSocks5Server | None = None
+        self._session = None
+        self._server_factory = server_factory or (
+            lambda: DirectSocks5Server(listen_host=listen_host, listen_port=listen_port)
+        )
+        self._session_factory = session_factory or (
+            lambda: windows.WindowsSystemProxySession(listen_host=listen_host, listen_port=listen_port)
+        )
+
+    def up(self, profile: VpnProfile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
+        server = self._server_factory()
+        server.start()
+        if not server.wait_ready(timeout=2.0):
+            server.stop()
+            raise RuntimeError("windows proxy listener failed to bind")
+
+        session = self._session_factory()
+        try:
+            session.start()
+        except Exception:
+            server.stop()
+            raise
+
+        self._server = server
+        self._session = session
+        self._state = BackendState(
+            backend="windows-proxy",
+            state="running",
+            profile_id=profile.profile_id,
+            pairing_id=profile.pairing_id,
+            endpoint=f"{server.bound_host}:{server.bound_port}",
+            details={
+                "proxy": session.status().get("proxy", f"{self._listen_host}:{self._listen_port}"),
+                "mode": "winhttp-system-proxy",
+            },
+        )
+        self._state_store.save(self._state.to_dict())
+        return self.status()
+
+    def down(self) -> None:
+        session, self._session = self._session, None
+        server, self._server = self._server, None
+        if session is not None:
+            try:
+                session.stop()
+            except Exception:
+                pass
+        if server is not None:
+            try:
+                server.stop()
+            except Exception:
+                pass
+        self._state = BackendState(backend="windows-proxy")
+        try:
+            self._state_store.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def status(self) -> dict[str, str]:
+        session = self._session.status() if self._session is not None else {
+            "active": "no",
+            "proxy": f"{self._listen_host}:{self._listen_port}",
+            "mode": "winhttp-system-proxy",
+        }
+        session_active = session.get("active", "yes" if self._session is not None else "no") == "yes"
+        readiness = BackendReadiness.for_windows_proxy(
+            state=self._state.state,
+            session_active=session_active,
+            listener_ready=self._server is not None,
+            endpoint=self._state.endpoint,
+            proxy=session["proxy"],
+        )
+        payload = readiness.to_dict()
+        payload.update(session)
+        return payload
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        return probe_endpoint(self.status().get("endpoint"), timeout=timeout)
+
+
 class _ProxySessionBase:
     def start(self) -> None:
         raise NotImplementedError
@@ -421,6 +518,8 @@ def default_backend_name() -> str:
         return "packet-tunnel"
     if sys.platform.startswith("linux"):
         return "linux-tun"
+    if sys.platform == "win32":
+        return "windows-proxy"
     return "proxy"
 
 
@@ -432,6 +531,8 @@ def backend_for_profile(profile: VpnProfile) -> VpnBackend:
         )
     if backend == "proxy":
         return ProxyFallbackBackend(listen_host=profile.listen_host, listen_port=profile.listen_port)
+    if backend == "windows-proxy":
+        return WindowsProxyBackend(listen_host=profile.listen_host, listen_port=profile.listen_port)
     if backend == "linux-tun":
         from baleobala.control.linux import LinuxTunBackend
         return LinuxTunBackend()

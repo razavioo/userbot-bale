@@ -48,6 +48,25 @@ For a distributable direct build, follow the runbook in `native/macos/README.md`
 
 The macOS packet tunnel reads its route and DNS plan from `BaleTunnelConfiguration`, so the same profile data drives both the app and the extension.
 
+## Windows
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev,desktop]"
+baleobala doctor
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
+baleobala vpn status
+```
+
+For the current Windows development path:
+
+```powershell
+baleobala vpn up
+```
+
+On Windows that now defaults to the `windows-proxy` backend. It starts the in-process SOCKS5/HTTP CONNECT listener and points WinHTTP at it for development traffic.
+
 ## First Run
 
 1. Start with `baleobala doctor`.
@@ -61,5 +80,5 @@ but they are not the primary production quick-start path.
 ## Verification
 
 ```bash
-pytest -q tests/test_control.py tests/test_linux_backend.py tests/test_runtime.py
+pytest -q tests/test_control.py tests/test_linux_backend.py tests/test_runtime.py tests/test_direct_backend.py
 ```

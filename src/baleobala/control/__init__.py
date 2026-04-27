@@ -8,6 +8,7 @@ from baleobala.control.mesh import MeshProvisionRecord, MeshProvisionStore
 from baleobala.control.pairing import PairingExchange, PairingRecord, PairingStore
 from baleobala.control.relay_directory import RelayDirectory, RelayDirectoryEntry
 from baleobala.control.macos import MacOSSystemProxySession
+from baleobala.control.windows import WindowsSystemProxySession
 from baleobala.control.macos_launchd import LaunchAgentSpec, MacOSLaunchAgentManager
 from baleobala.control.analyzer import BundleAnalysis, ProductVerdict, analyze_bundle, build_product_verdict, bundle_status, merge_status_with_bundle
 from baleobala.control.netns import (
@@ -61,6 +62,7 @@ __all__ = [
     "MeshProvisionRecord",
     "MeshProvisionStore",
     "MacOSSystemProxySession",
+    "WindowsSystemProxySession",
     "ProxyFallbackBackend",
     "NetnsTopology",
     "NetnsHarness",

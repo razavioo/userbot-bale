@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide covers the current repo state and the easiest way to install and try it on Linux and macOS.
+This guide covers the current repo state and the easiest way to install and try it on Linux, macOS, and Windows.
 The main user journey is `doctor -> auth -> pair -> connect`.
 
 For production-facing setup, prefer `baleobala doctor`, `baleobala auth bale-login`,
@@ -65,6 +65,12 @@ For browser or conferencing-app flows, continue to use the existing docs:
 The repo already treats macOS as a first-class target for the desktop product, and the packet-tunnel scaffold now consumes shared route and DNS configuration from the same profile data as the CLI.
 
 For now, macOS users should treat the proxy path as fallback/debug mode and the packet-tunnel path as the primary release path in [VPN_PLAN.md](VPN_PLAN.md).
+
+## Windows notes
+
+Windows now has a first-class development path through the shared CLI and GUI flow. The default backend is `windows-proxy`, which starts the local direct proxy listener and applies WinHTTP proxy settings for development traffic.
+
+Use the Windows-specific runbook in [WINDOWS_DEVELOPMENT.md](WINDOWS_DEVELOPMENT.md) for environment setup, proxy behavior, and validation steps.
 
 ## Verify the install
 

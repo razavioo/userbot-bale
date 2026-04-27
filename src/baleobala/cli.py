@@ -198,12 +198,16 @@ def _module_available(name: str) -> bool:
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Print a readiness report for the current machine."""
     checks: list[tuple[str, bool, str]] = []
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
     checks.append(("python", sys.version_info >= (3, 9), f"{sys.version_info.major}.{sys.version_info.minor}"))
-    checks.append(("pactl", shutil.which("pactl") is not None, shutil.which("pactl") or "missing"))
+    if sys.platform.startswith("linux"):
+        checks.append(("pactl", shutil.which("pactl") is not None, shutil.which("pactl") or "missing"))
     checks.append(("sounddevice", _module_available("sounddevice"), "available" if _module_available("sounddevice") else "missing"))
     checks.append(("numpy", _module_available("numpy"), "available" if _module_available("numpy") else "missing"))
     checks.append(("ggwave", _module_available("ggwave"), "available" if _module_available("ggwave") else "missing"))
     checks.append(("PySide6", _module_available("PySide6"), "available" if _module_available("PySide6") else "missing"))
+    if sys.platform == "win32":
+        checks.append(("powershell", powershell is not None, powershell or "missing"))
     if sys.platform == "darwin":
         from baleobala.control.macos import code_signing_status
 
@@ -220,12 +224,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for name, ok, detail in checks:
         status = "OK" if ok else "MISSING"
         print(f"{name:10} {status:8} {detail}")
-        if not ok and name in {"python", "pactl", "sounddevice"}:
+        if not ok and name in {"python", "pactl", "sounddevice", "powershell"}:
             missing_critical.append(name)
 
     if sys.platform == "darwin":
         print("")
         print("macOS path: use `baleobala gui` for sign-in and pairing, then the native app for system tunnel control.")
+    elif sys.platform == "win32":
+        print("")
+        print("Windows path: sign in, pair if needed, then start the WinHTTP-backed development proxy with `baleobala vpn up`.")
     else:
         print("")
         print("Linux path: sign in, create or accept a pairing, then start the secure connection with `baleobala vpn up`.")

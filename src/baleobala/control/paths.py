@@ -21,6 +21,10 @@ def app_dir() -> Path:
         if base:
             return Path(base).expanduser() / APP_NAME
         return Path.home() / ".config" / APP_NAME
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base).expanduser() / APP_NAME
     return Path.home() / f".{APP_NAME}"
 
 

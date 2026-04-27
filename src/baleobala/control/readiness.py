@@ -96,6 +96,32 @@ class BackendReadiness:
         )
 
     @classmethod
+    def for_windows_proxy(
+        cls,
+        *,
+        state: str,
+        session_active: bool,
+        listener_ready: bool,
+        endpoint: str | None,
+        proxy: str,
+    ) -> "BackendReadiness":
+        data_ready = session_active and listener_ready and state == "running"
+        return cls(
+            backend="windows-proxy",
+            state=state,
+            control_ready=_yn(state == "running"),
+            call_established=_yn(data_ready),
+            data_path_ready=_yn(data_ready),
+            data_flow_ok=_yn(data_ready),
+            teardown_clean=_yn(state != "running" or session_active),
+            endpoint=endpoint,
+            details={
+                "proxy": proxy,
+                "mode": "winhttp-system-proxy",
+            },
+        )
+
+    @classmethod
     def for_proxy_fallback(
         cls,
         *,
