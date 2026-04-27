@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from baleobala.bale.api import BaleApiClient, LiveKitCredentials
+from baleobala.bale.endpoints import Endpoint
 from baleobala.bale.messaging_backend import MessagingBackend
 from baleobala.bale.protos import (
     CallCredentials, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
@@ -84,12 +87,42 @@ def test_api_client_bootstraps_endpoints() -> None:
     try:
         socket.create_connection(("ep.bale.ai", 80), timeout=3).close()
     except OSError:
-        import pytest
         pytest.skip("no network to ep.bale.ai")
     client = BaleApiClient()
-    eps = client.bootstrap()
+    try:
+        eps = client.bootstrap()
+    except OSError as exc:
+        pytest.skip(f"endpoint bootstrap unavailable: {exc}")
     assert len(eps) >= 1
     assert all(e.host.endswith(".bale.ai") for e in eps)
+
+
+def test_api_client_bootstrap_caches_endpoint_fetch(monkeypatch) -> None:
+    expected = [
+        Endpoint(
+            scheme="tls",
+            pin="a" * 64,
+            host="rpc-ssl-c002.bale.ai",
+            ip="2.189.68.117",
+            port=443,
+            id=1013,
+        )
+    ]
+    calls = {"count": 0}
+
+    def fake_fetch_endpoints() -> list[Endpoint]:
+        calls["count"] += 1
+        return expected
+
+    monkeypatch.setattr("baleobala.bale.api.fetch_endpoints", fake_fetch_endpoints)
+    client = BaleApiClient()
+
+    first = client.bootstrap()
+    second = client.bootstrap()
+
+    assert first == expected
+    assert second is first
+    assert calls["count"] == 1
 
 
 def test_bale_api_client_satisfies_messaging_backend_protocol() -> None:
