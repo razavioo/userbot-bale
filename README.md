@@ -1,6 +1,6 @@
 # baleobala
 
-`baleobala` is a CLI and GUI project for Bale sign-in, relay pairing, and secure connection flows.
+`baleobala` is a CLI and GUI project for Bale sign-in, relay pairing, and secure connection flows across Linux, macOS, and Windows development environments.
 
 Production-facing commands are `doctor`, `auth`, `pair`, `relay`, `vpn`, and `gui`.
 Low-level commands such as `loopback`, `tunnel-loopback`, `bale-call`, `bale-tunnel`, and
@@ -34,6 +34,14 @@ Create a virtual environment and install the Bale and GUI dependencies:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -e ".[dev,bale,desktop]"
+```
+
+On Windows PowerShell, the equivalent bootstrap is:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -e ".[dev,bale,desktop]"
 ```
 
@@ -126,6 +134,7 @@ should stay centered on `doctor`, `auth`, `pair`, `vpn`, and `gui`.
 
 - [Getting Started](docs/SETUP.md)
 - [Install and Bootstrap](docs/INSTALL.md)
+- [Windows Development](docs/WINDOWS_DEVELOPMENT.md)
 - [Bale Headless Notes](docs/BALE_HEADLESS.md)
 - [Native macOS Scaffold](native/macos/README.md)
 - [Architecture](docs/ARCHITECTURE.md)

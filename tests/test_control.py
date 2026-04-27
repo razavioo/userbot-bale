@@ -1441,6 +1441,25 @@ def test_default_backends_choose_linux_tun_on_linux(monkeypatch) -> None:
     assert default_vpn_backend() == "linux-tun"
 
 
+def test_default_backends_choose_windows_proxy_on_win32(monkeypatch) -> None:
+    monkeypatch.setattr("sys.platform", "win32")
+    from baleobala.control.backend import default_backend_name
+    from baleobala.control.vpn import default_vpn_backend
+
+    assert default_backend_name() == "windows-proxy"
+    assert default_vpn_backend() == "windows-proxy"
+
+
+def test_windows_app_dir_prefers_appdata(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.delenv("BALEOBALA_HOME", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+
+    from baleobala.control.paths import app_dir
+
+    assert app_dir() == tmp_path / "AppData" / "Roaming" / "baleobala"
+
+
 def test_vpn_profile_roundtrip_includes_peer_fields(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.control import VpnProfile, VpnStore
@@ -1646,6 +1665,55 @@ def test_macos_system_proxy_services_from_env(monkeypatch) -> None:
     assert ("networksetup", "-setwebproxystate", "Wi-Fi", "on") in calls
     assert ("networksetup", "-setwebproxy", "V2BOX", "127.0.0.1", "1080") in calls
     assert ("networksetup", "-setwebproxystate", "V2BOX", "on") in calls
+
+
+def test_windows_system_proxy_session_roundtrip(tmp_path) -> None:
+    from baleobala.control.windows import WindowsSystemProxySession
+
+    outputs = {
+        ("netsh", "winhttp", "show", "proxy"): (
+            "Current WinHTTP proxy settings:\n\n"
+            "    Direct access (no proxy server).\n"
+        ),
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001, ARG001
+        calls.append(tuple(cmd))
+        stdout = outputs.get(tuple(cmd), "")
+        return __import__("subprocess").CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    session = WindowsSystemProxySession(
+        listen_host="127.0.0.1",
+        listen_port=1080,
+        state_path=tmp_path / "windows_system_proxy.json",
+        runner=fake_run,
+    )
+    session.start()
+    assert session.active is True
+    session.stop()
+    assert session.active is False
+
+    assert ("netsh", "winhttp", "set", "proxy", "127.0.0.1:1080", "bypass-list=localhost;127.0.0.1;::1") in calls
+    assert ("netsh", "winhttp", "reset", "proxy") in calls
+
+
+def test_windows_system_proxy_restore_saved_state(tmp_path) -> None:
+    from baleobala.control.windows import WindowsSystemProxySession
+    from baleobala.control.store import JsonStore
+
+    state_file = tmp_path / "windows_system_proxy.json"
+    JsonStore(state_file).save({"mode": "proxy", "server": "10.0.0.5:3128", "bypass": "localhost"})
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001, ARG001
+        calls.append(tuple(cmd))
+        return __import__("subprocess").CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    restored = WindowsSystemProxySession.restore_saved_state(state_path=state_file, runner=fake_run)
+    assert restored is True
+    assert not state_file.exists()
+    assert ("netsh", "winhttp", "set", "proxy", "10.0.0.5:3128", "bypass-list=localhost") in calls
 
 
 def test_macos_system_proxy_privileged_setters_use_osascript(monkeypatch) -> None:

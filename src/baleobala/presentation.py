@@ -269,7 +269,14 @@ def connect_readiness(
 
 def summarize_doctor(checks: list[tuple[str, bool, str]]) -> tuple[str, list[str], str]:
     missing = [name for name, ok, _detail in checks if not ok]
-    critical_names = {"python"} if sys.platform == "darwin" else {"python", "pactl", "sounddevice"}
+    if sys.platform == "darwin":
+        critical_names = {"python"}
+    elif sys.platform.startswith("linux"):
+        critical_names = {"python", "pactl", "sounddevice"}
+    elif sys.platform == "win32":
+        critical_names = {"python", "sounddevice", "powershell"}
+    else:
+        critical_names = {"python", "sounddevice"}
     critical = [name for name in missing if name in critical_names]
     if critical:
         headline = "Setup needs attention before first run."
@@ -340,4 +347,6 @@ def capability_note() -> str:
         return "Platform: macOS uses the desktop app for sign-in/pairing and the native app for system tunnel control."
     if sys.platform.startswith("linux"):
         return "Platform: Linux uses the shared CLI/Qt flow and can run the native Linux TUN path directly."
+    if sys.platform == "win32":
+        return "Platform: Windows uses the shared CLI/Qt flow and the WinHTTP proxy-backed development path."
     return "Platform: unsupported systems can still inspect state, but the full secure-connection path may be limited."

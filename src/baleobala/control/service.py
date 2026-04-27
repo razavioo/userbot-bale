@@ -140,8 +140,8 @@ class ControlService:
             "provisioning_status": pairing.provisioning_status if pairing is not None else "",
         }
 
-        if profile.backend == "direct":
-            gate["title"] = "Direct proxy ready"
+        if profile.backend in {"direct", "windows-proxy"}:
+            gate["title"] = "Direct proxy ready" if profile.backend == "direct" else "Windows proxy ready"
             gate["message"] = "This backend does not require relay provisioning."
             return gate
 

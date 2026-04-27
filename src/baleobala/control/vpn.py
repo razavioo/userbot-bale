@@ -20,6 +20,8 @@ def default_vpn_backend() -> str:
         return "packet-tunnel"
     if sys.platform.startswith("linux"):
         return "linux-tun"
+    if sys.platform == "win32":
+        return "windows-proxy"
     return "proxy"
 
 
