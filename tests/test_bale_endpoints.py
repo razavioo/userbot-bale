@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from baleobala.bale.endpoints import Endpoint, parse_endpoints
+import pytest
+
+from baleobala.bale.endpoints import (
+    ENDPOINTS_HTTPS_URL,
+    ENDPOINTS_URL,
+    Endpoint,
+    fetch_endpoints,
+    parse_endpoints,
+)
 
 
 SAMPLE = """r
@@ -44,3 +52,82 @@ def test_parse_without_trailing_id() -> None:
     endpoints = parse_endpoints(line)
     assert len(endpoints) == 1
     assert endpoints[0].id == 0
+
+
+class _FakeResponse:
+    def __init__(self, body: str) -> None:
+        self._body = body.encode("utf-8")
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def test_fetch_endpoints_uses_primary_bootstrap_response(monkeypatch) -> None:
+    calls: list[tuple[str, float, object]] = []
+    sentinel_context = object()
+
+    def fake_context() -> object:
+        return sentinel_context
+
+    def fake_urlopen(req, timeout: float, context) -> _FakeResponse:
+        calls.append((req.full_url, timeout, context))
+        return _FakeResponse(SAMPLE)
+
+    monkeypatch.setattr("baleobala.bale.endpoints.ssl._create_unverified_context", fake_context)
+    monkeypatch.setattr("baleobala.bale.endpoints.urlopen", fake_urlopen)
+
+    endpoints = fetch_endpoints(timeout=1.25)
+
+    assert endpoints == parse_endpoints(SAMPLE)
+    assert calls == [(ENDPOINTS_URL, 1.25, sentinel_context)]
+
+
+def test_fetch_endpoints_falls_back_after_bootstrap_timeouts(monkeypatch) -> None:
+    attempts: list[str] = []
+
+    def fake_urlopen(req, timeout: float, context) -> _FakeResponse:
+        del timeout, context
+        attempts.append(req.full_url)
+        raise TimeoutError("read timed out")
+
+    monkeypatch.setattr("baleobala.bale.endpoints.urlopen", fake_urlopen)
+
+    endpoints = fetch_endpoints(timeout=0.5)
+
+    assert attempts == [ENDPOINTS_URL, ENDPOINTS_HTTPS_URL]
+    assert len(endpoints) >= 1
+    assert all(item.host.endswith(".bale.ai") for item in endpoints)
+
+
+def test_fetch_endpoints_raises_last_error_when_fallback_disabled(monkeypatch) -> None:
+    def fake_urlopen(req, timeout: float, context) -> _FakeResponse:
+        del req, timeout, context
+        raise TimeoutError("read timed out")
+
+    monkeypatch.setattr("baleobala.bale.endpoints.urlopen", fake_urlopen)
+
+    with pytest.raises(TimeoutError, match="read timed out"):
+        fetch_endpoints(timeout=0.5, allow_fallback=False)
+
+
+def test_fetch_endpoints_falls_back_when_bootstrap_body_is_empty(monkeypatch) -> None:
+    attempts: list[str] = []
+
+    def fake_urlopen(req, timeout: float, context) -> _FakeResponse:
+        del timeout, context
+        attempts.append(req.full_url)
+        return _FakeResponse("r\n\n")
+
+    monkeypatch.setattr("baleobala.bale.endpoints.urlopen", fake_urlopen)
+
+    endpoints = fetch_endpoints()
+
+    assert attempts == [ENDPOINTS_URL, ENDPOINTS_HTTPS_URL]
+    assert len(endpoints) >= 1
+    assert endpoints[0].scheme == "tls"

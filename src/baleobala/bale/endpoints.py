@@ -21,6 +21,7 @@ perform the MTProto-style auth-key handshake.
 
 from __future__ import annotations
 
+import logging
 import re
 import ssl
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from typing import List
 from urllib.request import Request, urlopen
 
 ENDPOINTS_URL = "http://ep.bale.ai/ep/endpoints-android.json"
+ENDPOINTS_HTTPS_URL = "https://ep.bale.ai/ep/endpoints-android.json"
 HASHES_URL = "http://hash.bale.ai/hashes-android.json"
 CONFIG_URL = "https://assets.bale.ai/configs.json"
 
@@ -41,6 +43,18 @@ _ENDPOINT_RE = re.compile(
     r"://(?P<host>[^@]+)@(?P<ip>[^:]+):(?P<port>\d+)"
     r"(?:#(?P<id>\d+))?$"
 )
+
+_BOOTSTRAP_URLS = (ENDPOINTS_URL, ENDPOINTS_HTTPS_URL)
+
+# Last known good bootstrap from a live fetch on 2026-04-19. This keeps the
+# transport stack usable when Bale's bootstrap endpoint times out but the RPC
+# fleet itself is still reachable.
+_FALLBACK_ENDPOINTS_BODY = """r
+tls@6d9ba5c5c665b0a7066682a05329f2a9c4c11aa08c9c548ebd33b9d06bf6e444://rpc-ssl-c002.bale.ai@2.189.68.117:443#1013
+tcp@6d9ba5c5c665b0a7066682a05329f2a9c4c11aa08c9c548ebd33b9d06bf6e444://rpc-c002.bale.ai@2.189.68.106:443#1014
+"""
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -74,13 +88,45 @@ def parse_endpoints(body: str) -> List[Endpoint]:
     return out
 
 
-def fetch_endpoints(timeout: float = 5.0) -> List[Endpoint]:
-    """Fetch and parse the current endpoint list from Bale's bootstrap."""
-    req = Request(ENDPOINTS_URL, headers={"User-Agent": USER_AGENT})
+def _download_bootstrap(url: str, *, timeout: float, context: ssl.SSLContext) -> str:
+    req = Request(url, headers={"User-Agent": USER_AGENT})
     # The bootstrap list is public metadata; trust is enforced later by the
     # MTProto-layer pinning, so we tolerate Bale's HTTPS redirect chain even
     # when the local CA bundle does not validate it cleanly.
+    with urlopen(req, timeout=timeout, context=context) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def fetch_endpoints(timeout: float = 5.0, *, allow_fallback: bool = True) -> List[Endpoint]:
+    """Fetch and parse the current endpoint list from Bale's bootstrap.
+
+    Bale's bootstrap endpoint is occasionally slower than the RPC servers it
+    advertises, so we retry the direct HTTPS form and finally fall back to a
+    bundled last-known-good snapshot unless strict behavior is requested.
+    """
     ctx = ssl._create_unverified_context()
-    with urlopen(req, timeout=timeout, context=ctx) as resp:
-        body = resp.read().decode("utf-8", errors="replace")
-    return parse_endpoints(body)
+    last_error: Exception | None = None
+    for url in _BOOTSTRAP_URLS:
+        try:
+            body = _download_bootstrap(url, timeout=timeout, context=ctx)
+        except OSError as exc:
+            last_error = exc
+            continue
+        endpoints = parse_endpoints(body)
+        if endpoints:
+            return endpoints
+        last_error = RuntimeError(f"Bale endpoint bootstrap from {url} returned no usable entries")
+
+    if allow_fallback:
+        fallback = parse_endpoints(_FALLBACK_ENDPOINTS_BODY)
+        if fallback:
+            if last_error is not None:
+                log.warning(
+                    "Bale endpoint bootstrap unavailable, using bundled fallback: %s",
+                    last_error,
+                )
+            return fallback
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Bale endpoint bootstrap failed without a specific error")
