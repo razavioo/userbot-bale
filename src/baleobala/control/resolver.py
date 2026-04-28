@@ -160,8 +160,12 @@ class LinuxResolver(_BaseResolver):
                 if plan.interface is None:
                     continue
                 result = self._run(["ip", "route", "add", route, "dev", plan.interface])
-                if result.returncode == 0:
-                    applied_routes.append(route)
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"failed to install tunnel route {route} dev {plan.interface}: "
+                        f"{(result.stderr or result.stdout or '').strip() or 'permission denied (need root or CAP_NET_ADMIN)'}"
+                    )
+                applied_routes.append(route)
 
             if plan.dns_servers:
                 if plan.interface and self._has("resolvectl"):
