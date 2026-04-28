@@ -270,6 +270,9 @@ class LinuxTunnelRuntime:
         self._pairing_store = pairing_store
         self._refresh_credentials = refresh_credentials
 
+    def set_tun_session(self, session: LinuxTunSession) -> None:
+        self._session = session
+
     def refresh_pairing_credentials(self, profile_id: str):  # noqa: ANN001
         if self._refresh_credentials is None:
             raise RuntimeError("credential refresh callback is not configured")
@@ -487,6 +490,7 @@ class LinuxTunBackend:
         self._state_store = JsonStore(state_path or (config_dir() / "linux_backend.json"))
         self._runtime_store = JsonStore(runtime_state_path or (config_dir() / "linux_runtime.json"))
         self._runtime = runtime or LinuxTunnelRuntime(self._runtime_store)
+        self._runtime.set_tun_session(self._session)
         self._profile_id: str | None = None
         self._pairing_id: str | None = None
         self._pairing_store = None
@@ -556,7 +560,10 @@ class LinuxTunBackend:
         ).to_dict()
         payload["profile_id"] = profile.profile_id
         payload["pairing_id"] = profile.pairing_id or ""
-        payload.update(session)
+        payload["active"] = session["active"]
+        payload["tun"] = session["tun"]
+        payload["address"] = session["address"]
+        payload["mtu"] = session["mtu"]
         for key in (
             "transport_selected",
             "transport_previous",
