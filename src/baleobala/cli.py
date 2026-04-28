@@ -619,6 +619,7 @@ def _tunnel_namespace_from_profile(profile, auth_record):
 
 def _hold_backend(endpoint: str, *, label: str) -> int:
     print(f"{label}: {endpoint}", file=sys.stderr)
+    print("vpn up is running in the foreground; press Ctrl-C or run `baleobala vpn down` from another shell to stop it.", file=sys.stderr)
     try:
         while True:
             time.sleep(1.0)
@@ -1318,11 +1319,25 @@ def cmd_vpn(args: argparse.Namespace) -> int:
 
         pairing = pairing_store.connectable(profile.pairing_id) or pairing_store.active()
         backend = backend_for_profile(profile)
+        backend_status = backend.status()
+        if (
+            backend_status.get("state") == "running"
+            and backend_status.get("call_established") == "yes"
+            and backend_status.get("recovery_state") != "failed"
+        ):
+            endpoint = backend_status.get("endpoint", "vpn0")
+            print(f"linux-tun backend already running on {endpoint}")
+            return 0
         tunnel_args = _tunnel_namespace_from_profile(profile, auth_record)
+        print("linux-tun: preparing interface and routes", file=sys.stderr, flush=True)
         backend_state = _backend_up(backend, profile, auth_record, pairing)
         try:
             # Compatibility path: older/fake backends used in tests don't own
             # the runtime lifecycle and only report generic running state.
+            if backend_state.get("active") == "yes":
+                endpoint = backend_state.get("endpoint") or backend_state.get("tun", "vpn0")
+                print("linux-tun: carrier negotiation running in background", file=sys.stderr, flush=True)
+                return _hold_backend(endpoint, label="linux-tun backend active")
             if not backend_state.get("endpoint") or backend_state.get("call_established", "") == "":
                 if profile.role == "relay":
                     _run_nat_setup(tunnel_args.tun, tunnel_args.wan)
