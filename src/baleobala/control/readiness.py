@@ -250,6 +250,58 @@ class BackendReadiness:
         )
 
     @classmethod
+    def for_android_vpn(
+        cls,
+        *,
+        state: str,
+        endpoint: str | None,
+        profile_id: str | None,
+        pairing_id: str | None,
+        runtime_active: bool,
+        call_established: str = "no",
+        data_flow_ok: str = "no",
+        route_ready: str = "no",
+        dns_ready: str = "no",
+        transport_selected: str = "",
+        recovery_state: str = "",
+        transport_previous: str = "",
+        failover_count: str = "0",
+        recovering_since: str = "",
+        carrier_session_id: str = "",
+        peer_coordination: str = "",
+        last_error: str = "",
+    ) -> "BackendReadiness":
+        return cls(
+            backend="android-vpn",
+            state=state,
+            control_ready=_yn(state == "running"),
+            transport_ready=_yn(runtime_active),
+            route_ready=route_ready,
+            dns_ready=dns_ready,
+            call_established=call_established,
+            data_flow_ok=data_flow_ok,
+            recovery_state=recovery_state,
+            transport_previous=transport_previous,
+            failover_count=failover_count,
+            recovering_since=recovering_since,
+            carrier_session_id=carrier_session_id,
+            peer_coordination=peer_coordination,
+            teardown_clean=_yn(state != "running" or runtime_active),
+            last_error=last_error,
+            endpoint=endpoint,
+            details={
+                "profile_id": profile_id or "",
+                "pairing_id": pairing_id or "",
+                "mode": "native",
+                "policy": "vpn-service",
+                "transport_selected": transport_selected,
+                "transport_previous": transport_previous,
+                "failover_count": failover_count,
+                "peer_coordination": peer_coordination,
+            },
+        )
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BackendReadiness":
         details = {
             str(k): str(v)

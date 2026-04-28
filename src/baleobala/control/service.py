@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 import time
 from typing import Callable
 
+import baleobala.control.android as android
 from baleobala.control.auth import AuthRecord, AuthStore
 from baleobala.control.backend import VpnBackend, backend_for_profile
 import baleobala.control.macos as macos
@@ -288,7 +289,7 @@ class ControlService:
             return
         if profile.backend == "linux-tun" and hasattr(backend, "set_credential_refresh_context"):
             return
-        if profile.backend != "packet-tunnel":
+        if profile.backend not in {"packet-tunnel", "android-vpn"}:
             return
         self._stop_credential_watcher()
         self._credential_watcher = CredentialWatcher(
@@ -750,6 +751,11 @@ class ControlService:
             tunnel_config = macos.packet_tunnel_configuration(profile, pairing)
             if not macos.tunnel_profile_installed(tunnel_config):
                 macos.install_tunnel_profile(tunnel_config)
+        if profile.backend == "android-vpn":
+            profile = self._profile_with_pairing_secret(profile, pairing)
+            tunnel_config = android.vpn_service_configuration(profile, pairing)
+            if not android.vpn_profile_installed(tunnel_config):
+                android.install_vpn_profile(tunnel_config)
         auth = self.load_auth()
         backend = self.backend(profile)
         if hasattr(backend, "set_credential_refresh_context"):
