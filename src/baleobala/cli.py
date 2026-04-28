@@ -1131,7 +1131,26 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     if args.vpn_cmd == "down":
         profile = vpn_store.load() or vpn_store.ensure_default()
         backend = backend_for_profile(profile)
-        backend.down()
+        try:
+            backend.down()
+        finally:
+            try:
+                control_service.stop_connection(profile.profile_id)
+            except Exception:
+                pass
+            # Best-effort cleanup for a foreground vpn up that was
+            # interrupted before it could persist state.
+            import subprocess
+
+            try:
+                subprocess.run(
+                    ["pkill", "-f", r"\.venv/bin/baleobala vpn up"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception:
+                pass
         if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
             from baleobala.control.macos import MacOSSystemProxySession
             restored = MacOSSystemProxySession.restore_saved_state()
@@ -1146,7 +1165,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         if is_android_runtime() and profile.backend == "android-vpn":
             print("stopped Android VPN backend")
             return 0
-        print("vpn down: stop the foreground session with Ctrl-C if it is running, and clear saved runtime state.")
+        print("stopped linux-tun backend and cleared saved runtime state")
         return 0
 
     profile = vpn_store.load()
