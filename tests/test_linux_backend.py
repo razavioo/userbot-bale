@@ -86,6 +86,7 @@ def test_linux_tun_session_creates_and_teardown(tmp_path: Path) -> None:
         state_path=tmp_path / "s.json",
         runner=runner,
         resolver=LinuxResolver(state_path=tmp_path / "r.json", runner=runner),
+        tun_opener=lambda name: object(),
     )
     session.start()
     assert session.active
@@ -121,6 +122,7 @@ def test_linux_tun_backend_up_down(tmp_path: Path) -> None:
         state_path=tmp_path / "s.json",
         runner=runner,
         resolver=NullResolver(),
+        tun_opener=lambda name: object(),
     )
     backend = LinuxTunBackend(session=session, state_path=tmp_path / "b.json")
     profile = VpnProfile(profile_id="p", name="p", backend="linux-tun")
@@ -140,6 +142,7 @@ def test_linux_tun_backend_merges_recovery_runtime_fields(tmp_path: Path) -> Non
         state_path=tmp_path / "s.json",
         runner=runner,
         resolver=NullResolver(),
+        tun_opener=lambda name: object(),
     )
     backend = LinuxTunBackend(
         session=session,

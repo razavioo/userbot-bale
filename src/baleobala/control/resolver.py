@@ -97,6 +97,12 @@ class NullResolver:
     def active(self) -> bool:
         return self._applied
 
+    def add_bypass_host(self, hostname: str) -> None:  # noqa: ARG002
+        self._applied = True
+
+    def remove_bypass_host(self, hostname: str) -> None:  # noqa: ARG002
+        self._applied = False
+
 
 class _BaseResolver:
     def __init__(
@@ -227,12 +233,11 @@ class LinuxResolver(_BaseResolver):
         if not ips:
             raise RuntimeError(f"could not resolve bypass host {hostname!r}")
         gateway, gateway_iface = self._ensure_default_route()
-        if gateway is None:
-            raise RuntimeError("could not determine real gateway for bypass host-route")
         stored = dict(snap.bypass_hosts)
         if stored.get(hostname) == ips and snap.applied:
             return
-        self._program_bypass_routes(ips, gateway, gateway_iface)
+        if gateway is not None:
+            self._program_bypass_routes(ips, gateway, gateway_iface)
         # Pin name->IP in /etc/hosts so getaddrinfo doesn't need to traverse
         # the (now hijacked) tunnel DNS to resolve the bypass host.
         self._pin_etc_hosts(hostname, ips)
