@@ -93,6 +93,7 @@ class LinuxTunSession:
         self._resolver = resolver if resolver is not None else LinuxResolver()
         self._snapshot = _LinuxSnapshot()
         self._atexit_registered = False
+        self._tun = None
 
     @property
     def active(self) -> bool:
@@ -101,50 +102,72 @@ class LinuxTunSession:
     def start(self) -> None:
         if self._snapshot.active:
             return
-        name = self.plan.name
-        created = False
-        if not self._device_exists(name):
-            result = self._run(
-                ["ip", "tuntap", "add", "dev", name, "mode", "tun", "user", os.environ.get("USER", "")]
-            )
-            if result.returncode != 0:
-                raise PermissionError(
-                    f"TUN device {name!r} does not exist and `ip tuntap add` failed: "
-                    f"{result.stderr.strip() or 'insufficient privileges'}"
+        from baleobala.vpn.tun import TunDevice
+
+        user = os.environ.get("USER", "")
+        last_error: Exception | None = None
+        for name in self._candidate_names(self.plan.name):
+            created = False
+            try:
+                if not self._device_exists(name):
+                    result = self._run(
+                        ["ip", "tuntap", "add", "dev", name, "mode", "tun", "user", user]
+                    )
+                    if result.returncode != 0:
+                        raise PermissionError(
+                            f"TUN device {name!r} does not exist and `ip tuntap add` failed: "
+                            f"{result.stderr.strip() or 'insufficient privileges'}"
+                        )
+                    created = True
+
+                prior_addrs = self._addrs(name)
+                prior_up = self._link_is_up(name)
+
+                self._run(["ip", "addr", "add", self.plan.address, "dev", name], check=False)
+                self._run(["ip", "link", "set", name, "mtu", str(self.plan.mtu)], check=False)
+                self._run(["ip", "link", "set", name, "up"], check=False)
+                self._tun = TunDevice.open(name)
+
+                try:
+                    self._resolver.configure(
+                        RoutePlan(
+                            dns_servers=self.plan.dns_servers,
+                            routes=self.plan.routes,
+                            interface=name,
+                        )
+                    )
+                except Exception:
+                    self._teardown_link(name, created, prior_addrs, prior_up)
+                    raise
+
+                self._snapshot = _LinuxSnapshot(
+                    active=True,
+                    tun_name=name,
+                    created_device=created,
+                    prior_addrs=prior_addrs,
+                    prior_link_up=prior_up,
                 )
-            created = True
+                self._state_store.save(self._snapshot.to_dict())
 
-        prior_addrs = self._addrs(name)
-        prior_up = self._link_is_up(name)
+                if not self._atexit_registered:
+                    atexit.register(self.stop)
+                    self._atexit_registered = True
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if self._tun is not None:
+                    try:
+                        self._tun.close()
+                    except Exception:
+                        pass
+                    self._tun = None
+                if created:
+                    self._teardown_link(name, created, (), False)
+                continue
 
-        self._run(["ip", "addr", "add", self.plan.address, "dev", name], check=False)
-        self._run(["ip", "link", "set", name, "mtu", str(self.plan.mtu)], check=False)
-        self._run(["ip", "link", "set", name, "up"], check=False)
-
-        try:
-            self._resolver.configure(
-                RoutePlan(
-                    dns_servers=self.plan.dns_servers,
-                    routes=self.plan.routes,
-                    interface=name,
-                )
-            )
-        except Exception:
-            self._teardown_link(name, created, prior_addrs, prior_up)
-            raise
-
-        self._snapshot = _LinuxSnapshot(
-            active=True,
-            tun_name=name,
-            created_device=created,
-            prior_addrs=prior_addrs,
-            prior_link_up=prior_up,
-        )
-        self._state_store.save(self._snapshot.to_dict())
-
-        if not self._atexit_registered:
-            atexit.register(self.stop)
-            self._atexit_registered = True
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("no usable Linux TUN interface name was available")
 
     def stop(self) -> None:
         if not self._snapshot.active:
@@ -153,6 +176,12 @@ class LinuxTunSession:
             self._resolver.restore()
         except Exception:
             pass
+        if self._tun is not None:
+            try:
+                self._tun.close()
+            except Exception:
+                pass
+            self._tun = None
         snap = self._snapshot
         name = snap.tun_name or self.plan.name
         self._teardown_link(name, snap.created_device, snap.prior_addrs, snap.prior_link_up)
@@ -170,6 +199,15 @@ class LinuxTunSession:
             "mtu": str(self.plan.mtu),
             "state": "running" if self._snapshot.active else "stopped",
         }
+
+    def tun(self):
+        return self._tun
+
+    def _candidate_names(self, preferred: str) -> tuple[str, ...]:
+        names = [preferred]
+        if preferred == "vpn0":
+            names.extend(f"vpn{i}" for i in range(1, 6))
+        return tuple(dict.fromkeys(names))
 
     def _teardown_link(
         self,
@@ -248,7 +286,6 @@ class LinuxTunnelRuntime:
         from baleobala.vpn.keepalive import LiveKitKeepalive
         from baleobala.vpn.router import FailoverController
         from baleobala.vpn.runner import RunnerConfig, VpnRunner
-        from baleobala.vpn.tun import TunDevice
         from baleobala.bale import LiveKitSession
         from baleobala.control.credential_watcher import CredentialWatcher
         from baleobala.control.resolver import LinuxResolver
@@ -278,7 +315,11 @@ class LinuxTunnelRuntime:
             volume=profile.volume,
         )
 
-        tun = TunDevice.open(args.tun)
+        tun = self._session.tun()
+        if tun is None:
+            raise RuntimeError("linux-tun session did not expose an open TUN device")
+        session_status = self._session.status()
+        args.tun = session_status.get("tun", args.tun)
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         session.start()
@@ -331,7 +372,7 @@ class LinuxTunnelRuntime:
         self._credential_watcher = credential_watcher
         self._active = True
         payload = {
-            "endpoint": args.tun,
+            "endpoint": session_status.get("tun", args.tun),
             "transport_selected": transport_name,
             "call_established": "yes",
             "data_flow_ok": "yes",

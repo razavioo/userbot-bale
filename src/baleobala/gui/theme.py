@@ -88,10 +88,8 @@ def stylesheet(theme: Theme) -> str:
     font-size: {theme.base_font_px}px;
 }}
 
-QMainWindow, QWidget#container, QScrollArea, QAbstractScrollArea {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 palette(window),
-        stop:1 palette(alternate-base));
+QMainWindow, QWidget#container, LoginView, ConnectView, QScrollArea, QAbstractScrollArea {{
+    background-color: #f4f8f7;
 }}
 
 QScrollArea {{
@@ -99,7 +97,7 @@ QScrollArea {{
 }}
 
 QScrollArea > QWidget > QWidget {{
-    background: transparent;
+    background-color: #f4f8f7;
 }}
 
 QWidget#card, QGroupBox, QFrame#banner-info, QFrame#banner-ok, QFrame#banner-err, QFrame#accent-panel, QFrame#hero-panel {{

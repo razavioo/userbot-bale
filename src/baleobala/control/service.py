@@ -738,6 +738,10 @@ class ControlService:
         if sys.platform.startswith("linux") and profile.backend == "linux-tun" and pairing is not None:
             profile = replace(profile, backend="linux-tun")
         gate = self._connection_gate(profile, pairing, auth_status=auth_status)
+        if gate["code"] == "credentials_expired" and pairing is not None:
+            pairing = self.refresh_pairing_credentials(pairing.profile_id)
+            profile = self.resolve_profile(pairing.profile_id)
+            gate = self._connection_gate(profile, pairing, auth_status=auth_status)
         if gate["state"] == "blocked":
             raise RuntimeError(gate["message"])
 

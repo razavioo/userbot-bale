@@ -388,6 +388,8 @@ class LoginView(QWidget):
         self._validate_worker: Optional[ValidateCodeWorker] = None
         self._auth_handle = None
         self._stage = "phone"
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("background-color: #f4f8f7; color: #10211f;")
 
         card = QWidget(objectName="card")
         card.setMaximumWidth(520)
@@ -544,6 +546,8 @@ class ConnectView(QWidget):
         self._worker_thread: Optional[QThread] = None
         self._phase = "idle"
         self._logs_open = False
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("background-color: #f4f8f7; color: #10211f;")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
@@ -1087,7 +1091,7 @@ class MainWindow(QMainWindow):
         self.resize(960, 820)
         self.setMinimumSize(860, 680)
         self.setAutoFillBackground(True)
-        self.setStyleSheet("QMainWindow { background: #f4f8f7; }")
+        self.setStyleSheet("QMainWindow { background: #f4f8f7; color: #10211f; }")
 
         self._service = ControlService()
         self.jwt: Optional[str] = None
@@ -1098,11 +1102,13 @@ class MainWindow(QMainWindow):
 
         content = QWidget(objectName="container")
         content.setAutoFillBackground(True)
-        content.setStyleSheet("background: #f4f8f7;")
+        content.setStyleSheet("background-color: #f4f8f7;")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         self.login_view = LoginView(self)
         self.connect_view = ConnectView(self)
+        self.login_view.setStyleSheet(self.login_view.styleSheet() + " QWidget { background-color: #f4f8f7; color: #10211f; }")
+        self.connect_view.setStyleSheet(self.connect_view.styleSheet() + " QWidget { background-color: #f4f8f7; color: #10211f; }")
         layout.addWidget(self.login_view)
         layout.addWidget(self.connect_view)
         self.setCentralWidget(content)
