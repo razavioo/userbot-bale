@@ -328,7 +328,7 @@ class LinuxTunnelRuntime:
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         session.start()
         carrier_resolver = LinuxResolver()
-        carrier_hosts = tuple(sorted(session.carrier_hosts()))
+        carrier_hosts = tuple(sorted(session.carrier_hosts))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
         keepalive = LiveKitKeepalive(session, interval=20.0)
@@ -442,7 +442,7 @@ class LinuxTunnelRuntime:
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         session.start()
         carrier_resolver = LinuxResolver()
-        carrier_hosts = tuple(sorted(session.carrier_hosts()))
+        carrier_hosts = tuple(sorted(session.carrier_hosts))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
         keepalive = LiveKitKeepalive(session, interval=20.0)
@@ -532,7 +532,7 @@ class LinuxTunBackend:
                 self.update_runtime_status(
                     call_established="no",
                     data_flow_ok="no",
-                    last_error=str(exc),
+                    last_error=f"{type(exc).__name__}: {exc}",
                     transport_selected="",
                     recovery_state="failed",
                 )
