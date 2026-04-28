@@ -140,7 +140,11 @@ class LinuxResolver(_BaseResolver):
     _state_name = "linux_resolver.json"
 
     def configure(self, plan: RoutePlan) -> None:
-        if self._snapshot.applied:
+        # Allow configure() to run even when applied=True, as long as we
+        # haven't yet installed any tunnel routes — that lets callers
+        # pre-program bypass hosts before the split-default routes capture
+        # DNS, and still come back to install routes/DNS afterwards.
+        if self._snapshot.applied and self._snapshot.routes:
             return
         snap = ResolverSnapshot(
             interface=plan.interface,
@@ -197,6 +201,7 @@ class LinuxResolver(_BaseResolver):
         snap = self._snapshot
         for host, ips in snap.bypass_hosts.items():
             self._remove_bypass_routes(ips, snap.default_gateway, snap.default_gateway_iface)
+            self._unpin_etc_hosts(host)
         for route in snap.routes:
             if snap.interface:
                 self._run(["ip", "route", "del", route, "dev", snap.interface])
@@ -228,6 +233,9 @@ class LinuxResolver(_BaseResolver):
         if stored.get(hostname) == ips and snap.applied:
             return
         self._program_bypass_routes(ips, gateway, gateway_iface)
+        # Pin name->IP in /etc/hosts so getaddrinfo doesn't need to traverse
+        # the (now hijacked) tunnel DNS to resolve the bypass host.
+        self._pin_etc_hosts(hostname, ips)
         stored[hostname] = ips
         self._snapshot = ResolverSnapshot(
             applied=True,
@@ -255,6 +263,7 @@ class LinuxResolver(_BaseResolver):
         if gateway is None:
             gateway, gateway_iface = self._discover_default_route()
         self._remove_bypass_routes(ips, gateway, gateway_iface)
+        self._unpin_etc_hosts(hostname)
         if stored:
             self._snapshot = ResolverSnapshot(
                 applied=True,
@@ -285,6 +294,38 @@ class LinuxResolver(_BaseResolver):
                 self._persist()
             else:
                 self._clear_state()
+
+    _ETC_HOSTS_TAG = "# baleobala-bypass"
+
+    def _pin_etc_hosts(self, hostname: str, ips: tuple[str, ...]) -> None:
+        path = Path("/etc/hosts")
+        try:
+            current = path.read_text().splitlines()
+        except OSError:
+            return
+        marker = f"{self._ETC_HOSTS_TAG} {hostname}"
+        kept = [line for line in current if not line.endswith(marker)]
+        for ip in ips:
+            kept.append(f"{ip} {hostname} {marker}")
+        try:
+            path.write_text("\n".join(kept) + "\n")
+        except OSError:
+            pass
+
+    def _unpin_etc_hosts(self, hostname: str) -> None:
+        path = Path("/etc/hosts")
+        try:
+            current = path.read_text().splitlines()
+        except OSError:
+            return
+        marker = f"{self._ETC_HOSTS_TAG} {hostname}"
+        kept = [line for line in current if not line.endswith(marker)]
+        if len(kept) == len(current):
+            return
+        try:
+            path.write_text("\n".join(kept) + "\n")
+        except OSError:
+            pass
 
     def _has(self, tool: str) -> bool:
         result = self._run(["which", tool])
