@@ -37,8 +37,15 @@ class TunPlan:
     name: str = "vpn0"
     address: str = "10.77.0.2/24"
     mtu: int = 1400
-    routes: tuple[str, ...] = ("0.0.0.0/1", "128.0.0.0/1")
-    dns_servers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9")
+    # Default to NOT capturing the system default route. Installing
+    # 0.0.0.0/1 + 128.0.0.0/1 before the carrier is verified causes the
+    # user to lose internet connectivity if the data plane fails. The
+    # tunnel is reachable on its /24 link route regardless, so ping/probe
+    # tests still validate the carrier. A separate, explicit step (or a
+    # caller passing routes=("0.0.0.0/1","128.0.0.0/1")) is needed to
+    # promote this into a full-system VPN.
+    routes: tuple[str, ...] = ()
+    dns_servers: tuple[str, ...] = ()
 
 
 @dataclass
@@ -129,6 +136,24 @@ class LinuxTunSession:
                 self._tun = TunDevice.open(name)
 
                 try:
+                    # Pre-install the carrier bypass while system DNS still
+                    # works — once configure() installs split-default routes
+                    # and rewrites DNS to 1.1.1.1/9.9.9.9 over vpn0, any
+                    # subsequent hostname resolution would be black-holed.
+                    self._resolver.add_bypass_host("next-ws.bale.ai")
+                    # Bypass the configured tunnel DNS servers and the
+                    # system resolver's current upstreams so name resolution
+                    # keeps working after the tunnel captures default
+                    # routes. Without this, the LiveKit signaling URL
+                    # (resolved by the runtime thread *after* configure())
+                    # cannot be looked up.
+                    for dns_ip in self.plan.dns_servers:
+                        self._resolver.add_bypass_host(dns_ip)
+                    for dns_ip in self._current_system_dns():
+                        try:
+                            self._resolver.add_bypass_host(dns_ip)
+                        except Exception:
+                            pass
                     self._resolver.configure(
                         RoutePlan(
                             dns_servers=self.plan.dns_servers,
@@ -136,7 +161,19 @@ class LinuxTunSession:
                             interface=name,
                         )
                     )
+                    # The carrier transport (Bale call WebRTC/LiveKit
+                    # DataChannel) runs in this same process as root. If we
+                    # capture the default route, the carrier media gets
+                    # looped back into the tunnel it is supposed to power.
+                    # The uid-based bypass rule is only meaningful when we
+                    # have actually installed split-default routes.
+                    if self.plan.routes:
+                        self._add_uid_bypass_rule()
                 except Exception:
+                    try:
+                        self._resolver.restore()
+                    except Exception:
+                        pass
                     self._teardown_link(name, created, prior_addrs, prior_up)
                     raise
 
@@ -172,6 +209,7 @@ class LinuxTunSession:
     def stop(self) -> None:
         if not self._snapshot.active:
             return
+        self._remove_uid_bypass_rule()
         try:
             self._resolver.restore()
         except Exception:
@@ -202,6 +240,46 @@ class LinuxTunSession:
 
     def tun(self):
         return self._tun
+
+    _UID_RULE_PREF = "100"
+
+    def _add_uid_bypass_rule(self) -> None:
+        if os.geteuid() != 0:
+            return
+        # idempotent: clean any prior leftover at this preference, then add
+        self._run(["ip", "rule", "del", "pref", self._UID_RULE_PREF], check=False)
+        self._run(
+            ["ip", "rule", "add", "uidrange", "0-0", "lookup", "main", "pref", self._UID_RULE_PREF],
+            check=False,
+        )
+
+    def _remove_uid_bypass_rule(self) -> None:
+        if os.geteuid() != 0:
+            return
+        # remove until none remain at this preference
+        for _ in range(4):
+            result = self._run(
+                ["ip", "rule", "del", "pref", self._UID_RULE_PREF], check=False
+            )
+            if result.returncode != 0:
+                return
+
+    def _current_system_dns(self) -> tuple[str, ...]:
+        try:
+            result = subprocess.run(
+                ["resolvectl", "status"], capture_output=True, text=True, check=False
+            )
+        except FileNotFoundError:
+            return ()
+        ips: list[str] = []
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("DNS Servers:") or stripped.startswith("Current DNS Server:"):
+                _, _, rhs = stripped.partition(":")
+                for tok in rhs.split():
+                    if tok and tok not in ips and not tok.startswith("127."):
+                        ips.append(tok)
+        return tuple(ips)
 
     def _candidate_names(self, preferred: str) -> tuple[str, ...]:
         names = [preferred]
@@ -310,7 +388,7 @@ class LinuxTunnelRuntime:
             tun="vpn0",
             tun_addr="10.77.0.1/24" if profile.role == "relay" else "10.77.0.2/24",
             tun_mtu=1400,
-            transport="auto",
+            transport="dc",
             sess_id=0x1111,
             psk=None,
             psk_file=None,
@@ -326,11 +404,11 @@ class LinuxTunnelRuntime:
         args.tun = session_status.get("tun", args.tun)
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
-        session.start()
         carrier_resolver = LinuxResolver()
         carrier_hosts = tuple(sorted(session.carrier_hosts))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
+        session.start()
         keepalive = LiveKitKeepalive(session, interval=20.0)
         keepalive.start()
         credential_watcher = None
@@ -440,11 +518,11 @@ class LinuxTunnelRuntime:
 
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
-        session.start()
         carrier_resolver = LinuxResolver()
         carrier_hosts = tuple(sorted(session.carrier_hosts))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
+        session.start()
         keepalive = LiveKitKeepalive(session, interval=20.0)
         keepalive.start()
         chain = _build_transport_chain(args.transport, session, args)
