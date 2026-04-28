@@ -627,6 +627,28 @@ def _hold_backend(endpoint: str, *, label: str) -> int:
         return 0
 
 
+def _wait_linux_runtime_ready(timeout: float = 45.0) -> tuple[bool, str]:
+    from baleobala.control.paths import config_dir
+
+    path = config_dir() / "linux_runtime.json"
+    deadline = time.monotonic() + timeout
+    last = {}
+    while time.monotonic() < deadline:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                last = payload
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            last = {}
+        if str(last.get("call_established", "")).lower() == "yes":
+            return True, ""
+        if str(last.get("recovery_state", "")).lower() == "failed":
+            return False, str(last.get("last_error", "linux runtime failed"))
+        time.sleep(0.5)
+    detail = str(last.get("last_error") or "carrier negotiation did not complete")
+    return False, detail
+
+
 def _print_health_block(fields: dict[str, str]) -> None:
     labels = [
         ("route_ready", "route"),
@@ -1141,15 +1163,25 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                 pass
             # Best-effort cleanup for a foreground vpn up that was
             # interrupted before it could persist state.
-            import subprocess
-
             try:
-                subprocess.run(
-                    ["pkill", "-f", r"\.venv/bin/baleobala vpn up"],
+                current = os.getpid()
+                parent = os.getppid()
+                result = subprocess.run(
+                    ["ps", "-eo", "pid=,args="],
                     check=False,
                     capture_output=True,
                     text=True,
                 )
+                for line in result.stdout.splitlines():
+                    parts = line.strip().split(maxsplit=1)
+                    if len(parts) != 2:
+                        continue
+                    pid = int(parts[0])
+                    cmdline = parts[1]
+                    if pid in {current, parent}:
+                        continue
+                    if "baleobala vpn up" in cmdline and "python" in cmdline:
+                        os.kill(pid, 15)
             except Exception:
                 pass
         if sys.platform == "darwin" and profile.backend in {"proxy", "direct"}:
@@ -1304,6 +1336,14 @@ def cmd_vpn(args: argparse.Namespace) -> int:
         pairing = pairing_store.get(profile.pairing_id)
         if pairing is not None and getattr(pairing, "relay_id", ""):
             profile = control_service.resolve_profile(profile.pairing_id)
+            pairing = pairing_store.get(profile.pairing_id)
+            if (
+                pairing is not None
+                and pairing.credential_expires_at is not None
+                and pairing.credential_expires_at <= time.time()
+            ):
+                pairing = control_service.refresh_pairing_credentials(pairing.profile_id)
+                profile = control_service.resolve_profile(pairing.profile_id)
         elif pairing is not None and pairing.status != "paired":
             raise SystemExit(
                 "pairing is not ready. Run `baleobala pair request-access --profile-id "
@@ -1337,6 +1377,10 @@ def cmd_vpn(args: argparse.Namespace) -> int:
             if backend_state.get("active") == "yes":
                 endpoint = backend_state.get("endpoint") or backend_state.get("tun", "vpn0")
                 print("linux-tun: carrier negotiation running in background", file=sys.stderr, flush=True)
+                ok, detail = _wait_linux_runtime_ready()
+                if not ok:
+                    print(f"linux-tun: carrier negotiation failed: {detail}", file=sys.stderr)
+                    return 2
                 return _hold_backend(endpoint, label="linux-tun backend active")
             if not backend_state.get("endpoint") or backend_state.get("call_established", "") == "":
                 if profile.role == "relay":
@@ -1346,6 +1390,10 @@ def cmd_vpn(args: argparse.Namespace) -> int:
                     is_exit_node=profile.role == "relay",
                 )
             endpoint = backend_state.get("endpoint", "vpn0")
+            ok, detail = _wait_linux_runtime_ready()
+            if not ok:
+                print(f"linux-tun: carrier negotiation failed: {detail}", file=sys.stderr)
+                return 2
             return _hold_backend(endpoint, label="linux-tun backend active")
         finally:
             backend.down()
@@ -1536,7 +1584,10 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
             peer_id = controller.resolve_peer(args.peer)
             print(f"[bale-call] resolved {args.peer} -> user_id {peer_id}", file=sys.stderr)
         if peer_id is not None:
-            return controller.dial(peer_id=peer_id)
+            return controller.dial(
+                peer_id=peer_id,
+                creds_timeout=float(getattr(args, "creds_timeout", 45.0)),
+            )
         if args.answer:
             print(
                 "[bale-call] listening for incoming call. Ask the caller to ring you now. (Ctrl-C to abort.)",

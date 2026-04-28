@@ -305,6 +305,7 @@ class LinuxTunnelRuntime:
             peer_name=profile.peer_name,
             answer=profile.answer,
             answer_timeout=120.0,
+            creds_timeout=45.0,
             identity=profile.name,
             tun="vpn0",
             tun_addr="10.77.0.1/24" if profile.role == "relay" else "10.77.0.2/24",
