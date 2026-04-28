@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import time
+import sys
 from typing import Callable
 
 import baleobala.control.android as android
@@ -683,10 +684,13 @@ class ControlService:
             pairing = self.pairing_store.connectable()
         if pairing is None:
             return profile
+        backend = pairing.backend_preference or profile.backend
+        if sys.platform.startswith("linux") and profile.backend == "linux-tun":
+            backend = "linux-tun"
         resolved = VpnProfile(
             profile_id=pairing.profile_id,
             name=pairing.name,
-            backend=pairing.backend_preference or profile.backend,
+            backend=backend,
             role=pairing.role,
             pairing_id=pairing.profile_id,
             peer_id=pairing.peer_id,
@@ -731,6 +735,8 @@ class ControlService:
         profile = self._runtime_profile(profile_id)
         auth_status = self.auth_store.status()
         pairing = self._pairing_for_profile(profile)
+        if sys.platform.startswith("linux") and profile.backend == "linux-tun" and pairing is not None:
+            profile = replace(profile, backend="linux-tun")
         gate = self._connection_gate(profile, pairing, auth_status=auth_status)
         if gate["state"] == "blocked":
             raise RuntimeError(gate["message"])

@@ -460,20 +460,43 @@ class LinuxTunBackend:
         self._session.start()
         self._profile_id = profile.profile_id
         self._pairing_id = profile.pairing_id
-        if auth_record is not None and (pairing is not None or profile.peer_id is not None):
+        session = self._session.status()
+        self._state_store.save(
+            BackendReadiness.for_linux_tun(
+                state="starting",
+                session_active=True,
+                tun=session["tun"],
+                address=session["address"],
+                mtu=session["mtu"],
+                call_established="no",
+                data_flow_ok="no",
+                transport_selected="",
+                recovery_state="starting",
+                endpoint=None,
+                last_error="",
+            ).to_dict()
+        )
+
+        def _start_runtime() -> None:
+            if auth_record is None or (pairing is None and profile.peer_id is None):
+                return
             try:
                 self._runtime.start(profile, auth_record)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self.update_runtime_status(
                     call_established="no",
                     data_flow_ok="no",
                     last_error=str(exc),
                     transport_selected="",
+                    recovery_state="failed",
                 )
-        session = self._session.status()
+
+        if auth_record is not None and (pairing is not None or profile.peer_id is not None):
+            threading.Thread(target=_start_runtime, name="linux-tun-runtime", daemon=True).start()
+
         runtime = self._runtime_status()
         payload = BackendReadiness.for_linux_tun(
-            state="running",
+            state="starting" if self._session.active else "stopped",
             session_active=self._session.active,
             tun=session["tun"],
             address=session["address"],
