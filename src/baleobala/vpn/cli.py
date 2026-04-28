@@ -329,14 +329,34 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
 
     from .runner import RunnerConfig, VpnRunner, prompt_tun_setup_hint, wait_for_signal
     from .tun import TunDevice
+    import errno
+
+    def _open_tun_with_fallback(preferred: str):
+        names = [preferred]
+        if preferred == "vpn0":
+            names.extend(f"vpn{i}" for i in range(1, 6))
+        last_exc: Exception | None = None
+        for name in dict.fromkeys(names):
+            try:
+                return TunDevice.open(name)
+            except OSError as exc:
+                last_exc = exc
+                if exc.errno != errno.EBUSY:
+                    continue
+            except PermissionError as exc:
+                last_exc = exc
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("no usable Linux TUN interface name was available")
 
     # 1. Open the TUN device (fail fast with a setup hint).
     try:
-        tun = TunDevice.open(args.tun)
+        tun = _open_tun_with_fallback(args.tun)
     except (PermissionError, RuntimeError, OSError) as e:
         print(f"[tunnel] cannot open TUN {args.tun}: {e}", file=sys.stderr)
         prompt_tun_setup_hint(args.tun, args.tun_addr, args.tun_mtu)
         return 3
+    args.tun = tun.name
 
     # 2. JWT expiry warning (best-effort; no-op if creds were passed
     #    via --livekit-url/--livekit-token instead of a Bale JWT).
