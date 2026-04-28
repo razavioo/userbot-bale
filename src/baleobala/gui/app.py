@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtGui import QColor, QPalette
 
 from baleobala.control import ControlService
 from baleobala.control.paths import data_dir
@@ -1083,7 +1084,10 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("baleobala")
-        self.resize(880, 720)
+        self.resize(960, 820)
+        self.setMinimumSize(860, 680)
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("QMainWindow { background: #f4f8f7; }")
 
         self._service = ControlService()
         self.jwt: Optional[str] = None
@@ -1092,15 +1096,16 @@ class MainWindow(QMainWindow):
         self._status_thread: Optional[QThread] = None
         self._status_snapshot: dict = {}
 
-        container = QWidget(objectName="container")
-        layout = QVBoxLayout(container)
+        content = QWidget(objectName="container")
+        content.setAutoFillBackground(True)
+        content.setStyleSheet("background: #f4f8f7;")
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
-
         self.login_view = LoginView(self)
         self.connect_view = ConnectView(self)
         layout.addWidget(self.login_view)
         layout.addWidget(self.connect_view)
-        self.setCentralWidget(container)
+        self.setCentralWidget(content)
 
         status = QStatusBar()
         self.setStatusBar(status)
@@ -1209,7 +1214,7 @@ def run(argv: Optional[list[str]] = None) -> int:
     _configure_gui_logging()
     app = QApplication(argv or sys.argv)
     app.setApplicationName("baleobala")
-    apply_theme(app, mode="auto")
+    apply_theme(app, mode="light")
     win = MainWindow()
     win.show()
     return app.exec()

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import logging
 import queue
 import threading
@@ -52,6 +53,7 @@ log = logging.getLogger(__name__)
 LIVEKIT_SAMPLE_RATE = 48_000
 LIVEKIT_FRAME_MS = 10
 LIVEKIT_FRAME_SAMPLES = LIVEKIT_SAMPLE_RATE * LIVEKIT_FRAME_MS // 1000  # 480
+LIVEKIT_STARTUP_TIMEOUT = float(os.environ.get("BALEOBALA_LIVEKIT_STARTUP_TIMEOUT", "45"))
 
 try:  # soft dep; only Phase 3 callers need this
     from livekit import rtc  # type: ignore
@@ -198,7 +200,7 @@ class LiveKitSession:
             target=self._thread_main, name="baleobala-livekit", daemon=True
         )
         self._thread.start()
-        if self._ready.wait(timeout=15):
+        if self._ready.wait(timeout=LIVEKIT_STARTUP_TIMEOUT):
             if self.is_running():
                 return
             self._start_failed = True
@@ -213,7 +215,9 @@ class LiveKitSession:
             self.stop()
         finally:
             raise self._startup_error(
-                RuntimeError("LiveKit room did not become ready within 15s")
+                RuntimeError(
+                    f"LiveKit room did not become ready within {LIVEKIT_STARTUP_TIMEOUT:.0f}s"
+                )
             )
 
     def stop(self) -> None:

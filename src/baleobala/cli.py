@@ -46,6 +46,11 @@ def _clean_qt_environment(env: dict[str, str]) -> dict[str, str]:
         "QT_DEBUG_PLUGINS",
     ):
         cleaned.pop(key, None)
+    # Avoid the GNOME platform theme plugin on desktops without a portal
+    # service. The GUI uses its own Fusion stylesheet, so this does not
+    # change the visual design, only the Qt integration layer.
+    cleaned["QT_QPA_PLATFORMTHEME"] = "fusion"
+    cleaned["QT_STYLE_OVERRIDE"] = "Fusion"
 
     ld_library_path = cleaned.get("LD_LIBRARY_PATH")
     if ld_library_path:
@@ -1147,6 +1152,30 @@ def cmd_vpn(args: argparse.Namespace) -> int:
     profile = vpn_store.load()
     if profile is None:
         profile = vpn_store.ensure_default()
+    if sys.platform.startswith("linux") and getattr(args, "backend", None) is None:
+        if profile.backend in {"proxy", "direct", "windows-proxy"}:
+            profile = type(profile)(
+                profile_id=profile.profile_id,
+                name=profile.name,
+                backend="linux-tun",
+                role=profile.role,
+                pairing_id=profile.pairing_id,
+                peer_id=profile.peer_id,
+                peer_name=profile.peer_name,
+                answer=profile.answer,
+                auto_start=profile.auto_start,
+                listen_host=profile.listen_host,
+                listen_port=profile.listen_port,
+                protocol=profile.protocol,
+                volume=profile.volume,
+                proxy_secret=profile.proxy_secret,
+                mesh_peer_id=profile.mesh_peer_id,
+                mesh_gateway_ip=profile.mesh_gateway_ip,
+                mesh_client_ip=profile.mesh_client_ip,
+                mesh_prefix=profile.mesh_prefix,
+                mesh_provisioning_status=profile.mesh_provisioning_status,
+            )
+            vpn_store.save(profile)
     if getattr(args, "backend", None):
         profile = VpnProfile(
             profile_id=profile.profile_id,
