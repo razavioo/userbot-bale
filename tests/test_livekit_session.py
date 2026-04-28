@@ -4,6 +4,7 @@ import asyncio
 import queue
 import threading
 import time
+from concurrent.futures import Future
 from types import SimpleNamespace
 
 import pytest
@@ -219,6 +220,20 @@ def test_livekit_session_rejects_second_start(monkeypatch: pytest.MonkeyPatch) -
     session.stop()
     with pytest.raises(RuntimeError, match="single-use"):
         session.start()
+
+
+def test_submit_coro_accepts_future_like_awaitable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_rtc(monkeypatch)
+
+    session = lk.LiveKitSession(url="ws://fake", token="token", identity="alice")
+    session.start()
+    try:
+        fut: Future[None] = Future()
+        fut.set_result(None)
+        submitted = session._submit_coro(fut, require_running=False)
+        assert submitted.result() is None
+    finally:
+        session.stop()
 
 
 def test_livekit_source_unblocks_on_stop(monkeypatch: pytest.MonkeyPatch) -> None:

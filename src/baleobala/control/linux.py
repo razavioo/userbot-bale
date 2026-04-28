@@ -91,6 +91,7 @@ class LinuxTunSession:
         state_path: Path | None = None,
         runner: Runner | None = None,
         resolver: SystemResolver | None = None,
+        tun_opener: Callable[[str], object] | None = None,
     ) -> None:
         self.plan = plan or TunPlan()
         self._state_store = JsonStore(
@@ -98,6 +99,7 @@ class LinuxTunSession:
         )
         self._runner = runner or subprocess.run
         self._resolver = resolver if resolver is not None else LinuxResolver()
+        self._tun_opener = tun_opener
         self._snapshot = _LinuxSnapshot()
         self._atexit_registered = False
         self._tun = None
@@ -109,8 +111,6 @@ class LinuxTunSession:
     def start(self) -> None:
         if self._snapshot.active:
             return
-        from baleobala.vpn.tun import TunDevice
-
         user = os.environ.get("USER", "")
         last_error: Exception | None = None
         for name in self._candidate_names(self.plan.name):
@@ -133,7 +133,7 @@ class LinuxTunSession:
                 self._run(["ip", "addr", "add", self.plan.address, "dev", name], check=False)
                 self._run(["ip", "link", "set", name, "mtu", str(self.plan.mtu)], check=False)
                 self._run(["ip", "link", "set", name, "up"], check=False)
-                self._tun = TunDevice.open(name)
+                self._tun = self._open_tun(name)
 
                 try:
                     # Pre-install the carrier bypass while system DNS still
@@ -287,6 +287,13 @@ class LinuxTunSession:
             names.extend(f"vpn{i}" for i in range(1, 6))
         return tuple(dict.fromkeys(names))
 
+    def _open_tun(self, name: str):
+        if self._tun_opener is not None:
+            return self._tun_opener(name)
+        from baleobala.vpn.tun import TunDevice
+
+        return TunDevice.open(name)
+
     def _teardown_link(
         self,
         name: str,
@@ -405,7 +412,8 @@ class LinuxTunnelRuntime:
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         carrier_resolver = LinuxResolver()
-        carrier_hosts = tuple(sorted(session.carrier_hosts))
+        carrier_hosts_attr = session.carrier_hosts
+        carrier_hosts = tuple(sorted(carrier_hosts_attr() if callable(carrier_hosts_attr) else carrier_hosts_attr))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
         session.start()
@@ -519,7 +527,8 @@ class LinuxTunnelRuntime:
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
         carrier_resolver = LinuxResolver()
-        carrier_hosts = tuple(sorted(session.carrier_hosts))
+        carrier_hosts_attr = session.carrier_hosts
+        carrier_hosts = tuple(sorted(carrier_hosts_attr() if callable(carrier_hosts_attr) else carrier_hosts_attr))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
         session.start()
@@ -620,7 +629,7 @@ class LinuxTunBackend:
 
         runtime = self._runtime_status()
         payload = BackendReadiness.for_linux_tun(
-            state="starting" if self._session.active else "stopped",
+            state="running" if self._session.active else "stopped",
             session_active=self._session.active,
             tun=session["tun"],
             address=session["address"],
@@ -656,6 +665,7 @@ class LinuxTunBackend:
         ):
             if runtime.get(key):
                 payload[key] = str(runtime[key])
+        payload["state"] = "running" if self._session.active else "stopped"
         self._state_store.save(payload)
         return payload
 
