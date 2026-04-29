@@ -63,16 +63,29 @@ object BaleProtos {
     }
 
     /**
-     * RequestValidateCode — fields:
+     * RequestValidateCode — fields (decoded from web.bale.ai bundle's
+     * `v.encode()` for ValidateCode and verified against
+     * captures/rpcs/01_bale.auth.v1.Auth__ValidateCode.req.bin):
      *   1: transaction_hash (string)
      *   2: code (string)
-     *   3: is_jwt (bool, encoded as 1 if true; omitted otherwise)
+     *   3: is_jwt (google.protobuf.BoolValue — sub-msg with bool at field 1)
+     *   4: future_auth_tokens (repeated string, packed in encoder)
+     *
+     * Encoding `is_jwt` as a scalar varint instead of a BoolValue is
+     * silently accepted by the server, but the field is dropped (wire-
+     * type mismatch) and the server then withholds the JWT from
+     * ResponseAuth. That manifests as "no JWT in body, no Set-Cookie"
+     * and forces the caller down the GetJWTToken / SignUp fallback
+     * paths, which 401 / "user already registered" for many accounts.
      */
     fun encodeValidateCode(transactionHash: String, code: String, isJwt: Boolean = true): ByteArray {
         val out = ByteArrayOutputStream()
         ProtoCodec.encLenDelim(out, 1, transactionHash.toByteArray(Charsets.UTF_8))
         ProtoCodec.encLenDelim(out, 2, code.toByteArray(Charsets.UTF_8))
-        if (isJwt) ProtoCodec.encVarintField(out, 3, 1L)
+        // BoolValue { value: bool=1 at field 1 }
+        val boolValue = ByteArrayOutputStream()
+        ProtoCodec.encVarintField(boolValue, 1, if (isJwt) 1L else 0L)
+        ProtoCodec.encLenDelim(out, 3, boolValue.toByteArray())
         return out.toByteArray()
     }
 
