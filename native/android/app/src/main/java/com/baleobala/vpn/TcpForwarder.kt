@@ -98,6 +98,10 @@ class TcpForwarder(
         val dstAddr = InetAddress.getByAddress(syn.dstAddr)
         val sock = Socket()
         try {
+            // protect() and Network.bindSocket() both need an FD-backed socket.
+            // A freshly-constructed java.net.Socket() lazy-creates its FD only
+            // on bind/connect, so explicitly bind to ephemeral first.
+            sock.bind(InetSocketAddress(0))
             if (!protectAndBind(sock)) {
                 Log.w(TAG, "protect failed for $key")
                 sock.close()

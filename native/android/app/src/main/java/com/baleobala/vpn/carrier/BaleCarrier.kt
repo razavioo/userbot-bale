@@ -10,12 +10,9 @@ import com.baleobala.vpn.tunnel.VpnFraming
  * Transport (LiveKit DataChannel in production, see Linux flow at
  * [src/baleobala/vpn/transports/datachannel_transport.py](../../../../../../../../src/baleobala/vpn/transports/datachannel_transport.py)).
  *
- * For this Android cut the carrier is wired up but the Bale Transport
- * concrete class (LiveKitDataChannelTransport) requires the LiveKit
- * Android SDK to be on the classpath plus the Bale ws_client / call-
- * setup RPCs. Those parts are coming in subsequent commits; the wiring
- * here is intentionally agnostic to which Transport you hand it so that
- * tests can pair it with [com.baleobala.vpn.tunnel.LoopbackTransport].
+ * The carrier stays agnostic to which [Transport] it receives so tests can
+ * still pair it with [com.baleobala.vpn.tunnel.LoopbackTransport], while
+ * production injects LiveKitDataChannelTransport after Bale StartCall.
  */
 class BaleCarrier(
     private val transportFactory: () -> Transport,

@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream
  */
 object BaleProtos {
     const val AUTH_SERVICE = "bale.auth.v1.Auth"
+    const val MEET_SERVICE = "bale.meet.v1.Meet"
     const val WEB_APP_ID = 4L
     const val WEB_API_KEY = "C28D46DC4C3A7A26564BFCC48B929086A95C93C98E789A19847BEE8627DE4E7D"
 
@@ -229,5 +230,77 @@ object BaleProtos {
         val asAscii = buf.toString(Charsets.ISO_8859_1)
         val m = Regex("([A-Za-z0-9_\\-]{20,})").find(asAscii) ?: return null
         return m.groupValues[1]
+    }
+
+    fun encodeStartLiveKitCall(
+        peerId: Long,
+        peerType: Int = 1,
+        rid: Long = randomRid(),
+        video: Boolean = false,
+        inviteEnable: Boolean = true,
+    ): ByteArray {
+        val peer = ByteArrayOutputStream()
+        ProtoCodec.encVarintField(peer, 1, peerType.toLong())
+        ProtoCodec.encVarintField(peer, 2, peerId)
+
+        val inner = ByteArrayOutputStream()
+        ProtoCodec.encLenDelim(inner, 1, peer.toByteArray())
+        ProtoCodec.encVarintField(inner, 2, rid)
+        if (video) ProtoCodec.encVarintField(inner, 3, 1)
+        if (inviteEnable) {
+            val boolValue = ByteArrayOutputStream()
+            ProtoCodec.encVarintField(boolValue, 1, 1)
+            ProtoCodec.encLenDelim(inner, 4, boolValue.toByteArray())
+        }
+
+        val out = ByteArrayOutputStream()
+        ProtoCodec.encLenDelim(out, 6, inner.toByteArray())
+        return out.toByteArray()
+    }
+
+    data class CallCredentials(
+        val url: String,
+        val token: String,
+        val room: String,
+        val peerId: Long?,
+        val raw: ByteArray,
+    ) {
+        override fun equals(other: Any?): Boolean = other is CallCredentials &&
+            url == other.url && token == other.token && room == other.room &&
+            peerId == other.peerId && raw.contentEquals(other.raw)
+        override fun hashCode(): Int =
+            31 * (31 * (31 * (31 * url.hashCode() + token.hashCode()) + room.hashCode()) + (peerId?.hashCode() ?: 0)) + raw.contentHashCode()
+    }
+
+    fun parseCallCredentials(buf: ByteArray): CallCredentials? {
+        val ascii = buf.toString(Charsets.ISO_8859_1)
+        val url = Regex("(wss://[A-Za-z0-9./\\-]+\\.(?:ir|ai))").find(ascii)?.groupValues?.get(1)
+        val token = Regex("(eyJhbGciOi[A-Za-z0-9_\\-.]{100,})").find(ascii)?.groupValues?.get(1)
+        if (url == null || token == null) return null
+        val room = Regex("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+            .find(ascii)?.groupValues?.get(1) ?: ""
+        return CallCredentials(url, token, room, parseCallPeerId(buf), buf)
+    }
+
+    private fun parseCallPeerId(buf: ByteArray): Long? {
+        val candidates = ArrayList<Long>()
+        fun scan(bytes: ByteArray, depth: Int) {
+            if (depth > 3) return
+            for (f in ProtoCodec.walk(bytes)) {
+                when (val v = f.value) {
+                    is ProtoCodec.FieldValue.VarInt -> if (v.v in 10_000L..5_000_000_000L) candidates.add(v.v)
+                    is ProtoCodec.FieldValue.LenDelim -> scan(v.bytes, depth + 1)
+                }
+            }
+        }
+        scan(buf, 0)
+        return candidates.firstOrNull()
+    }
+
+    private fun randomRid(): Long {
+        val b = ByteArray(8)
+        java.security.SecureRandom().nextBytes(b)
+        val v = java.nio.ByteBuffer.wrap(b).long and ((1L shl 55) - 1)
+        return if (v == 0L) 1L else v
     }
 }
