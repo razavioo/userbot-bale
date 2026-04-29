@@ -6,25 +6,26 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.VpnService
 import android.os.Bundle
+import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.baleobala.vpn.bale.AuthStore
 import com.baleobala.vpn.databinding.ActivityMainBinding
+import com.baleobala.vpn.ui.LoginActivity
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private lateinit var store: AuthStore
     private val logBuffer = ArrayDeque<String>()
     private var connected: Boolean = false
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            startVpnService()
-        } else {
-            appendLog("permission denied")
-        }
+        if (result.resultCode == RESULT_OK) startVpnService()
+        else appendLog("permission denied")
     }
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -46,25 +47,26 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        store = AuthStore(this)
 
         binding.toggleButton.setOnClickListener {
             if (connected) {
                 val i = Intent(this, BaleVpnService::class.java).apply { action = BaleVpnService.ACTION_DISCONNECT }
                 startService(i)
             } else {
-                val prep = VpnService.prepare(this)
-                if (prep != null) {
-                    vpnPermissionLauncher.launch(prep)
-                } else {
-                    startVpnService()
+                if (store.jwt() == null) {
+                    startActivity(Intent(this, LoginActivity::class.java))
+                    return@setOnClickListener
                 }
+                val prep = VpnService.prepare(this)
+                if (prep != null) vpnPermissionLauncher.launch(prep) else startVpnService()
             }
         }
-    }
 
-    private fun startVpnService() {
-        binding.statusText.text = getString(R.string.status_connecting)
-        startService(Intent(this, BaleVpnService::class.java))
+        binding.signOutButton.setOnClickListener {
+            store.clear()
+            refreshAuthUi()
+        }
     }
 
     override fun onResume() {
@@ -72,11 +74,31 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).registerReceiver(
             stateReceiver, IntentFilter(BaleVpnService.ACTION_STATE)
         )
+        refreshAuthUi()
     }
 
     override fun onPause() {
         super.onPause()
         LocalBroadcastManager.getInstance(this).unregisterReceiver(stateReceiver)
+    }
+
+    private fun refreshAuthUi() {
+        val phone = store.phoneNumber()
+        if (store.jwt() != null) {
+            binding.authStatus.text = if (phone != null)
+                getString(R.string.login_logged_in, phone.toString())
+            else
+                "Signed in"
+            binding.signOutButton.visibility = View.VISIBLE
+        } else {
+            binding.authStatus.text = "Not signed in — Connect will open Bale sign-in"
+            binding.signOutButton.visibility = View.GONE
+        }
+    }
+
+    private fun startVpnService() {
+        binding.statusText.text = getString(R.string.status_connecting)
+        startService(Intent(this, BaleVpnService::class.java))
     }
 
     private fun appendLog(line: String) {
