@@ -47,6 +47,23 @@ class TunPlan:
     routes: tuple[str, ...] = ()
     dns_servers: tuple[str, ...] = ()
 
+    @classmethod
+    def full_tunnel(
+        cls,
+        *,
+        name: str = "vpn0",
+        address: str = "10.77.0.2/24",
+        mtu: int = 1400,
+        dns_servers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9"),
+    ) -> "TunPlan":
+        return cls(
+            name=name,
+            address=address,
+            mtu=mtu,
+            routes=("0.0.0.0/1", "128.0.0.0/1"),
+            dns_servers=dns_servers,
+        )
+
 
 @dataclass
 class _LinuxSnapshot:
@@ -235,6 +252,10 @@ class LinuxTunSession:
             "tun": self._snapshot.tun_name or self.plan.name,
             "address": self.plan.address,
             "mtu": str(self.plan.mtu),
+            "routes": ",".join(self.plan.routes),
+            "dns_servers": ",".join(self.plan.dns_servers),
+            "routing_policy": "full-tunnel" if self.plan.routes else "link-local",
+            "full_tunnel": "yes" if self.plan.routes else "no",
             "state": "running" if self._snapshot.active else "stopped",
         }
 
@@ -675,10 +696,21 @@ class LinuxTunBackend:
         self._profile_id = None
         self._pairing_id = None
         self.clear_runtime_status()
-        try:
-            self._state_store.path.unlink()
-        except FileNotFoundError:
-            pass
+        # Remove every linux backend state file so a crashed prior run
+        # can't masquerade as "already running" and short-circuit a fresh
+        # `vpn up`.
+        for path in (
+            self._state_store.path,
+            self._runtime_store.path,
+            config_dir() / "linux_tun_session.json",
+            config_dir() / "linux_resolver.json",
+        ):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
     def status(self) -> dict[str, str]:
         payload = self._state_store.load(default=None)
