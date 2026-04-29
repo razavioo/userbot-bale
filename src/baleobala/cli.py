@@ -1366,8 +1366,14 @@ def cmd_vpn(args: argparse.Namespace) -> int:
             and backend_status.get("recovery_state") != "failed"
         ):
             endpoint = backend_status.get("endpoint", "vpn0")
-            print(f"linux-tun backend already running on {endpoint}")
-            return 0
+            if Path(f"/sys/class/net/{endpoint}").exists():
+                print(f"linux-tun backend already running on {endpoint}")
+                return 0
+            print(
+                f"warning: stale linux-tun state for {endpoint!r} (device gone); resetting",
+                file=sys.stderr,
+            )
+            backend.down()
         tunnel_args = _tunnel_namespace_from_profile(profile, auth_record)
         print("linux-tun: preparing interface and routes", file=sys.stderr, flush=True)
         backend_state = _backend_up(backend, profile, auth_record, pairing)
