@@ -36,8 +36,8 @@ object BaleProtos {
         deviceTitle: String = "baleobala",
         timeZone: String = "",
         preferredLanguages: List<String> = emptyList(),
-        sendCodeType: Int = 0,
-        options: Int = 0,
+        sendCodeType: Int = 1,            // DEFAULT — matches captures/rpcs/00_*StartPhoneAuth.req.bin
+        options: IntArray = intArrayOf(0, 1), // [SUPPORT_TELEGRAM_GATEWAY, SIX_DIGIT_OTP] — same as web client
     ): ByteArray {
         val out = ByteArrayOutputStream()
         ProtoCodec.encVarintField(out, 1, phoneNumber)
@@ -50,7 +50,12 @@ object BaleProtos {
         for (lang in preferredLanguages)
             ProtoCodec.encLenDelim(out, 7, lang.toByteArray(Charsets.UTF_8))
         if (sendCodeType != 0) ProtoCodec.encVarintField(out, 9, sendCodeType.toLong())
-        if (options != 0) ProtoCodec.encVarintField(out, 10, options.toLong())
+        if (options.isNotEmpty()) {
+            // Packed repeated varint per proto3: tag is wire-type 2, payload is concat of varints.
+            val packed = ByteArrayOutputStream()
+            for (v in options) ProtoCodec.encVarint(packed, v.toLong())
+            ProtoCodec.encLenDelim(out, 10, packed.toByteArray())
+        }
         return out.toByteArray()
     }
 
