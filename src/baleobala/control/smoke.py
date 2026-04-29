@@ -14,6 +14,8 @@ class SmokeReport:
     state: str
     endpoint: str
     control_ready: str
+    carrier_ready: str
+    bypass_ready: str
     data_path_ready: str
     route_ready: str
     dns_ready: str
@@ -29,6 +31,8 @@ class SmokeReport:
             "state": self.state,
             "endpoint": self.endpoint,
             "control_ready": self.control_ready,
+            "carrier_ready": self.carrier_ready,
+            "bypass_ready": self.bypass_ready,
             "data_path_ready": self.data_path_ready,
             "route_ready": self.route_ready,
             "dns_ready": self.dns_ready,
@@ -47,6 +51,8 @@ def smoke_backend_status(status: dict[str, str], *, timeout: float = 1.0) -> Smo
 
 def _build_report(status: dict[str, str], probe: ProbeResult) -> SmokeReport:
     control_ready = status.get("control_ready", "no")
+    carrier_ready = status.get("carrier_ready", "no")
+    bypass_ready = status.get("bypass_ready", "no")
     data_path_ready = status.get("data_path_ready", "no")
     route_ready = status.get("route_ready", "no")
     dns_ready = status.get("dns_ready", "no")
@@ -56,11 +62,16 @@ def _build_report(status: dict[str, str], probe: ProbeResult) -> SmokeReport:
     backend = status.get("backend", "")
     last_error = status.get("last_error", "")
 
+    if carrier_ready == "no" and call_established == "yes":
+        carrier_ready = "yes"
+    if bypass_ready == "no" and route_ready == "yes" and dns_ready == "yes" and state == "running":
+        bypass_ready = "yes"
+
     ok = control_ready == "yes" and not last_error
     if status.get("endpoint"):
         ok = ok and probe.ok
     if backend == "linux-tun":
-        ok = ok and route_ready == "yes" and dns_ready == "yes"
+        ok = ok and route_ready == "yes" and dns_ready == "yes" and carrier_ready == "yes" and bypass_ready == "yes"
     if backend in {"packet-tunnel", "android-vpn"}:
         ok = ok and call_established == "yes"
     if backend in {"direct", "windows-proxy"}:
@@ -72,6 +83,8 @@ def _build_report(status: dict[str, str], probe: ProbeResult) -> SmokeReport:
         state=state,
         endpoint=status.get("endpoint", ""),
         control_ready=control_ready,
+        carrier_ready=carrier_ready,
+        bypass_ready=bypass_ready,
         data_path_ready=data_path_ready,
         route_ready=route_ready,
         dns_ready=dns_ready,

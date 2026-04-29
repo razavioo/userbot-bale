@@ -16,6 +16,7 @@ class BackendReadiness:
     state: str
     control_ready: str = "no"
     carrier_ready: str = "no"
+    bypass_ready: str = "no"
     transport_ready: str = "no"
     data_path_ready: str = "no"
     route_ready: str = "no"
@@ -41,6 +42,7 @@ class BackendReadiness:
             "state": self.state,
             "control_ready": self.control_ready,
             "carrier_ready": self.carrier_ready,
+            "bypass_ready": self.bypass_ready,
             "transport_ready": self.transport_ready,
             "data_path_ready": self.data_path_ready,
             "route_ready": self.route_ready,
@@ -171,6 +173,8 @@ class BackendReadiness:
             backend="linux-tun",
             state=state,
             control_ready=_yn(ready),
+            carrier_ready=_yn(call_established == "yes"),
+            bypass_ready=_yn(ready),
             transport_ready=_yn(transport_selected != ""),
             route_ready=_yn(ready),
             dns_ready=_yn(ready),
@@ -312,6 +316,7 @@ class BackendReadiness:
                 "state",
                 "control_ready",
                 "carrier_ready",
+                "bypass_ready",
                 "transport_ready",
                 "data_path_ready",
                 "route_ready",
@@ -336,6 +341,7 @@ class BackendReadiness:
             state=str(data.get("state", "stopped")),
             control_ready=str(data.get("control_ready", "no")),
             carrier_ready=str(data.get("carrier_ready", "no")),
+            bypass_ready=str(data.get("bypass_ready", "no")),
             transport_ready=str(data.get("transport_ready", "no")),
             data_path_ready=str(data.get("data_path_ready", "no")),
             route_ready=str(data.get("route_ready", "no")),
