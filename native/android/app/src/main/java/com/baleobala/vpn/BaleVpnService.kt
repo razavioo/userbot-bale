@@ -75,8 +75,14 @@ class BaleVpnService : VpnService() {
             .setMtu(1400)
             .addAddress("10.77.0.2", 24)
             .addRoute("0.0.0.0", 0)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("9.9.9.9")
+            // Iranian-reachable resolvers. Public DNS (1.1.1.1, 8.8.8.8) is
+            // blocked from inside Iran so apps that use them via the VPN get
+            // no replies. Shecan / ArvanCloud / 403.online are Iranian
+            // smart-DNS with Iranian-egress IPs that respond from inside Iran.
+            .addDnsServer("178.22.122.100")  // Shecan primary
+            .addDnsServer("185.143.232.120") // ArvanCloud primary
+            .addDnsServer("185.51.200.2")    // 403.online
+            .addDnsServer("192.168.100.1")   // local router fallback
         try { builder.addDisallowedApplication(packageName) } catch (_: Throwable) {}
 
         val fd = builder.establish()
@@ -91,7 +97,9 @@ class BaleVpnService : VpnService() {
 
         val protector = object : Carrier.Protector {
             override fun protect(socket: DatagramSocket): Boolean = this@BaleVpnService.protect(socket)
+            override fun protect(socket: java.net.Socket): Boolean = this@BaleVpnService.protect(socket)
             override fun bindToUnderlying(socket: DatagramSocket): Boolean = bindToUnderlyingNetwork(socket)
+            override fun bindToUnderlying(socket: java.net.Socket): Boolean = bindToUnderlyingNetwork(socket)
         }
 
         carrier = when (carrierKind) {
@@ -188,19 +196,24 @@ class BaleVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun bindToUnderlyingNetwork(sock: DatagramSocket): Boolean {
-        return try {
-            val cm = getSystemService(ConnectivityManager::class.java)
-            val net = cm.allNetworks.firstOrNull { n ->
-                val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            } ?: return false
-            net.bindSocket(sock); true
-        } catch (t: Throwable) {
-            Log.w(TAG, "bindSocket failed: ${t.message}"); false
+    private fun underlyingNetwork(): android.net.Network? {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        return cm.allNetworks.firstOrNull { n ->
+            val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         }
     }
+
+    private fun bindToUnderlyingNetwork(sock: DatagramSocket): Boolean = try {
+        val net = underlyingNetwork() ?: return false
+        net.bindSocket(sock); true
+    } catch (t: Throwable) { Log.w(TAG, "bindSocket(udp) failed: ${t.message}"); false }
+
+    private fun bindToUnderlyingNetwork(sock: java.net.Socket): Boolean = try {
+        val net = underlyingNetwork() ?: return false
+        net.bindSocket(sock); true
+    } catch (t: Throwable) { Log.w(TAG, "bindSocket(tcp) failed: ${t.message}"); false }
 
     private fun selfTestProtectedDns() {
         val query = byteArrayOf(
