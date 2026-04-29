@@ -24,11 +24,12 @@ class BaleAuth(
 
     /** Trigger SMS to [phoneNumber] (digits only, no '+'). Returns transaction_hash. */
     @Throws(GrpcWebError::class)
-    fun startPhoneAuth(phoneNumber: Long): String {
+    fun startPhoneAuth(phoneNumber: Long, sendCodeType: Int = SEND_CODE_BALEONLY): String {
         val req = BaleProtos.encodeStartPhoneAuth(
             phoneNumber = phoneNumber,
             deviceHash = deviceHash,
             deviceTitle = deviceTitle,
+            sendCodeType = sendCodeType,
         )
         val resp = client.unary(BaleProtos.AUTH_SERVICE, "StartPhoneAuth", req)
         val tx = BaleProtos.parseTransactionHash(resp.body)
@@ -66,7 +67,18 @@ class BaleAuth(
         return AuthSession(jwt = jwt, responseBody = resp.body)
     }
 
-    companion object { private const val TAG = "BaleAuth" }
+    companion object {
+        private const val TAG = "BaleAuth"
+        // Values mined from web.bale.ai (captures/web-js/index.52867891.js):
+        //   UNKNOWN=0  DEFAULT=1  BALEONLY=2  SMS=3  CALL=4  EMAIL=5
+        //   MISSCALL=6  SETUP_EMAIL_REQUIRED=7  WHATSAPP=8  TELEGRAM=9
+        //   USSD=10  FUTURE_AUTH_TOKEN=11  TELEGRAM_GATEWAY=12
+        // The server's UNKNOWN default tries TELEGRAM_GATEWAY for Iranian
+        // numbers and fails for accounts not registered with Telegram.
+        const val SEND_CODE_DEFAULT = 1
+        const val SEND_CODE_BALEONLY = 2
+        const val SEND_CODE_SMS = 3
+    }
 }
 
 data class AuthSession(val jwt: String, val responseBody: ByteArray) {
