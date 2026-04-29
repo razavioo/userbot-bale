@@ -594,7 +594,14 @@ class LinuxTunBackend:
         state_path: Path | None = None,
         runtime_state_path: Path | None = None,
     ) -> None:
-        self._plan = plan or TunPlan()
+        if plan is None:
+            plan = TunPlan()
+            if os.environ.get("BALEOBALA_FULL_TUNNEL") in {"1", "yes", "true"}:
+                plan = TunPlan(
+                    routes=("0.0.0.0/1", "128.0.0.0/1"),
+                    dns_servers=("1.1.1.1", "9.9.9.9"),
+                )
+        self._plan = plan
         self._session = session or LinuxTunSession(plan=self._plan)
         self._state_store = JsonStore(state_path or (config_dir() / "linux_backend.json"))
         self._runtime_store = JsonStore(runtime_state_path or (config_dir() / "linux_runtime.json"))
