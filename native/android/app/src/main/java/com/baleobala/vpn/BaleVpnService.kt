@@ -14,10 +14,11 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.baleobala.vpn.bale.AuthStore
+import com.baleobala.vpn.bale.BaleCallClient
 import com.baleobala.vpn.carrier.BaleCarrier
 import com.baleobala.vpn.carrier.Carrier
 import com.baleobala.vpn.carrier.LocalNatCarrier
-import com.baleobala.vpn.tunnel.LoopbackTransport
+import com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
 import com.baleobala.vpn.tunnel.Transport
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -29,17 +30,16 @@ import java.util.concurrent.atomic.AtomicLong
  * [Carrier], and writes carrier replies back to the TUN.
  *
  * Carrier choice:
- *   - If `intent` extra `carrier=bale` and a JWT is stored, attempts to
- *     wire a [BaleCarrier]. Currently the Bale [Transport] is a
- *     loopback placeholder (so the wiring is exercised end-to-end in
- *     tests/dev) — the real LiveKitDataChannelTransport lives in the
- *     follow-up commits that bring the LiveKit Android SDK on board.
+ *   - If a JWT is stored, [BaleCarrier] dials the configured Bale exit peer,
+ *     joins the returned LiveKit room, and moves tunnel frames over topic `vpn`.
  *   - Otherwise [LocalNatCarrier] (verified in v0).
  */
 class BaleVpnService : VpnService() {
 
     @Volatile private var running = false
+    @Volatile private var starting = false
     private var tunFd: ParcelFileDescriptor? = null
+    private var startupThread: Thread? = null
     private var readerThread: Thread? = null
     private var writerThread: Thread? = null
     private var carrier: Carrier? = null
@@ -56,16 +56,30 @@ class BaleVpnService : VpnService() {
         }
         startForeground(NOTIF_ID, buildNotification("Connecting…"))
         val carrierKind = intent?.getStringExtra(EXTRA_CARRIER) ?: detectCarrier()
-        startTunnel(carrierKind)
+        startTunnelAsync(carrierKind)
         return START_STICKY
     }
 
     private fun detectCarrier(): String {
-        // BaleCarrier is wired end-to-end through Tunnel/ARQ but its transport
-        // is still a placeholder loopback — no LiveKit DataChannel yet — so
-        // selecting it just causes frames to retry-then-drop. Default to the
-        // working LocalNatCarrier until LiveKit is integrated.
-        return CARRIER_LOCAL
+        return if (AuthStore(this).jwt() != null) CARRIER_BALE else CARRIER_LOCAL
+    }
+
+    private fun startTunnelAsync(carrierKind: String) {
+        if (running || starting) return
+        starting = true
+        broadcast("status", "connecting")
+        startupThread = Thread({
+            try {
+                startTunnel(carrierKind)
+            } catch (t: Throwable) {
+                broadcast("error", "startup failed: ${t.message}")
+                updateNotification("Failed")
+                stopTunnel()
+                stopSelf()
+            } finally {
+                starting = false
+            }
+        }, "vpn-startup").apply { isDaemon = true; start() }
     }
 
     private fun startTunnel(carrierKind: String) {
@@ -75,22 +89,16 @@ class BaleVpnService : VpnService() {
             .setMtu(1400)
             .addAddress("10.77.0.2", 24)
             .addRoute("0.0.0.0", 0)
-            // Iranian-reachable resolvers. Public DNS (1.1.1.1, 8.8.8.8) is
-            // blocked from inside Iran so apps that use them via the VPN get
-            // no replies. Shecan / ArvanCloud / 403.online are Iranian
-            // smart-DNS with Iranian-egress IPs that respond from inside Iran.
-            .addDnsServer("178.22.122.100")  // Shecan primary
-            .addDnsServer("185.143.232.120") // ArvanCloud primary
-            .addDnsServer("185.51.200.2")    // 403.online
+            .addDnsServer("185.51.200.2")    // 403.online — verified working
             .addDnsServer("192.168.100.1")   // local router fallback
+            .addDnsServer("178.22.122.100")  // Shecan (may be blocked)
+            .addDnsServer("185.143.232.120") // ArvanCloud (may be blocked)
         try { builder.addDisallowedApplication(packageName) } catch (_: Throwable) {}
 
         val fd = builder.establish()
         if (fd == null) {
             broadcast("error", "VpnService.establish() returned null")
-            updateNotification("Failed")
-            stopSelf()
-            return
+            updateNotification("Failed"); stopSelf(); return
         }
         tunFd = fd
         running = true
@@ -104,10 +112,10 @@ class BaleVpnService : VpnService() {
 
         carrier = when (carrierKind) {
             CARRIER_BALE -> {
-                broadcast("log", "carrier=bale (data path uses Tunnel/ARQ; live LiveKit transport pending)")
+                broadcast("log", "carrier=bale exitPeer=$DEFAULT_EXIT_PEER_ID")
                 BaleCarrier(
-                    transportFactory = ::makeBalePlaceholderTransport,
-                    sessId = (System.currentTimeMillis() and 0xFFFF).toInt(),
+                    transportFactory = ::makeBaleTransport,
+                    sessId = DEFAULT_TUNNEL_SESS_ID,
                     onLog = { broadcast("log", it) },
                 )
             }
@@ -120,14 +128,11 @@ class BaleVpnService : VpnService() {
 
         try { carrier?.start() } catch (e: Throwable) {
             broadcast("error", "carrier start failed: ${e.message}")
-            stopTunnel()
-            stopSelf()
-            return
+            stopTunnel(); stopSelf(); return
         }
 
         readerThread = Thread({ readerLoop(fd) }, "tun-reader").apply { isDaemon = true; start() }
         writerThread = Thread({ writerLoop(fd) }, "tun-writer").apply { isDaemon = true; start() }
-
         Thread({ selfTestProtectedDns() }, "self-test").apply { isDaemon = true; start() }
 
         updateNotification("Connected")
@@ -135,17 +140,19 @@ class BaleVpnService : VpnService() {
         broadcast("log", "tun up: 10.77.0.2/24 mtu 1400")
     }
 
-    /**
-     * Placeholder Bale Transport — pairs a loopback so [Tunnel] can be
-     * wired end-to-end without crashing. Production must replace with
-     * `LiveKitDataChannelTransport(...)` once that class lands.
-     * Packets sent through this loopback come right back, which is
-     * intentional: it makes the data-plane wiring testable on-device.
-     */
-    private fun makeBalePlaceholderTransport(): Transport {
-        val (a, _b) = LoopbackTransport.pair(mtu = 4096)
-        // A returns to itself for now; replace with real LiveKit DC.
-        return a
+    private fun makeBaleTransport(): Transport {
+        val jwt = AuthStore(this).jwt() ?: throw IllegalStateException("no Bale JWT stored")
+        val creds = BaleCallClient(jwt = jwt, onLog = { broadcast("log", it) })
+            .startCall(peerId = DEFAULT_EXIT_PEER_ID)
+        broadcast("log", "joining LiveKit room=${creds.room.ifEmpty { "(unknown)" }}")
+        return LiveKitDataChannelTransport(
+            appContext = applicationContext,
+            url = creds.url,
+            token = creds.token,
+            topic = "vpn",
+            reliable = true,
+            onLog = { broadcast("log", it) },
+        ).connect()
     }
 
     private fun readerLoop(fd: ParcelFileDescriptor) {
@@ -180,12 +187,15 @@ class BaleVpnService : VpnService() {
     }
 
     private fun stopTunnel() {
+        starting = false
         running = false
         try { carrier?.stop() } catch (_: Throwable) {}
+        try { startupThread?.interrupt() } catch (_: Throwable) {}
         try { readerThread?.interrupt() } catch (_: Throwable) {}
         try { writerThread?.interrupt() } catch (_: Throwable) {}
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
+        startupThread = null
         carrier = null
         broadcast("status", "disconnected")
         broadcast("log", "tun down. out=${pktsOut.get()}")
@@ -293,5 +303,7 @@ class BaleVpnService : VpnService() {
         const val EXTRA_CARRIER = "carrier"
         const val CARRIER_LOCAL = "local-nat"
         const val CARRIER_BALE = "bale"
+        const val DEFAULT_EXIT_PEER_ID = 423217348L
+        const val DEFAULT_TUNNEL_SESS_ID = 0x1111
     }
 }
