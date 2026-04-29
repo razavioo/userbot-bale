@@ -4,6 +4,9 @@ import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.JavaNetCookieJar
+import java.net.CookieManager
+import java.net.CookiePolicy
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -36,7 +39,12 @@ class GrpcWebClient(
 ) {
     private val sessionId: String = sessionId ?: System.currentTimeMillis().toString()
     private var userId: Long? = null
-    private val cookieJar = SimpleCookieJar()
+    // java.net.CookieManager respects Domain= and Path= attributes properly,
+    // unlike a host-keyed map. Bale's server sets `access_token=...; Domain=bale.ai`
+    // — without proper domain matching the cookie never re-attaches to
+    // requests against next-ws.bale.ai.
+    private val cookieManager = CookieManager().apply { setCookiePolicy(CookiePolicy.ACCEPT_ALL) }
+    private val cookieJar = JavaNetCookieJar(cookieManager)
     private val http: OkHttpClient = OkHttpClient.Builder()
         // Force HTTP/1.1 — HTTP/2 fingerprint differs from Chrome and gets WAF-blocked.
         .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
@@ -48,13 +56,14 @@ class GrpcWebClient(
 
     fun setUserId(id: Long) { userId = id }
     fun setJwtCookie(jwt: String) {
-        val url = parseHttpUrl("$host/")!!
-        cookieJar.set(url, Cookie.Builder()
+        val url = parseHttpUrl("$host/") ?: return
+        val cookie = Cookie.Builder()
             .domain(url.host)
             .name("access_token")
             .value(jwt)
             .path("/")
-            .build())
+            .build()
+        cookieJar.saveFromResponse(url, listOf(cookie))
     }
 
     /** Synchronous unary RPC. Returns the protobuf body of the data frame. */
@@ -69,20 +78,15 @@ class GrpcWebClient(
         var grpcStatus: String? = resp.header("grpc-status")
         var grpcMessage: String = resp.header("grpc-message") ?: ""
         val setCookies = resp.headers.values("set-cookie").toMutableList()
-        // Force-store ALL Set-Cookie values (incl. Max-Age=0 deletes — Bale uses
-        // them as flow-continuity markers between StartPhoneAuth and ValidateCode).
-        for (sc in setCookies) {
-            val head = sc.substringBefore(';').trim()
-            val eq = head.indexOf('=')
-            if (eq > 0) {
-                val name = head.substring(0, eq).trim()
-                val value = head.substring(eq + 1).trim()
-                val httpUrl = parseHttpUrl(url) ?: continue
-                cookieJar.set(httpUrl, Cookie.Builder()
-                    .domain(httpUrl.host)
-                    .name(name).value(value).path("/").build())
-            }
+        // Diagnostic: dump every header we got back so the caller can see
+        // what auth/session state Bale handed us.
+        android.util.Log.i("GrpcWebClient", "$method http=${resp.code} headers=${resp.headers.size} cookies=${setCookies.size}")
+        for (i in 0 until resp.headers.size) {
+            android.util.Log.i("GrpcWebClient", "  H: ${resp.headers.name(i)}: ${resp.headers.value(i).take(200)}")
         }
+        // OkHttp/CookieManager handles Set-Cookie automatically (incl. Domain=bale.ai
+        // domain matching that's needed for cross-subdomain auth flow). We still log
+        // the headers above for diagnostics.
         var dataBody = ByteArray(0)
         var off = 0
         while (off + 5 <= raw.size) {
@@ -127,26 +131,6 @@ class GrpcWebClient(
         ByteBuffer.wrap(out, 1, 4).order(ByteOrder.BIG_ENDIAN).putInt(body.size)
         System.arraycopy(body, 0, out, 5, body.size)
         return out
-    }
-
-    private class SimpleCookieJar : CookieJar {
-        private val store = ConcurrentHashMap<String, MutableMap<String, Cookie>>()
-
-        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-            val host = url.host
-            val byName = store.getOrPut(host) { ConcurrentHashMap() }
-            for (c in cookies) byName[c.name] = c
-        }
-
-        override fun loadForRequest(url: HttpUrl): List<Cookie> {
-            val byName = store[url.host] ?: return emptyList()
-            return byName.values.toList()
-        }
-
-        fun set(url: HttpUrl, cookie: Cookie) {
-            val byName = store.getOrPut(url.host) { ConcurrentHashMap() }
-            byName[cookie.name] = cookie
-        }
     }
 
     companion object {
