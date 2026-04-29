@@ -24,12 +24,11 @@ class BaleAuth(
 
     /** Trigger SMS to [phoneNumber] (digits only, no '+'). Returns transaction_hash. */
     @Throws(GrpcWebError::class)
-    fun startPhoneAuth(phoneNumber: Long, sendCodeType: Int = SEND_CODE_BALEONLY): String {
+    fun startPhoneAuth(phoneNumber: Long): String {
         val req = BaleProtos.encodeStartPhoneAuth(
             phoneNumber = phoneNumber,
             deviceHash = deviceHash,
             deviceTitle = deviceTitle,
-            sendCodeType = sendCodeType,
         )
         val resp = client.unary(BaleProtos.AUTH_SERVICE, "StartPhoneAuth", req)
         val tx = BaleProtos.parseTransactionHash(resp.body)
