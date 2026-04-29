@@ -24,21 +24,48 @@ class BaleAuth(
 
     /** Trigger SMS to [phoneNumber] (digits only, no '+'). Returns transaction_hash. */
     @Throws(GrpcWebError::class)
-    fun startPhoneAuth(phoneNumber: Long): String {
+    fun startPhoneAuth(phoneNumber: Long): BaleProtos.StartPhoneAuthResponse {
         val req = BaleProtos.encodeStartPhoneAuth(
             phoneNumber = phoneNumber,
             deviceHash = deviceHash,
             deviceTitle = deviceTitle,
         )
         val resp = client.unary(BaleProtos.AUTH_SERVICE, "StartPhoneAuth", req)
-        val tx = BaleProtos.parseTransactionHash(resp.body)
-            ?: throw RuntimeException("StartPhoneAuth returned no transaction_hash; body=${resp.body.size}B")
-        lastTx = tx
-        Log.i(TAG, "StartPhoneAuth OK; transaction_hash=$tx")
-        return tx
+        val parsed = BaleProtos.parseStartPhoneAuth(resp.body)
+        if (parsed.transactionHash.isEmpty())
+            throw RuntimeException("StartPhoneAuth returned no transaction_hash; body=${resp.body.size}B")
+        lastTx = parsed.transactionHash
+        Log.i(TAG, "StartPhoneAuth OK; tx=${parsed.transactionHash} channel=${BaleProtos.sendCodeTypeName(parsed.sendCodeTypeChosen)} ussd=${parsed.ussdInstruction}")
+        return parsed
     }
 
     /** Submit the SMS code. Returns AuthSession with the JWT on success. */
+    /**
+     * Complete SignUp for a new account. Required when ValidateCode succeeded
+     * but the response does not include a JWT — Bale's signal for "phone is
+     * recognised but no profile exists yet".
+     */
+    @Throws(GrpcWebError::class)
+    fun signUp(name: String, transactionHash: String? = null): AuthSession {
+        val tx = transactionHash ?: lastTx
+            ?: throw RuntimeException("no transaction_hash — call startPhoneAuth() first")
+        val req = BaleProtos.encodeSignUp(transactionHash = tx, name = name)
+        val resp = client.unary(BaleProtos.AUTH_SERVICE, "SignUp", req)
+        val jwt = GrpcWebClient.extractAccessToken(resp.setCookies)
+            ?: BaleProtos.parseJwt(resp.body)
+            ?: throw RuntimeException(
+                "SignUp succeeded but no JWT in response (body=${resp.body.size}B). " +
+                "Hex (first 160B): " + resp.body.take(160).joinToString("") { String.format("%02x", it) }
+            )
+        Log.i(TAG, "SignUp OK; JWT length=${jwt.length}")
+        return AuthSession(jwt = jwt, responseBody = resp.body)
+    }
+
+    /** True when ValidateCode succeeded but no JWT was returned (typical of new accounts). */
+    fun lastValidateNeedsSignUp(): Boolean = needsSignUp
+
+    private var needsSignUp: Boolean = false
+
     @Throws(GrpcWebError::class)
     fun validateCode(code: String, transactionHash: String? = null): AuthSession {
         val tx = transactionHash ?: lastTx
@@ -46,23 +73,38 @@ class BaleAuth(
         val req = BaleProtos.encodeValidateCode(transactionHash = tx, code = code, isJwt = true)
         val resp = client.unary(BaleProtos.AUTH_SERVICE, "ValidateCode", req)
         var jwt = GrpcWebClient.extractAccessToken(resp.setCookies)
-        if (jwt == null) jwt = BaleProtos.parseJwt(resp.body)
+        var path = "cookie"
         if (jwt == null) {
-            // Fallback: server gives JWT only via a follow-up GetJWTToken call.
+            jwt = BaleProtos.parseJwt(resp.body)
+            if (jwt != null) path = "body-regex"
+        }
+        var getJwtError: String? = null
+        var getJwtBodyHex: String? = null
+        if (jwt == null) {
             val userId = BaleProtos.parseUserIdFromAuth(resp.body)
             Log.w(TAG, "No JWT in ValidateCode response; calling GetJWTToken (user_id=$userId)")
             try {
                 if (userId != null) client.setUserId(userId)
                 val jwtResp = client.unary(BaleProtos.AUTH_SERVICE, "GetJWTToken", BaleProtos.encodeGetJWTToken())
+                getJwtBodyHex = jwtResp.body.take(128).joinToString("") { String.format("%02x", it) }
                 jwt = BaleProtos.parseJwt(jwtResp.body)
+                if (jwt != null) path = "GetJWTToken"
             } catch (e: Throwable) {
+                getJwtError = "${e.javaClass.simpleName}: ${e.message}"
                 Log.w(TAG, "GetJWTToken failed: ${e.message}")
             }
         }
         if (jwt == null) {
-            throw RuntimeException("Could not obtain JWT after ValidateCode + GetJWTToken")
+            // Most likely cause: phone is recognised but the account does
+            // not yet have a profile. Caller must follow up with signUp(name).
+            needsSignUp = true
+            throw NeedsSignUpException(
+                transactionHash = tx,
+                detail = "ValidateCode body=${resp.body.size}B, set-cookie=${resp.setCookies.size}, getJwt=${getJwtError ?: "ok"}"
+            )
         }
-        Log.i(TAG, "Auth OK; JWT length=${jwt.length}")
+        Log.i(TAG, "Auth OK via $path; JWT length=${jwt.length}")
+        needsSignUp = false
         return AuthSession(jwt = jwt, responseBody = resp.body)
     }
 
@@ -79,6 +121,11 @@ class BaleAuth(
         const val SEND_CODE_SMS = 3
     }
 }
+
+class NeedsSignUpException(
+    val transactionHash: String,
+    val detail: String,
+) : RuntimeException("Bale account needs sign-up (provide your name).")
 
 data class AuthSession(val jwt: String, val responseBody: ByteArray) {
     override fun equals(other: Any?): Boolean = other is AuthSession &&

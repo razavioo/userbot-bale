@@ -36,8 +36,11 @@ object BaleProtos {
         deviceTitle: String = "baleobala",
         timeZone: String = "",
         preferredLanguages: List<String> = emptyList(),
-        sendCodeType: Int = 1,            // DEFAULT — matches captures/rpcs/00_*StartPhoneAuth.req.bin
-        options: IntArray = intArrayOf(0, 1), // [SUPPORT_TELEGRAM_GATEWAY, SIX_DIGIT_OTP] — same as web client
+        sendCodeType: Int = 3,            // SMS — explicit request, avoids server's USSD default
+        // [SIX_DIGIT_OTP] only — declaring SUPPORT_TELEGRAM_GATEWAY (0) lets the
+        // server pick the Telegram-bot delivery path, which fails for accounts
+        // not registered with Telegram. Dropping 0 forces the SMS/BALEONLY fallback.
+        options: IntArray = intArrayOf(1),
     ): ByteArray {
         val out = ByteArrayOutputStream()
         ProtoCodec.encVarintField(out, 1, phoneNumber)
@@ -77,6 +80,39 @@ object BaleProtos {
     fun encodeGetJWTToken(): ByteArray = ByteArray(0)
 
     /**
+     * RequestSignUp — fields (decoded directly from web.bale.ai bundle's
+     * `k.encode()` for SignUp request):
+     *   1: transaction_hash (string)
+     *   2: name (string)
+     *   3: sex (int32 enum; 0=UNKNOWN)
+     *   4: password (google.protobuf.StringValue — sub-msg with field 1 string)
+     *
+     * Returned by Bale on a fresh phone-number that completed ValidateCode
+     * but has not yet finished signup (no JWT in ResponseAuth).
+     */
+    fun encodeSignUp(
+        transactionHash: String,
+        name: String,
+        sex: Int = 0,
+        password: String? = null,
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        if (transactionHash.isNotEmpty())
+            ProtoCodec.encLenDelim(out, 1, transactionHash.toByteArray(Charsets.UTF_8))
+        if (name.isNotEmpty())
+            ProtoCodec.encLenDelim(out, 2, name.toByteArray(Charsets.UTF_8))
+        if (sex != 0)
+            ProtoCodec.encVarintField(out, 3, sex.toLong())
+        if (password != null) {
+            // google.protobuf.StringValue: { value: string at field 1 }
+            val inner = ByteArrayOutputStream()
+            ProtoCodec.encLenDelim(inner, 1, password.toByteArray(Charsets.UTF_8))
+            ProtoCodec.encLenDelim(out, 4, inner.toByteArray())
+        }
+        return out.toByteArray()
+    }
+
+    /**
      * Find the JWT inside a ResponseAuth payload using the same heuristic
      * as the Python source: regex-scan for an "eyJ..." token.
      */
@@ -100,6 +136,70 @@ object BaleProtos {
             }
         }
         return candidates.firstOrNull()
+    }
+
+    data class StartPhoneAuthResponse(
+        val transactionHash: String,
+        val sendCodeTypeChosen: Int?,    // SendCodeType the server picked (e.g. 3=SMS, 10=USSD)
+        val ussdInstruction: String?,    // e.g. "*737*69#" if server wants caller to dial it
+        val codeLength: Int?,
+        val waitTimeSec: Int?,
+        val raw: ByteArray,
+    )
+
+    /**
+     * Walk a captured ResponseStartPhoneAuth and extract the parts the user
+     * needs to act on. Field numbers were inferred from
+     * captures/rpcs/00_bale.auth.v1.Auth__StartPhoneAuth.res.bin and the
+     * SendCodeType enum (UNKNOWN=0..TELEGRAM_GATEWAY=12) — field 10 holds
+     * a sub-message with `{ kind: SendCodeType, data: <ussd-string> }` when
+     * the server picked USSD or similar interactive delivery.
+     */
+    fun parseStartPhoneAuth(buf: ByteArray): StartPhoneAuthResponse {
+        var tx = ""
+        var sendCodeType: Int? = null
+        var ussd: String? = null
+        var codeLength: Int? = null
+        var waitTime: Int? = null
+        for (f in ProtoCodec.walk(buf)) {
+            when (f.number) {
+                1 -> if (f.value is ProtoCodec.FieldValue.LenDelim)
+                    tx = String(f.value.bytes, Charsets.US_ASCII)
+                7 -> if (f.value is ProtoCodec.FieldValue.VarInt)
+                    sendCodeType = f.value.v.toInt()
+                8 -> if (f.value is ProtoCodec.FieldValue.LenDelim) {
+                    // typically { wait_time }
+                    val sub = ProtoCodec.walk(f.value.bytes)
+                    val first = sub.firstOrNull()?.value
+                    if (first is ProtoCodec.FieldValue.VarInt) waitTime = first.v.toInt()
+                }
+                9 -> if (f.value is ProtoCodec.FieldValue.LenDelim) {
+                    val sub = ProtoCodec.walk(f.value.bytes)
+                    val first = sub.firstOrNull()?.value
+                    if (first is ProtoCodec.FieldValue.VarInt) codeLength = first.v.toInt()
+                }
+                10 -> if (f.value is ProtoCodec.FieldValue.LenDelim) {
+                    // sub-message: field 1 varint = SendCodeType, field 2 = string payload (USSD code etc.)
+                    for (sub in ProtoCodec.walk(f.value.bytes)) {
+                        val v = sub.value
+                        if (sub.number == 1 && v is ProtoCodec.FieldValue.VarInt && sendCodeType == null)
+                            sendCodeType = v.v.toInt()
+                        if (sub.number == 2 && v is ProtoCodec.FieldValue.LenDelim)
+                            ussd = String(v.bytes, Charsets.UTF_8).takeIf { it.isNotBlank() }
+                    }
+                }
+            }
+        }
+        return StartPhoneAuthResponse(tx, sendCodeType, ussd, codeLength, waitTime, buf)
+    }
+
+    fun sendCodeTypeName(v: Int?): String = when (v) {
+        null -> "unknown"
+        0 -> "UNKNOWN"; 1 -> "DEFAULT"; 2 -> "BALEONLY"; 3 -> "SMS"
+        4 -> "CALL"; 5 -> "EMAIL"; 6 -> "MISSCALL"; 7 -> "SETUP_EMAIL_REQUIRED"
+        8 -> "WHATSAPP"; 9 -> "TELEGRAM"; 10 -> "USSD"
+        11 -> "FUTURE_AUTH_TOKEN"; 12 -> "TELEGRAM_GATEWAY"
+        else -> "type=$v"
     }
 
     /** Scan ResponseStartPhoneAuth for the transaction_hash string. */

@@ -63,6 +63,28 @@
             android:layout_marginTop="12dp"
             android:visibility="gone" />
 
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/nameLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Your name (only needed for new Bale accounts)"
+            android:layout_marginTop="20dp"
+            android:visibility="gone">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/nameInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPersonName" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <Button
+            android:id="@+id/signUpButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Complete sign-up"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/loginStatus"
             android:layout_width="match_parent"
