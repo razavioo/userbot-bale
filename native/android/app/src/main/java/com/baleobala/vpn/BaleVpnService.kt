@@ -61,10 +61,11 @@ class BaleVpnService : VpnService() {
     }
 
     private fun detectCarrier(): String {
-        // If we have a JWT, prefer Bale (when its transport is wired).
-        // Until LiveKit is integrated this falls through to local-nat.
-        val have = AuthStore(this).jwt() != null
-        return if (have) CARRIER_BALE else CARRIER_LOCAL
+        // BaleCarrier is wired end-to-end through Tunnel/ARQ but its transport
+        // is still a placeholder loopback — no LiveKit DataChannel yet — so
+        // selecting it just causes frames to retry-then-drop. Default to the
+        // working LocalNatCarrier until LiveKit is integrated.
+        return CARRIER_LOCAL
     }
 
     private fun startTunnel(carrierKind: String) {
