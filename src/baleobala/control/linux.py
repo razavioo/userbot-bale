@@ -680,6 +680,9 @@ class LinuxTunBackend:
         payload["tun"] = session["tun"]
         payload["address"] = session["address"]
         payload["mtu"] = session["mtu"]
+        payload["routes"] = session.get("routes", "")
+        payload["routing_policy"] = session.get("routing_policy", "")
+        payload["full_tunnel"] = session.get("full_tunnel", "no")
         for key in (
             "transport_selected",
             "transport_previous",
