@@ -32,6 +32,8 @@ interface Carrier {
      *  needs them. Set by the VpnService at construction time. */
     interface Protector {
         fun protect(socket: DatagramSocket): Boolean
+        fun protect(socket: java.net.Socket): Boolean
         fun bindToUnderlying(socket: DatagramSocket): Boolean
+        fun bindToUnderlying(socket: java.net.Socket): Boolean
     }
 }

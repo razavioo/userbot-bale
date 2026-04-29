@@ -2,6 +2,7 @@ package com.baleobala.vpn.carrier
 
 import android.util.Log
 import com.baleobala.vpn.Ipv4Packet
+import com.baleobala.vpn.TcpForwarder
 import com.baleobala.vpn.UdpForwarder
 import java.net.InetAddress
 import java.util.concurrent.LinkedBlockingQueue
@@ -24,6 +25,7 @@ class LocalNatCarrier(
     @Volatile private var running = false
     private var pumpThread: Thread? = null
     private var forwarder: UdpForwarder? = null
+    private var tcpForwarder: TcpForwarder? = null
     private val clientAddr: InetAddress = InetAddress.getByName("10.77.0.2")
 
     val pktsIn = AtomicLong(0)
@@ -39,6 +41,14 @@ class LocalNatCarrier(
                 val ok = protector.protect(sock)
                 if (ok) protector.bindToUnderlying(sock)
                 ok
+            },
+            outQueue = outQueue,
+            onLog = onLog,
+        )
+        tcpForwarder = TcpForwarder(
+            protectAndBind = { sock ->
+                val ok = protector.protect(sock)
+                if (ok) protector.bindToUnderlying(sock) else false
             },
             outQueue = outQueue,
             onLog = onLog,
@@ -63,8 +73,8 @@ class LocalNatCarrier(
                 }
             }
             Ipv4Packet.PROTO_TCP -> {
-                if (pktsTcp.incrementAndGet() % 50 == 1L)
-                    onLog("tcp dropped (local-nat carrier is UDP-only) → ${addrStr(parsed.dstAddr)}")
+                pktsTcp.incrementAndGet()
+                tcpForwarder?.submit(packet, length)
             }
             Ipv4Packet.PROTO_ICMP -> {
                 if (pktsIcmp.incrementAndGet() % 20 == 1L)
@@ -76,10 +86,12 @@ class LocalNatCarrier(
     override fun stop() {
         running = false
         try { forwarder?.shutdown() } catch (_: Throwable) {}
+        try { tcpForwarder?.shutdown() } catch (_: Throwable) {}
         try { pumpThread?.interrupt() } catch (_: Throwable) {}
         forwarder = null
+        tcpForwarder = null
         pumpThread = null
-        onLog("local-nat carrier stopped: in=${pktsIn.get()} udp=${pktsUdp.get()} tcp_drop=${pktsTcp.get()} icmp_drop=${pktsIcmp.get()}")
+        onLog("local-nat carrier stopped: in=${pktsIn.get()} udp=${pktsUdp.get()} tcp=${pktsTcp.get()} icmp_drop=${pktsIcmp.get()}")
     }
 
     private fun pumpLoop() {
