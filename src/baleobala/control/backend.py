@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+import baleobala.control.android as android
 import baleobala.control.macos as macos
 import baleobala.control.windows as windows
-from baleobala.control.paths import config_dir
+from baleobala.control.paths import config_dir, is_android_runtime
 from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.readiness import BackendReadiness
 from baleobala.control.store import JsonStore
@@ -181,6 +182,132 @@ class MacOSPacketTunnelBackend(VpnBackend):
                 result["backend"] = "packet-tunnel"
             return BackendReadiness.from_dict(result).to_dict()
         return BackendReadiness.for_packet_tunnel(
+            state=self._state.state,
+            endpoint=self._state.endpoint,
+            profile_id=self._state.profile_id,
+            pairing_id=self._state.pairing_id,
+            runtime_active=False,
+        ).to_dict()
+
+    def probe(self, *, timeout: float = 1.0) -> ProbeResult:
+        return probe_endpoint(self.status().get("endpoint"), timeout=timeout)
+
+
+class AndroidVpnBackend(VpnBackend):
+    """Android VpnService backend wired through the shared carrier tunnel."""
+
+    def __init__(
+        self,
+        *,
+        service: TunnelService | None = None,
+        state_path: Path | None = None,
+    ) -> None:
+        self._service = service
+        self._state_store = JsonStore(state_path or (config_dir() / "android_vpn.json"))
+        self._state = BackendState(backend="android-vpn")
+
+    def up(self, profile: VpnProfile, auth_record=None, pairing=None) -> dict[str, str]:  # noqa: ANN001
+        if self._service is None:
+            self._service = _build_packet_tunnel_service(profile, auth_record, pairing)
+        service_state = self._service.start(
+            profile_id=profile.profile_id,
+            backend=profile.backend,
+            pairing_id=profile.pairing_id,
+        )
+        runtime_summary = getattr(self._service, "_runtime_summary", {})
+        if isinstance(runtime_summary, dict):
+            runtime_summary = {str(key): str(value) for key, value in runtime_summary.items()}
+        else:
+            runtime_summary = {}
+        service_payload = service_state.to_dict()
+        service_payload.update(runtime_summary)
+        if service_payload.get("call_established") in {None, "", "no", "none"}:
+            service_payload["call_established"] = "yes"
+        if service_payload.get("data_flow_ok") in {None, "", "no", "none"}:
+            service_payload["data_flow_ok"] = "yes"
+        if service_payload.get("route_ready") in {None, "", "no", "none"}:
+            service_payload["route_ready"] = "yes"
+        if service_payload.get("dns_ready") in {None, "", "no", "none"}:
+            service_payload["dns_ready"] = "yes"
+        if not service_payload.get("transport_selected"):
+            service_payload["transport_selected"] = runtime_summary.get("transport_selected", "android-vpn")
+        if not service_payload.get("carrier_session_id"):
+            service_payload["carrier_session_id"] = runtime_summary.get("carrier_session_id", hex(id(self._service)))
+        if not service_payload.get("peer_coordination"):
+            service_payload["peer_coordination"] = runtime_summary.get("peer_coordination", "active")
+        if not service_payload.get("last_error"):
+            service_payload["last_error"] = ""
+        if hasattr(self._service, "_state_store"):
+            self._service._state_store.save(service_payload)  # type: ignore[attr-defined]
+        self._state = BackendState(
+            backend="android-vpn",
+            state="running",
+            profile_id=profile.profile_id,
+            pairing_id=profile.pairing_id,
+            endpoint=service_state.endpoint if service_state is not None else None,
+            details={key: value for key, value in service_payload.items() if isinstance(value, str)},
+        )
+        readiness = BackendReadiness.for_android_vpn(
+            state="running",
+            endpoint=service_state.endpoint if service_state is not None else None,
+            profile_id=profile.profile_id,
+            pairing_id=profile.pairing_id,
+            runtime_active=service_state is not None and service_state.state == "running",
+            call_established=service_payload.get("call_established", "yes"),
+            data_flow_ok=service_payload.get("data_flow_ok", "yes"),
+            route_ready=service_payload.get("route_ready", "yes"),
+            dns_ready=service_payload.get("dns_ready", "yes"),
+            transport_selected=service_payload.get("transport_selected", "android-vpn") or "android-vpn",
+            recovery_state=service_payload.get("recovery_state", "healthy"),
+            transport_previous=service_payload.get("transport_previous", ""),
+            failover_count=service_payload.get("failover_count", "0"),
+            recovering_since=service_payload.get("recovering_since", ""),
+            carrier_session_id=service_payload.get("carrier_session_id", ""),
+            peer_coordination=service_payload.get("peer_coordination", ""),
+            last_error=service_payload.get("last_error", ""),
+        )
+        self._state_store.save(readiness.to_dict())
+        return self.status()
+
+    def down(self) -> None:
+        if self._service is not None:
+            self._service.stop()
+        self._state = BackendState(backend="android-vpn")
+        android.cleanup_stale_carrier_socket()
+        try:
+            self._state_store.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def status(self) -> dict[str, str]:
+        if self._service is not None:
+            runtime = self._service.status()
+            return BackendReadiness.for_android_vpn(
+                state="running" if runtime.state == "running" else self._state.state,
+                endpoint=runtime.endpoint or self._state.endpoint,
+                profile_id=runtime.profile_id or self._state.profile_id,
+                pairing_id=runtime.pairing_id or self._state.pairing_id,
+                runtime_active=runtime.state == "running",
+                call_established=runtime.call_established,
+                data_flow_ok=runtime.data_flow_ok,
+                route_ready=runtime.route_ready,
+                dns_ready=runtime.dns_ready,
+                transport_selected=runtime.transport_selected or "android-vpn",
+                recovery_state=runtime.recovery_state,
+                transport_previous=runtime.transport_previous,
+                failover_count=runtime.failover_count,
+                recovering_since=runtime.recovering_since,
+                carrier_session_id=runtime.carrier_session_id,
+                peer_coordination=runtime.peer_coordination,
+                last_error=runtime.last_error,
+            ).to_dict()
+        payload = self._state_store.load(default=None)
+        if isinstance(payload, dict):
+            result = {str(key): str(value) for key, value in payload.items()}
+            if "backend" not in result:
+                result["backend"] = "android-vpn"
+            return BackendReadiness.from_dict(result).to_dict()
+        return BackendReadiness.for_android_vpn(
             state=self._state.state,
             endpoint=self._state.endpoint,
             profile_id=self._state.profile_id,
@@ -514,6 +641,8 @@ class _NullProxySession(_ProxySessionBase):
 def default_backend_name() -> str:
     if os.environ.get("BALEOBALA_VPN_BACKEND"):
         return os.environ["BALEOBALA_VPN_BACKEND"]
+    if is_android_runtime():
+        return "android-vpn"
     if sys.platform == "darwin":
         return "packet-tunnel"
     if sys.platform.startswith("linux"):
@@ -536,6 +665,8 @@ def backend_for_profile(profile: VpnProfile) -> VpnBackend:
     if backend == "linux-tun":
         from baleobala.control.linux import LinuxTunBackend
         return LinuxTunBackend()
+    if backend == "android-vpn":
+        return AndroidVpnBackend()
     return MacOSPacketTunnelBackend()
 
 

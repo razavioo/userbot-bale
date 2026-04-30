@@ -9,13 +9,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from baleobala.control.paths import config_dir
+from baleobala.control.paths import config_dir, is_android_runtime
 from baleobala.control.store import JsonStore
 
 
 def default_vpn_backend() -> str:
     if os.environ.get("BALEOBALA_VPN_BACKEND"):
         return os.environ["BALEOBALA_VPN_BACKEND"]
+    if is_android_runtime():
+        return "android-vpn"
     if sys.platform == "darwin":
         return "packet-tunnel"
     if sys.platform.startswith("linux"):
