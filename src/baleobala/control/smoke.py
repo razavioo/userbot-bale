@@ -61,7 +61,7 @@ def _build_report(status: dict[str, str], probe: ProbeResult) -> SmokeReport:
         ok = ok and probe.ok
     if backend == "linux-tun":
         ok = ok and route_ready == "yes" and dns_ready == "yes"
-    if backend == "packet-tunnel":
+    if backend in {"packet-tunnel", "android-vpn"}:
         ok = ok and call_established == "yes"
     if backend in {"direct", "windows-proxy"}:
         ok = ok and data_path_ready == "yes"

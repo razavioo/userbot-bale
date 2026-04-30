@@ -1,7 +1,17 @@
 """Product control-plane helpers for auth, pairing, and VPN profiles."""
 
+from baleobala.control.android import (
+    activation_request_path,
+    carrier_socket_path as android_carrier_socket_path,
+    cleanup_stale_carrier_socket as cleanup_android_stale_carrier_socket,
+    install_vpn_profile as install_android_vpn_profile,
+    load_vpn_profile as load_android_vpn_profile,
+    vpn_profile_installed as android_vpn_profile_installed,
+    vpn_profile_path as android_vpn_profile_path,
+    vpn_service_configuration,
+)
 from baleobala.control.auth import AuthRecord, AuthStore
-from baleobala.control.backend import BackendState, MacOSPacketTunnelBackend, ProxyFallbackBackend, VpnBackend, backend_for_profile, default_backend_name
+from baleobala.control.backend import AndroidVpnBackend, BackendState, MacOSPacketTunnelBackend, ProxyFallbackBackend, VpnBackend, backend_for_profile, default_backend_name
 from baleobala.control.keychain import FileSecretBackend, KeychainSecretBackend, SecretBackend
 from baleobala.control.credential_watcher import CredentialWatcher
 from baleobala.control.mesh import MeshProvisionRecord, MeshProvisionStore
@@ -28,7 +38,7 @@ from baleobala.control.netns import (
     render_teardown_commands,
 )
 from baleobala.control.observability import FailureInfo, StructuredEventRecorder, classify_failure, environment_snapshot, new_run_id, redact_value
-from baleobala.control.paths import app_dir, config_dir, data_dir
+from baleobala.control.paths import app_dir, config_dir, data_dir, is_android_runtime
 from baleobala.control.probe import ProbeResult, probe_endpoint
 from baleobala.control.provisioning import (
     CredentialEpoch,
@@ -50,8 +60,10 @@ __all__ = [
     "app_dir",
     "config_dir",
     "data_dir",
+    "is_android_runtime",
     "AuthRecord",
     "AuthStore",
+    "AndroidVpnBackend",
     "BackendState",
     "MacOSPacketTunnelBackend",
     "PairingRecord",
@@ -119,6 +131,14 @@ __all__ = [
     "VpnTunnelBridge",
     "LocalTunnelService",
     "CarrierTunnelService",
+    "android_vpn_profile_path",
+    "load_android_vpn_profile",
+    "android_vpn_profile_installed",
+    "install_android_vpn_profile",
+    "activation_request_path",
+    "vpn_service_configuration",
+    "android_carrier_socket_path",
+    "cleanup_android_stale_carrier_socket",
     "VpnBackend",
     "backend_for_profile",
     "default_backend_name",
