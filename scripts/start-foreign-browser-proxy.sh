@@ -17,6 +17,16 @@ is_listening() {
   lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1
 }
 
+proxy_pid() {
+  lsof -tiTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null | head -1
+}
+
+is_our_proxy() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$REMOTE_USER@$REMOTE_HOST" | grep -F -- "-D $LOCAL_HOST:$LOCAL_PORT" >/dev/null
+}
+
 if ! is_listening; then
   /usr/bin/ssh \
     -f \
@@ -34,7 +44,18 @@ if ! is_listening; then
     sleep 0.2
   done
 
-  lsof -tiTCP:"$LOCAL_PORT" -sTCP:LISTEN > "$PID_FILE" 2>/dev/null || true
+  PID="$(proxy_pid)"
+  if is_our_proxy "$PID"; then
+    echo "$PID" > "$PID_FILE"
+  fi
+else
+  PID="$(proxy_pid)"
+  if ! is_our_proxy "$PID"; then
+    echo "Port $LOCAL_HOST:$LOCAL_PORT is already in use by a different process." >&2
+    echo "Choose another port with BALEOBALA_PROXY_LOCAL_PORT=1081 or stop that process first." >&2
+    exit 1
+  fi
+  echo "$PID" > "$PID_FILE"
 fi
 
 if ! is_listening; then
