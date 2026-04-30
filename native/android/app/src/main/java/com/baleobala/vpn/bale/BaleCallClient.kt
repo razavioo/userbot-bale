@@ -1,0 +1,50 @@
+package com.baleobala.vpn.bale
+
+class BaleCallClient(
+    private val jwt: String,
+    private val onLog: (String) -> Unit = {},
+) {
+    fun startCall(peerId: Long, timeoutMs: Long = 120_000): BaleProtos.CallCredentials {
+        var pushed: BaleProtos.CallCredentials? = null
+        val lock = Object()
+        val ws = BaleWsClient(
+            jwt = jwt,
+            onLog = onLog,
+            onUpdate = { resp ->
+                val creds = BaleProtos.parseCallCredentials(resp.raw)
+                if (creds != null) synchronized(lock) {
+                    pushed = creds
+                    lock.notifyAll()
+                }
+            },
+        )
+        ws.start()
+        try {
+            val req = BaleProtos.encodeStartLiveKitCall(peerId = peerId)
+            onLog("sending Bale StartCall peer=$peerId")
+            val ack = ws.rpc(BaleProtos.MEET_SERVICE, "StartCall", req, timeoutMs = 10_000)
+            val status = ack.payload.toString(Charsets.UTF_8)
+            if (status == "CallNotApproved") {
+                throw RuntimeException("Bale rejected StartCall: CallNotApproved")
+            }
+            if (status.isNotBlank() && !status.startsWith("eyJ")) {
+                onLog("StartCall status=$status")
+            }
+            BaleProtos.parseCallCredentials(ack.raw)?.let {
+                onLog("StartCall returned LiveKit creds room=${it.room}")
+                return it
+            }
+            val deadline = System.currentTimeMillis() + timeoutMs
+            synchronized(lock) {
+                while (pushed == null) {
+                    val remaining = deadline - System.currentTimeMillis()
+                    if (remaining <= 0) break
+                    lock.wait(minOf(remaining, 250))
+                }
+            }
+            return pushed ?: throw RuntimeException("StartCall ACKed but no LiveKit credentials arrived")
+        } finally {
+            ws.close()
+        }
+    }
+}

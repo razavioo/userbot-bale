@@ -329,14 +329,34 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
 
     from .runner import RunnerConfig, VpnRunner, prompt_tun_setup_hint, wait_for_signal
     from .tun import TunDevice
+    import errno
+
+    def _open_tun_with_fallback(preferred: str):
+        names = [preferred]
+        if preferred == "vpn0":
+            names.extend(f"vpn{i}" for i in range(1, 6))
+        last_exc: Exception | None = None
+        for name in dict.fromkeys(names):
+            try:
+                return TunDevice.open(name)
+            except OSError as exc:
+                last_exc = exc
+                if exc.errno != errno.EBUSY:
+                    continue
+            except PermissionError as exc:
+                last_exc = exc
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("no usable Linux TUN interface name was available")
 
     # 1. Open the TUN device (fail fast with a setup hint).
     try:
-        tun = TunDevice.open(args.tun)
+        tun = _open_tun_with_fallback(args.tun)
     except (PermissionError, RuntimeError, OSError) as e:
         print(f"[tunnel] cannot open TUN {args.tun}: {e}", file=sys.stderr)
         prompt_tun_setup_hint(args.tun, args.tun_addr, args.tun_mtu)
         return 3
+    args.tun = tun.name
 
     # 2. JWT expiry warning (best-effort; no-op if creds were passed
     #    via --livekit-url/--livekit-token instead of a Bale JWT).
@@ -410,7 +430,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
               f"Ctrl-C to stop; transport failover is automatic.",
               file=sys.stderr)
         try:
-            wait_for_signal()
+            _wait_for_signal_or_carrier_dead(session)
         finally:
             controller.stop()
             runner.stop()
@@ -424,6 +444,47 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
         session.stop()
         tun.close()
     return 0
+
+
+def _wait_for_signal_or_carrier_dead(session) -> None:  # type: ignore[no-untyped-def]
+    """Block until SIGINT/SIGTERM, the LiveKit session terminates, or the
+    call goes silent. The dead-carrier exit lets systemd restart the
+    process so a stale call doesn't hold the Bale account hostage and
+    block subsequent inbound calls.
+    """
+    import signal
+    import threading
+    import time
+
+    ev = threading.Event()
+
+    def _signal_handler(signum, frame):  # type: ignore[no-untyped-def]
+        ev.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _signal_handler)
+        except ValueError:
+            pass
+
+    def _terminal_observer(_exc) -> None:  # type: ignore[no-untyped-def]
+        print("[tunnel] carrier session terminated; exiting for restart", file=sys.stderr, flush=True)
+        ev.set()
+
+    add_observer = getattr(session, "add_terminal_observer", None)
+    if callable(add_observer):
+        add_observer(_terminal_observer)
+
+    is_terminal = getattr(session, "is_terminal", None)
+    poll_interval = 5.0
+    while not ev.wait(poll_interval):
+        if callable(is_terminal):
+            try:
+                if is_terminal():
+                    print("[tunnel] carrier session no longer running; exiting for restart", file=sys.stderr, flush=True)
+                    return
+            except Exception:
+                pass
 
 
 def _maybe_receive_mesh_provisioning(args, tun, transport, transport_name):  # type: ignore[no-untyped-def]

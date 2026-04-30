@@ -113,6 +113,7 @@ def test_linux_tunnel_runtime_programs_carrier_bypass_hosts(monkeypatch, tmp_pat
     monkeypatch.setattr("baleobala.vpn.router.FailoverController", _FakeController)
 
     runtime = linux_mod.LinuxTunnelRuntime(state_store=linux_mod.JsonStore(tmp_path / "runtime.json"))
+    runtime.set_tun_session(SimpleNamespace(tun=lambda: _FakeTun(), status=lambda: {"tun": "vpn0"}))
     profile = SimpleNamespace(
         profile_id="profile-a",
         pair_id=None,

@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
+import os
 import logging
 import queue
 import threading
@@ -45,13 +47,13 @@ from typing import Callable, Iterator
 
 import numpy as np
 
-from baleobala.codec import SAMPLE_RATE
-
 log = logging.getLogger(__name__)
 
 LIVEKIT_SAMPLE_RATE = 48_000
 LIVEKIT_FRAME_MS = 10
 LIVEKIT_FRAME_SAMPLES = LIVEKIT_SAMPLE_RATE * LIVEKIT_FRAME_MS // 1000  # 480
+LIVEKIT_STARTUP_TIMEOUT = float(os.environ.get("BALEOBALA_LIVEKIT_STARTUP_TIMEOUT", "45"))
+SAMPLE_RATE = LIVEKIT_SAMPLE_RATE
 
 try:  # soft dep; only Phase 3 callers need this
     from livekit import rtc  # type: ignore
@@ -105,7 +107,6 @@ class LiveKitSession:
     """
 
     def __init__(self, url: str, token: str, identity: str = "baleobala") -> None:
-        _require_livekit()
         self.url = url
         self.token = token
         self.identity = identity
@@ -177,6 +178,7 @@ class LiveKitSession:
         self._terminal_observers.append(observer)
 
     def start(self) -> None:
+        _require_livekit()
         with self._state_lock:
             if self._state == LiveKitSessionState.RUNNING:
                 raise RuntimeError("session already started")
@@ -198,7 +200,7 @@ class LiveKitSession:
             target=self._thread_main, name="baleobala-livekit", daemon=True
         )
         self._thread.start()
-        if self._ready.wait(timeout=15):
+        if self._ready.wait(timeout=LIVEKIT_STARTUP_TIMEOUT):
             if self.is_running():
                 return
             self._start_failed = True
@@ -213,7 +215,9 @@ class LiveKitSession:
             self.stop()
         finally:
             raise self._startup_error(
-                RuntimeError("LiveKit room did not become ready within 15s")
+                RuntimeError(
+                    f"LiveKit room did not become ready within {LIVEKIT_STARTUP_TIMEOUT:.0f}s"
+                )
             )
 
     def stop(self) -> None:
@@ -443,6 +447,7 @@ class LiveKitSession:
     # --- Video track (QR transport piggybacks here) ---
 
     def publish_video(self, width: int, height: int) -> "LiveKitVideoOut":
+        _require_livekit()
         """Create + publish a video track. Call only after start().
         Returns an object with push_frame(ndarray_rgb24) for the sender."""
         if self._room is None:
@@ -522,6 +527,7 @@ class LiveKitSession:
     # --- DataChannel (WebRTC data channel inside the same LiveKit room) ---
 
     def data_channel(self, topic: str = "vpn", *, reliable: bool = True) -> "LiveKitDataChannel":
+        _require_livekit()
         """Register a DataChannel endpoint for `topic`. Call only after start()."""
         if self._room is None:
             self._raise_if_not_operational("session not started")
@@ -631,13 +637,18 @@ class LiveKitSession:
             return
         self._create_task(coro)
 
-    def _submit_coro(self, coro, *, require_running: bool = True):  # type: ignore[no-untyped-def]
+    def _submit_coro(self, awaitable, *, require_running: bool = True):  # type: ignore[no-untyped-def]
         if require_running:
             self._raise_if_not_operational("session is not running")
         loop = self._loop
         if loop is None:
             self._raise_if_not_operational("event loop is not available")
-        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        if isinstance(awaitable, Future):
+            fut = awaitable
+        elif inspect.isawaitable(awaitable):
+            fut = asyncio.run_coroutine_threadsafe(awaitable, loop)
+        else:
+            fut = asyncio.wrap_future(awaitable, loop=loop)
         with self._submitted_lock:
             self._submitted.add(fut)
 

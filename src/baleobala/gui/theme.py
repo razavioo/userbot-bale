@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 try:
-    from PySide6.QtGui import QPalette
+    from PySide6.QtGui import QColor, QPalette
     from PySide6.QtWidgets import QApplication
 except ImportError:
     QPalette = None  # type: ignore[assignment]
@@ -88,10 +88,16 @@ def stylesheet(theme: Theme) -> str:
     font-size: {theme.base_font_px}px;
 }}
 
-QMainWindow, QWidget#container {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 palette(window),
-        stop:1 palette(alternate-base));
+QMainWindow, QWidget#container, LoginView, ConnectView, QScrollArea, QAbstractScrollArea {{
+    background-color: #f4f8f7;
+}}
+
+QScrollArea {{
+    border: none;
+}}
+
+QScrollArea > QWidget > QWidget {{
+    background-color: #f4f8f7;
 }}
 
 QWidget#card, QGroupBox, QFrame#banner-info, QFrame#banner-ok, QFrame#banner-err, QFrame#accent-panel, QFrame#hero-panel {{
@@ -231,7 +237,27 @@ QStatusBar {{ color: palette(placeholder-text); }}
 
 
 def apply_theme(app, mode: Mode = "auto") -> Theme:
-    theme = resolve_theme(mode)
+    theme = LIGHT if mode != "dark" else DARK
     app.setStyle("Fusion")
+    palette = app.palette()
+    if theme.name == "dark":
+        palette.setColor(QPalette.ColorRole.Window, QColor("#101820"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#161d27"))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#1c2431"))
+        palette.setColor(QPalette.ColorRole.Button, QColor("#202938"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#f4f7fb"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#f4f7fb"))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#f4f7fb"))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#95a3b3"))
+    else:
+        palette.setColor(QPalette.ColorRole.Window, QColor("#f4f8f7"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#edf4f2"))
+        palette.setColor(QPalette.ColorRole.Button, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#10211f"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#10211f"))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#10211f"))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6b7c77"))
+    app.setPalette(palette)
     app.setStyleSheet(stylesheet(theme))
     return theme

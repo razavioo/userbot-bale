@@ -37,8 +37,32 @@ class TunPlan:
     name: str = "vpn0"
     address: str = "10.77.0.2/24"
     mtu: int = 1400
-    routes: tuple[str, ...] = ("0.0.0.0/1", "128.0.0.0/1")
-    dns_servers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9")
+    # Default to NOT capturing the system default route. Installing
+    # 0.0.0.0/1 + 128.0.0.0/1 before the carrier is verified causes the
+    # user to lose internet connectivity if the data plane fails. The
+    # tunnel is reachable on its /24 link route regardless, so ping/probe
+    # tests still validate the carrier. A separate, explicit step (or a
+    # caller passing routes=("0.0.0.0/1","128.0.0.0/1")) is needed to
+    # promote this into a full-system VPN.
+    routes: tuple[str, ...] = ()
+    dns_servers: tuple[str, ...] = ()
+
+    @classmethod
+    def full_tunnel(
+        cls,
+        *,
+        name: str = "vpn0",
+        address: str = "10.77.0.2/24",
+        mtu: int = 1400,
+        dns_servers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9"),
+    ) -> "TunPlan":
+        return cls(
+            name=name,
+            address=address,
+            mtu=mtu,
+            routes=("0.0.0.0/1", "128.0.0.0/1"),
+            dns_servers=dns_servers,
+        )
 
 
 @dataclass
@@ -84,6 +108,7 @@ class LinuxTunSession:
         state_path: Path | None = None,
         runner: Runner | None = None,
         resolver: SystemResolver | None = None,
+        tun_opener: Callable[[str], object] | None = None,
     ) -> None:
         self.plan = plan or TunPlan()
         self._state_store = JsonStore(
@@ -91,8 +116,10 @@ class LinuxTunSession:
         )
         self._runner = runner or subprocess.run
         self._resolver = resolver if resolver is not None else LinuxResolver()
+        self._tun_opener = tun_opener
         self._snapshot = _LinuxSnapshot()
         self._atexit_registered = False
+        self._tun = None
 
     @property
     def active(self) -> bool:
@@ -101,58 +128,115 @@ class LinuxTunSession:
     def start(self) -> None:
         if self._snapshot.active:
             return
-        name = self.plan.name
-        created = False
-        if not self._device_exists(name):
-            result = self._run(
-                ["ip", "tuntap", "add", "dev", name, "mode", "tun", "user", os.environ.get("USER", "")]
-            )
-            if result.returncode != 0:
-                raise PermissionError(
-                    f"TUN device {name!r} does not exist and `ip tuntap add` failed: "
-                    f"{result.stderr.strip() or 'insufficient privileges'}"
+        user = os.environ.get("USER", "")
+        last_error: Exception | None = None
+        for name in self._candidate_names(self.plan.name):
+            created = False
+            try:
+                if not self._device_exists(name):
+                    result = self._run(
+                        ["ip", "tuntap", "add", "dev", name, "mode", "tun", "user", user]
+                    )
+                    if result.returncode != 0:
+                        raise PermissionError(
+                            f"TUN device {name!r} does not exist and `ip tuntap add` failed: "
+                            f"{result.stderr.strip() or 'insufficient privileges'}"
+                        )
+                    created = True
+
+                prior_addrs = self._addrs(name)
+                prior_up = self._link_is_up(name)
+
+                self._run(["ip", "addr", "add", self.plan.address, "dev", name], check=False)
+                self._run(["ip", "link", "set", name, "mtu", str(self.plan.mtu)], check=False)
+                self._run(["ip", "link", "set", name, "up"], check=False)
+                self._tun = self._open_tun(name)
+
+                try:
+                    # Pre-install the carrier bypass while system DNS still
+                    # works — once configure() installs split-default routes
+                    # and rewrites DNS to 1.1.1.1/9.9.9.9 over vpn0, any
+                    # subsequent hostname resolution would be black-holed.
+                    self._resolver.add_bypass_host("next-ws.bale.ai")
+                    # Bypass the configured tunnel DNS servers and the
+                    # system resolver's current upstreams so name resolution
+                    # keeps working after the tunnel captures default
+                    # routes. Without this, the LiveKit signaling URL
+                    # (resolved by the runtime thread *after* configure())
+                    # cannot be looked up.
+                    for dns_ip in self.plan.dns_servers:
+                        self._resolver.add_bypass_host(dns_ip)
+                    for dns_ip in self._current_system_dns():
+                        try:
+                            self._resolver.add_bypass_host(dns_ip)
+                        except Exception:
+                            pass
+                    self._resolver.configure(
+                        RoutePlan(
+                            dns_servers=self.plan.dns_servers,
+                            routes=self.plan.routes,
+                            interface=name,
+                        )
+                    )
+                    # The carrier transport (Bale call WebRTC/LiveKit
+                    # DataChannel) runs in this same process as root. If we
+                    # capture the default route, the carrier media gets
+                    # looped back into the tunnel it is supposed to power.
+                    # The uid-based bypass rule is only meaningful when we
+                    # have actually installed split-default routes.
+                    if self.plan.routes:
+                        self._add_uid_bypass_rule()
+                except Exception:
+                    try:
+                        self._resolver.restore()
+                    except Exception:
+                        pass
+                    self._teardown_link(name, created, prior_addrs, prior_up)
+                    raise
+
+                self._snapshot = _LinuxSnapshot(
+                    active=True,
+                    tun_name=name,
+                    created_device=created,
+                    prior_addrs=prior_addrs,
+                    prior_link_up=prior_up,
                 )
-            created = True
+                self._state_store.save(self._snapshot.to_dict())
 
-        prior_addrs = self._addrs(name)
-        prior_up = self._link_is_up(name)
+                if not self._atexit_registered:
+                    atexit.register(self.stop)
+                    self._atexit_registered = True
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if self._tun is not None:
+                    try:
+                        self._tun.close()
+                    except Exception:
+                        pass
+                    self._tun = None
+                if created:
+                    self._teardown_link(name, created, (), False)
+                continue
 
-        self._run(["ip", "addr", "add", self.plan.address, "dev", name], check=False)
-        self._run(["ip", "link", "set", name, "mtu", str(self.plan.mtu)], check=False)
-        self._run(["ip", "link", "set", name, "up"], check=False)
-
-        try:
-            self._resolver.configure(
-                RoutePlan(
-                    dns_servers=self.plan.dns_servers,
-                    routes=self.plan.routes,
-                    interface=name,
-                )
-            )
-        except Exception:
-            self._teardown_link(name, created, prior_addrs, prior_up)
-            raise
-
-        self._snapshot = _LinuxSnapshot(
-            active=True,
-            tun_name=name,
-            created_device=created,
-            prior_addrs=prior_addrs,
-            prior_link_up=prior_up,
-        )
-        self._state_store.save(self._snapshot.to_dict())
-
-        if not self._atexit_registered:
-            atexit.register(self.stop)
-            self._atexit_registered = True
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("no usable Linux TUN interface name was available")
 
     def stop(self) -> None:
         if not self._snapshot.active:
             return
+        self._remove_uid_bypass_rule()
         try:
             self._resolver.restore()
         except Exception:
             pass
+        if self._tun is not None:
+            try:
+                self._tun.close()
+            except Exception:
+                pass
+            self._tun = None
         snap = self._snapshot
         name = snap.tun_name or self.plan.name
         self._teardown_link(name, snap.created_device, snap.prior_addrs, snap.prior_link_up)
@@ -168,8 +252,68 @@ class LinuxTunSession:
             "tun": self._snapshot.tun_name or self.plan.name,
             "address": self.plan.address,
             "mtu": str(self.plan.mtu),
+            "routes": ",".join(self.plan.routes),
+            "dns_servers": ",".join(self.plan.dns_servers),
+            "routing_policy": "full-tunnel" if self.plan.routes else "link-local",
+            "full_tunnel": "yes" if self.plan.routes else "no",
             "state": "running" if self._snapshot.active else "stopped",
         }
+
+    def tun(self):
+        return self._tun
+
+    _UID_RULE_PREF = "100"
+
+    def _add_uid_bypass_rule(self) -> None:
+        if os.geteuid() != 0:
+            return
+        # idempotent: clean any prior leftover at this preference, then add
+        self._run(["ip", "rule", "del", "pref", self._UID_RULE_PREF], check=False)
+        self._run(
+            ["ip", "rule", "add", "uidrange", "0-0", "lookup", "main", "pref", self._UID_RULE_PREF],
+            check=False,
+        )
+
+    def _remove_uid_bypass_rule(self) -> None:
+        if os.geteuid() != 0:
+            return
+        # remove until none remain at this preference
+        for _ in range(4):
+            result = self._run(
+                ["ip", "rule", "del", "pref", self._UID_RULE_PREF], check=False
+            )
+            if result.returncode != 0:
+                return
+
+    def _current_system_dns(self) -> tuple[str, ...]:
+        try:
+            result = subprocess.run(
+                ["resolvectl", "status"], capture_output=True, text=True, check=False
+            )
+        except FileNotFoundError:
+            return ()
+        ips: list[str] = []
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("DNS Servers:") or stripped.startswith("Current DNS Server:"):
+                _, _, rhs = stripped.partition(":")
+                for tok in rhs.split():
+                    if tok and tok not in ips and not tok.startswith("127."):
+                        ips.append(tok)
+        return tuple(ips)
+
+    def _candidate_names(self, preferred: str) -> tuple[str, ...]:
+        names = [preferred]
+        if preferred == "vpn0":
+            names.extend(f"vpn{i}" for i in range(1, 6))
+        return tuple(dict.fromkeys(names))
+
+    def _open_tun(self, name: str):
+        if self._tun_opener is not None:
+            return self._tun_opener(name)
+        from baleobala.vpn.tun import TunDevice
+
+        return TunDevice.open(name)
 
     def _teardown_link(
         self,
@@ -232,6 +376,9 @@ class LinuxTunnelRuntime:
         self._pairing_store = pairing_store
         self._refresh_credentials = refresh_credentials
 
+    def set_tun_session(self, session: LinuxTunSession) -> None:
+        self._session = session
+
     def refresh_pairing_credentials(self, profile_id: str):  # noqa: ANN001
         if self._refresh_credentials is None:
             raise RuntimeError("credential refresh callback is not configured")
@@ -248,7 +395,6 @@ class LinuxTunnelRuntime:
         from baleobala.vpn.keepalive import LiveKitKeepalive
         from baleobala.vpn.router import FailoverController
         from baleobala.vpn.runner import RunnerConfig, VpnRunner
-        from baleobala.vpn.tun import TunDevice
         from baleobala.bale import LiveKitSession
         from baleobala.control.credential_watcher import CredentialWatcher
         from baleobala.control.resolver import LinuxResolver
@@ -265,11 +411,12 @@ class LinuxTunnelRuntime:
             peer_name=profile.peer_name,
             answer=profile.answer,
             answer_timeout=120.0,
+            creds_timeout=45.0,
             identity=profile.name,
             tun="vpn0",
             tun_addr="10.77.0.1/24" if profile.role == "relay" else "10.77.0.2/24",
             tun_mtu=1400,
-            transport="auto",
+            transport="dc",
             sess_id=0x1111,
             psk=None,
             psk_file=None,
@@ -278,14 +425,19 @@ class LinuxTunnelRuntime:
             volume=profile.volume,
         )
 
-        tun = TunDevice.open(args.tun)
+        tun = self._session.tun()
+        if tun is None:
+            raise RuntimeError("linux-tun session did not expose an open TUN device")
+        session_status = self._session.status()
+        args.tun = session_status.get("tun", args.tun)
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
-        session.start()
         carrier_resolver = LinuxResolver()
-        carrier_hosts = tuple(sorted(session.carrier_hosts()))
+        carrier_hosts_attr = session.carrier_hosts
+        carrier_hosts = tuple(sorted(carrier_hosts_attr() if callable(carrier_hosts_attr) else carrier_hosts_attr))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
+        session.start()
         keepalive = LiveKitKeepalive(session, interval=20.0)
         keepalive.start()
         credential_watcher = None
@@ -331,7 +483,7 @@ class LinuxTunnelRuntime:
         self._credential_watcher = credential_watcher
         self._active = True
         payload = {
-            "endpoint": args.tun,
+            "endpoint": session_status.get("tun", args.tun),
             "transport_selected": transport_name,
             "call_established": "yes",
             "data_flow_ok": "yes",
@@ -395,11 +547,12 @@ class LinuxTunnelRuntime:
 
         url, token = _resolve_livekit_credentials(args)
         session = LiveKitSession(url=url, token=token, identity=args.identity)
-        session.start()
         carrier_resolver = LinuxResolver()
-        carrier_hosts = tuple(sorted(session.carrier_hosts()))
+        carrier_hosts_attr = session.carrier_hosts
+        carrier_hosts = tuple(sorted(carrier_hosts_attr() if callable(carrier_hosts_attr) else carrier_hosts_attr))
         for host in carrier_hosts:
             carrier_resolver.add_bypass_host(host)
+        session.start()
         keepalive = LiveKitKeepalive(session, interval=20.0)
         keepalive.start()
         chain = _build_transport_chain(args.transport, session, args)
@@ -441,11 +594,19 @@ class LinuxTunBackend:
         state_path: Path | None = None,
         runtime_state_path: Path | None = None,
     ) -> None:
-        self._plan = plan or TunPlan()
+        if plan is None:
+            plan = TunPlan()
+            if os.environ.get("BALEOBALA_FULL_TUNNEL") in {"1", "yes", "true"}:
+                plan = TunPlan(
+                    routes=("0.0.0.0/1", "128.0.0.0/1"),
+                    dns_servers=("1.1.1.1", "9.9.9.9"),
+                )
+        self._plan = plan
         self._session = session or LinuxTunSession(plan=self._plan)
         self._state_store = JsonStore(state_path or (config_dir() / "linux_backend.json"))
         self._runtime_store = JsonStore(runtime_state_path or (config_dir() / "linux_runtime.json"))
         self._runtime = runtime or LinuxTunnelRuntime(self._runtime_store)
+        self._runtime.set_tun_session(self._session)
         self._profile_id: str | None = None
         self._pairing_id: str | None = None
         self._pairing_store = None
@@ -460,20 +621,43 @@ class LinuxTunBackend:
         self._session.start()
         self._profile_id = profile.profile_id
         self._pairing_id = profile.pairing_id
-        if auth_record is not None and (pairing is not None or profile.peer_id is not None):
+        session = self._session.status()
+        self._state_store.save(
+            BackendReadiness.for_linux_tun(
+                state="starting",
+                session_active=True,
+                tun=session["tun"],
+                address=session["address"],
+                mtu=session["mtu"],
+                call_established="no",
+                data_flow_ok="no",
+                transport_selected="",
+                recovery_state="starting",
+                endpoint=None,
+                last_error="",
+            ).to_dict()
+        )
+
+        def _start_runtime() -> None:
+            if auth_record is None or (pairing is None and profile.peer_id is None):
+                return
             try:
                 self._runtime.start(profile, auth_record)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self.update_runtime_status(
                     call_established="no",
                     data_flow_ok="no",
-                    last_error=str(exc),
+                    last_error=f"{type(exc).__name__}: {exc}",
                     transport_selected="",
+                    recovery_state="failed",
                 )
-        session = self._session.status()
+
+        if auth_record is not None and (pairing is not None or profile.peer_id is not None):
+            threading.Thread(target=_start_runtime, name="linux-tun-runtime", daemon=True).start()
+
         runtime = self._runtime_status()
         payload = BackendReadiness.for_linux_tun(
-            state="running",
+            state="running" if self._session.active else "stopped",
             session_active=self._session.active,
             tun=session["tun"],
             address=session["address"],
@@ -492,7 +676,13 @@ class LinuxTunBackend:
         ).to_dict()
         payload["profile_id"] = profile.profile_id
         payload["pairing_id"] = profile.pairing_id or ""
-        payload.update(session)
+        payload["active"] = session["active"]
+        payload["tun"] = session["tun"]
+        payload["address"] = session["address"]
+        payload["mtu"] = session["mtu"]
+        payload["routes"] = session.get("routes", "")
+        payload["routing_policy"] = session.get("routing_policy", "")
+        payload["full_tunnel"] = session.get("full_tunnel", "no")
         for key in (
             "transport_selected",
             "transport_previous",
@@ -506,6 +696,7 @@ class LinuxTunBackend:
         ):
             if runtime.get(key):
                 payload[key] = str(runtime[key])
+        payload["state"] = "running" if self._session.active else "stopped"
         self._state_store.save(payload)
         return payload
 
@@ -515,10 +706,21 @@ class LinuxTunBackend:
         self._profile_id = None
         self._pairing_id = None
         self.clear_runtime_status()
-        try:
-            self._state_store.path.unlink()
-        except FileNotFoundError:
-            pass
+        # Remove every linux backend state file so a crashed prior run
+        # can't masquerade as "already running" and short-circuit a fresh
+        # `vpn up`.
+        for path in (
+            self._state_store.path,
+            self._runtime_store.path,
+            config_dir() / "linux_tun_session.json",
+            config_dir() / "linux_resolver.json",
+        ):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
     def status(self) -> dict[str, str]:
         payload = self._state_store.load(default=None)
