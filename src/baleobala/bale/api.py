@@ -219,6 +219,13 @@ class BaleApiClient:
             "bale.meet.v1.Meet", "StartCall", payload, timeout=10.0,
         )
         log.info("StartCall ack: seq=%s payload=%dB", resp.seq, len(resp.payload))
+        if resp.payload:
+            try:
+                status = resp.payload.decode("utf-8")
+            except UnicodeDecodeError:
+                status = ""
+            if status == "CallNotApproved":
+                raise PermissionError("Bale rejected StartCall: CallNotApproved")
 
         # For outbound calls, Bale returns the LiveKit credentials in
         # the RPC response payload itself (verified live 2026-04-19).

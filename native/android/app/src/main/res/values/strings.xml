@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Baleobala VPN</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_connected">Connected</string>
+    <string name="vpn_channel_name">Baleobala VPN</string>
+    <string name="login_title">Sign in to Bale</string>
+    <string name="login_subtitle">Enter your Bale phone number. We will send a verification code via SMS.</string>
+    <string name="login_phone_hint">Phone (e.g. 989121234567)</string>
+    <string name="login_code_hint">SMS code</string>
+    <string name="login_send_code">Send code</string>
+    <string name="login_validate">Verify</string>
+    <string name="login_logged_in">Signed in. Phone: %1$s</string>
+    <string name="login_sign_out">Sign out</string>
+</resources>

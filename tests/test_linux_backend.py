@@ -86,6 +86,7 @@ def test_linux_tun_session_creates_and_teardown(tmp_path: Path) -> None:
         state_path=tmp_path / "s.json",
         runner=runner,
         resolver=LinuxResolver(state_path=tmp_path / "r.json", runner=runner),
+        tun_opener=lambda name: object(),
     )
     session.start()
     assert session.active
@@ -121,6 +122,7 @@ def test_linux_tun_backend_up_down(tmp_path: Path) -> None:
         state_path=tmp_path / "s.json",
         runner=runner,
         resolver=NullResolver(),
+        tun_opener=lambda name: object(),
     )
     backend = LinuxTunBackend(session=session, state_path=tmp_path / "b.json")
     profile = VpnProfile(profile_id="p", name="p", backend="linux-tun")
@@ -133,6 +135,32 @@ def test_linux_tun_backend_up_down(tmp_path: Path) -> None:
     assert backend.status()["state"] == "stopped"
 
 
+def test_linux_tun_backend_full_tunnel(tmp_path: Path) -> None:
+    runner = FakeRunner(existing_devices=("vpn0",))
+    resolver = LinuxResolver(state_path=tmp_path / "r.json", runner=runner)
+    session = LinuxTunSession(
+        plan=TunPlan.full_tunnel(name="vpn0"),
+        state_path=tmp_path / "s.json",
+        runner=runner,
+        resolver=resolver,
+        tun_opener=lambda name: object(),
+    )
+    backend = LinuxTunBackend(session=session, state_path=tmp_path / "b.json")
+    profile = VpnProfile(profile_id="p", name="p", backend="linux-tun")
+    
+    backend.up(profile)
+    assert any(c[:4] == ["ip", "route", "add", "0.0.0.0/1"] for c in runner.calls)
+    assert any(c[:4] == ["ip", "route", "add", "128.0.0.0/1"] for c in runner.calls)
+    
+    status = backend.status()
+    assert "0.0.0.0/1" in status.get("routes", "")
+    assert "128.0.0.0/1" in status.get("routes", "")
+    assert status.get("routing_policy") == "full-tunnel"
+    assert status.get("full_tunnel") == "yes"
+    
+    backend.down()
+
+
 def test_linux_tun_backend_merges_recovery_runtime_fields(tmp_path: Path) -> None:
     runner = FakeRunner(existing_devices=("vpn0",))
     session = LinuxTunSession(
@@ -140,6 +168,7 @@ def test_linux_tun_backend_merges_recovery_runtime_fields(tmp_path: Path) -> Non
         state_path=tmp_path / "s.json",
         runner=runner,
         resolver=NullResolver(),
+        tun_opener=lambda name: object(),
     )
     backend = LinuxTunBackend(
         session=session,
