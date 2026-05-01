@@ -501,6 +501,8 @@ class Socks5ProxyServer:
                 self._handle_socks5(client)
             else:
                 self._handle_http_connect(client, first)
+        except (EOFError, ConnectionResetError, BrokenPipeError, OSError):
+            pass  # client disconnected — normal for system proxy traffic
         finally:
             try:
                 client.close()
@@ -561,6 +563,8 @@ class Socks5ProxyServer:
                                 payload=chunk,
                             )
                         )
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                pass  # client disconnected
             finally:
                 stop.set()
                 try:
@@ -581,6 +585,8 @@ class Socks5ProxyServer:
                     client.sendall(packet.payload)
                 elif packet.packet_type in (ProxyPacketType.CLOSE, ProxyPacketType.ERROR):
                     break
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass  # client disconnected
         finally:
             stop.set()
             worker.join(timeout=1.0)
@@ -610,6 +616,8 @@ class Socks5ProxyServer:
                                 payload=chunk,
                             )
                         )
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                pass  # client disconnected
             finally:
                 stop.set()
                 try:
@@ -630,6 +638,8 @@ class Socks5ProxyServer:
                     client.sendall(packet.payload)
                 elif packet.packet_type in (ProxyPacketType.CLOSE, ProxyPacketType.ERROR):
                     break
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass  # client disconnected
         finally:
             stop.set()
             worker.join(timeout=1.0)
