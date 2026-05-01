@@ -501,7 +501,7 @@ class Socks5ProxyServer:
                 self._handle_socks5(client)
             else:
                 self._handle_http_connect(client, first)
-        except (EOFError, ConnectionResetError, BrokenPipeError, OSError):
+        except (EOFError, ConnectionResetError, BrokenPipeError, OSError, ValueError):
             pass  # client disconnected — normal for system proxy traffic
         finally:
             try:
