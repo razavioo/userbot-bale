@@ -1885,7 +1885,7 @@ def test_macos_system_proxy_privileged_restore_is_batched(tmp_path, monkeypatch)
     assert "networksetup -setwebproxystate V2BOX off" in privileged_calls[0][2]
 
 
-def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> None:
+def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
@@ -1917,31 +1917,17 @@ def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch, capsys) -> No
 
     captured = {}
 
-    def fake_client(args):  # noqa: ANN001
+    def fake_system(args):  # noqa: ANN001
         captured["args"] = args
         return 0
 
-    class FakeProxySession:
-        def __init__(self, **kwargs):  # noqa: ANN001
-            captured["proxy_kwargs"] = kwargs
-        def start(self):
-            captured["proxy_start"] = True
-        def stop(self):
-            captured["proxy_stop"] = True
-        def status(self):
-            return {"proxy": "127.0.0.1:1080"}
-
-    monkeypatch.setattr(cli, "cmd_bale_proxy_client", fake_client)
-    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeProxySession)
+    monkeypatch.setattr(cli, "cmd_bale_proxy_system", fake_system)
 
     import argparse
     assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None)) == 0
-    captured_io = capsys.readouterr()
-    assert "macOS system proxy active" in captured_io.err
     assert captured["args"].peer_id == 777
     assert captured["args"].answer is False
-    assert captured["proxy_start"] is True
-    assert captured["proxy_stop"] is True
+    assert captured["args"].proxy_ready_timeout == 30.0
 
 
 def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
