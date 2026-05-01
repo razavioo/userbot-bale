@@ -287,6 +287,8 @@ class WsClient:
                 ),
             )
         params = inspect.signature(websockets.connect).parameters
+        if "proxy" in params:
+            connect_kwargs["proxy"] = None
         if "additional_headers" in params:
             connect_kwargs["additional_headers"] = headers
         else:

@@ -10,6 +10,21 @@ from baleobala.runtime.proxy import ProxyHub, ProxyPacket, ProxyPacketType, Sock
 PROXY_SECRET = b"proxy-secret"
 
 
+class _FakeTransport:
+    def __init__(self, mtu: int | None = None) -> None:
+        if mtu is not None:
+            self.mtu = mtu
+
+    def send(self, data: bytes) -> None:
+        pass
+
+    def recv(self, timeout: float | None = None) -> bytes | None:
+        return None
+
+    def close(self) -> None:
+        pass
+
+
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
     buf = bytearray()
     while len(buf) < size:
@@ -90,6 +105,16 @@ def test_proxy_packet_roundtrip_with_secret() -> None:
     encoded = packet.encode(PROXY_SECRET)
     assert ProxyPacket.decode(encoded, PROXY_SECRET) == packet
     assert ProxyPacket.decode(encoded, None) is None
+
+
+def test_proxy_server_derives_large_chunks_from_transport_mtu() -> None:
+    server = Socks5ProxyServer(_FakeTransport(mtu=14 * 1024))
+    assert server._max_chunk_size > 13 * 1024  # noqa: SLF001
+
+
+def test_proxy_server_uses_legacy_chunks_without_transport_mtu() -> None:
+    server = Socks5ProxyServer(_FakeTransport())
+    assert server._max_chunk_size == 180  # noqa: SLF001
 
 
 def test_proxy_hub_handshake() -> None:

@@ -105,3 +105,31 @@ def test_ws_client_logs_tls_verify_failures(monkeypatch, caplog) -> None:
     assert "WS failed to connect" in str(excinfo.value)
     assert "tls_verify_failed" in caplog.text
     assert "secret-jwt" not in caplog.text
+
+
+def test_ws_client_disables_auto_proxy(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyConnect:
+        async def __aenter__(self):
+            raise OSError("stop after connect kwargs captured")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_connect(uri, *, proxy=True, **kwargs):  # noqa: ANN001
+        captured["proxy"] = proxy
+        return DummyConnect()
+
+    monkeypatch.setattr(
+        ws_client,
+        "websockets",
+        SimpleNamespace(connect=fake_connect),
+    )
+
+    client = ws_client.WsClient(jwt="secret-jwt")
+    with pytest.raises(RuntimeError):
+        client.start(timeout=0.1)
+    client.stop()
+
+    assert captured["proxy"] is None
