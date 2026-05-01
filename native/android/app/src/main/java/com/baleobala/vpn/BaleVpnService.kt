@@ -20,10 +20,12 @@ import com.baleobala.vpn.carrier.Carrier
 import com.baleobala.vpn.carrier.LocalNatCarrier
 import com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
 import com.baleobala.vpn.tunnel.Transport
+import org.json.JSONObject
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramSocket
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Top-level VpnService. Brings up the TUN, hands packets to the configured
@@ -38,14 +40,21 @@ class BaleVpnService : VpnService() {
 
     @Volatile private var running = false
     @Volatile private var starting = false
+    @Volatile private var carrierKind = CARRIER_AUTO
     private var tunFd: ParcelFileDescriptor? = null
     private var startupThread: Thread? = null
     private var readerThread: Thread? = null
     private var writerThread: Thread? = null
+    private var statsThread: Thread? = null
     private var carrier: Carrier? = null
     private val outQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(1024)
 
     private val pktsOut = AtomicLong(0)
+    private val pktsIn = AtomicLong(0)
+    private val bytesOut = AtomicLong(0)
+    private val bytesIn = AtomicLong(0)
+    private val startedAt = AtomicLong(0)
+    private val lastError = AtomicReference("")
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_DISCONNECT) {
@@ -55,7 +64,8 @@ class BaleVpnService : VpnService() {
             return START_NOT_STICKY
         }
         startForeground(NOTIF_ID, buildNotification("Connecting…"))
-        val carrierKind = intent?.getStringExtra(EXTRA_CARRIER) ?: detectCarrier()
+        carrierKind = intent?.getStringExtra(EXTRA_CARRIER) ?: AppSettings(this).carrierMode
+        if (carrierKind == CARRIER_AUTO) carrierKind = detectCarrier()
         startTunnelAsync(carrierKind)
         return START_STICKY
     }
@@ -133,10 +143,12 @@ class BaleVpnService : VpnService() {
 
         readerThread = Thread({ readerLoop(fd) }, "tun-reader").apply { isDaemon = true; start() }
         writerThread = Thread({ writerLoop(fd) }, "tun-writer").apply { isDaemon = true; start() }
+        statsThread = Thread({ statsLoop() }, "vpn-stats").apply { isDaemon = true; start() }
         Thread({ selfTestProtectedDns() }, "self-test").apply { isDaemon = true; start() }
 
+        startedAt.set(System.currentTimeMillis())
         updateNotification("Connected")
-        broadcast("status", "connected")
+        broadcastSnapshot("connected")
         broadcast("log", "tun up: 10.77.0.2/24 mtu 1400")
     }
 
@@ -162,6 +174,8 @@ class BaleVpnService : VpnService() {
             try {
                 val n = input.read(buf)
                 if (n <= 0) { Thread.sleep(5); continue }
+                pktsIn.incrementAndGet()
+                bytesIn.addAndGet(n.toLong())
                 carrier?.submitPacket(buf, n)
             } catch (t: Throwable) {
                 if (running) Log.w(TAG, "reader: ${t.message}")
@@ -178,6 +192,7 @@ class BaleVpnService : VpnService() {
                 output.write(pkt)
                 output.flush()
                 pktsOut.incrementAndGet()
+                bytesOut.addAndGet(pkt.size.toLong())
             } catch (_: InterruptedException) { break }
             catch (t: Throwable) {
                 if (running) Log.w(TAG, "writer: ${t.message}")
@@ -193,12 +208,26 @@ class BaleVpnService : VpnService() {
         try { startupThread?.interrupt() } catch (_: Throwable) {}
         try { readerThread?.interrupt() } catch (_: Throwable) {}
         try { writerThread?.interrupt() } catch (_: Throwable) {}
+        try { statsThread?.interrupt() } catch (_: Throwable) {}
         try { tunFd?.close() } catch (_: Throwable) {}
         tunFd = null
         startupThread = null
         carrier = null
-        broadcast("status", "disconnected")
+        broadcastSnapshot("disconnected")
         broadcast("log", "tun down. out=${pktsOut.get()}")
+    }
+
+    private fun statsLoop() {
+        while (running) {
+            try {
+                Thread.sleep(2000)
+                if (running) broadcastSnapshot("connected")
+            } catch (_: InterruptedException) {
+                break
+            } catch (t: Throwable) {
+                lastError.set(t.message ?: t.javaClass.simpleName)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -266,6 +295,25 @@ class BaleVpnService : VpnService() {
         LocalBroadcastManager.getInstance(this).sendBroadcast(i)
     }
 
+    private fun broadcastSnapshot(status: String) {
+        val payload = JSONObject().apply {
+            put("status", status)
+            put("carrier", carrierKind)
+            put("pkts_in", pktsIn.get())
+            put("pkts_out", pktsOut.get())
+            put("bytes_in", bytesIn.get())
+            put("bytes_out", bytesOut.get())
+            put("uptime_sec", if (startedAt.get() > 0) (System.currentTimeMillis() - startedAt.get()) / 1000 else 0)
+            put("queue_depth", outQueue.size)
+            put("last_error", lastError.get())
+        }
+        val i = Intent(ACTION_STATE)
+            .putExtra("kind", "snapshot")
+            .putExtra("value", payload.toString())
+        LocalBroadcastManager.getInstance(this).sendBroadcast(i)
+        broadcast("status", status)
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -303,6 +351,7 @@ class BaleVpnService : VpnService() {
         const val EXTRA_CARRIER = "carrier"
         const val CARRIER_LOCAL = "local-nat"
         const val CARRIER_BALE = "bale"
+        const val CARRIER_AUTO = "auto"
         const val DEFAULT_EXIT_PEER_ID = 423217348L
         const val DEFAULT_TUNNEL_SESS_ID = 0x1111
     }
