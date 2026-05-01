@@ -38,6 +38,7 @@ bale = [
   "livekit>=0.17",
   "livekit-api>=0.7",
   "websockets>=16",
+  "python-socks[asyncio]>=2.5",
   "cryptography>=42",
   "httpx[http2]>=0.25",   # gRPC-Web auth (phone/SMS → JWT)
 ]
