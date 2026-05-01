@@ -140,6 +140,37 @@ def _build_ssl_context(config: WsTlsConfig) -> ssl.SSLContext | None:
     return ctx
 
 
+def _patch_nodelay_for_macos_daemon() -> None:
+    """Monkey-patch asyncio to tolerate EINVAL from TCP_NODELAY on macOS.
+
+    When baleobala runs as a macOS LaunchAgent (daemon), calling
+    setsockopt(IPPROTO_TCP, TCP_NODELAY, 1) on an SSL-wrapped socket raises
+    ``OSError: [Errno 22] Invalid argument``.  This prevents the WebSocket
+    from connecting even though the underlying connection is fine.
+
+    The upstream asyncio patch (bpo-40280) added a bare ``except OSError``
+    around _set_nodelay, but it's not in Python 3.12.  We apply the same fix
+    here — only when needed (idempotent, per-thread).
+    """
+    import asyncio.base_events as _abe
+    import socket as _socket
+
+    _original = _abe._set_nodelay  # type: ignore[attr-defined]
+
+    def _tolerant_set_nodelay(sock: _socket.socket) -> None:
+        try:
+            _original(sock)
+        except OSError:
+            # EINVAL on macOS daemon context — not fatal, skip gracefully
+            pass
+
+    # Apply only once (guard against repeated patching)
+    if getattr(_abe._set_nodelay, "_baleobala_patched", False):  # type: ignore[attr-defined]
+        return
+    _tolerant_set_nodelay._baleobala_patched = True  # type: ignore[attr-defined]
+    _abe._set_nodelay = _tolerant_set_nodelay  # type: ignore[attr-defined]
+
+
 class WsClient:
     def __init__(
         self,
@@ -221,6 +252,7 @@ class WsClient:
     def _run_thread(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        _patch_nodelay_for_macos_daemon()
         try:
             self._loop.run_until_complete(self._run())
         finally:
