@@ -774,6 +774,10 @@ class LiveKitDataChannel:
         self._closed = False
 
     @property
+    def closed(self) -> bool:
+        return self._closed or self._session.is_terminal()
+
+    @property
     def mtu(self) -> int:
         return self.MTU
 
