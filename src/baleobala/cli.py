@@ -2210,17 +2210,70 @@ def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
     from baleobala.runtime import TunnelTcpRelay
     from baleobala.runtime.frame import TunnelRole
 
-    transport_name, transport = _open_proxy_transport(args, TunnelRole.SERVER)
-    relay = TunnelTcpRelay(transport, secret=_resolve_proxy_secret(args))
+    stop_requested = threading.Event()
+    previous_handlers: dict[int, object] = {}
+
+    def _request_stop(signum, frame) -> None:  # noqa: ANN001
+        stop_requested.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _request_stop)
+        except (OSError, ValueError):
+            pass
+
+    initial_backoff = 2.0
+    max_backoff = 30.0
+    backoff = initial_backoff
+    attempt = 0
+
     try:
-        _emit_marker("call_established")
-        _emit_marker(f"transport_selected={transport_name}")
-        relay.serve_forever()
-    except KeyboardInterrupt:
-        relay.stop()
+        while not stop_requested.is_set():
+            attempt += 1
+            transport = None
+            relay = None
+            try:
+                _emit_marker(f"proxy_relay_session_attempt={attempt}")
+                transport_name, transport = _open_proxy_transport(args, TunnelRole.SERVER)
+                relay = TunnelTcpRelay(
+                    transport,
+                    secret=_resolve_proxy_secret(args),
+                    idle_timeout=getattr(args, "relay_idle_timeout", 60.0),
+                )
+                _emit_marker("call_established")
+                _emit_marker(f"transport_selected={transport_name}")
+                backoff = initial_backoff
+                relay.serve_forever()
+            except Exception as exc:
+                if stop_requested.is_set():
+                    break
+                log.error("proxy relay session failed (attempt %d): %s", attempt, exc)
+                _emit_marker(f"proxy_relay_session_failed={type(exc).__name__}:{exc}")
+            finally:
+                try:
+                    if relay is not None:
+                        relay.stop()
+                except Exception:
+                    pass
+                try:
+                    if transport is not None:
+                        transport.close()
+                except Exception:
+                    pass
+
+            if stop_requested.is_set():
+                break
+            _emit_marker(f"proxy_relay_reconnect_backoff={backoff:.1f}s")
+            stop_requested.wait(timeout=backoff)
+            backoff = min(backoff * 2.0, max_backoff)
     finally:
+        for sig, previous in previous_handlers.items():
+            try:
+                signal.signal(sig, previous)
+            except (OSError, ValueError):
+                pass
         _emit_marker("teardown_done")
-        transport.close()
     return 0
 
 
@@ -2737,6 +2790,7 @@ def build_parser() -> argparse.ArgumentParser:
     bp_relay.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_relay.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_relay.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
+    bp_relay.add_argument("--relay-idle-timeout", type=float, default=60.0, help="seconds before an idle relay call is recycled (default: 60)")
     _add_bale_ws_tls_args(bp_relay)
     bp_relay.set_defaults(func=cmd_bale_proxy_relay)
 

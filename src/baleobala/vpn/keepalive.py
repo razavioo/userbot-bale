@@ -50,6 +50,8 @@ class LiveKitKeepalive:
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
+            if bool(getattr(self._session, "is_terminal", lambda: False)()):
+                return
             try:
                 self._session._submit_data(
                     KEEPALIVE_PAYLOAD,
@@ -58,3 +60,5 @@ class LiveKitKeepalive:
                 )
             except Exception:  # noqa: BLE001
                 log.exception("keepalive publish failed")
+                if bool(getattr(self._session, "is_terminal", lambda: False)()):
+                    return

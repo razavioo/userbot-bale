@@ -847,6 +847,7 @@ class TunnelTcpRelay:
         *,
         connect_timeout: float = 5.0,
         handshake_timeout: float = 15.0,
+        idle_timeout: float | None = None,
         max_chunk_size: int | None = None,
         max_active_connections: int = 64,
         secret: bytes | None = None,
@@ -854,9 +855,13 @@ class TunnelTcpRelay:
         self._hub = ProxyHub(transport, secret=secret)
         self._connect_timeout = connect_timeout
         self._handshake_timeout = handshake_timeout
+        self._idle_timeout = idle_timeout
         self._max_chunk_size = _chunk_size_for_transport(transport, max_chunk_size)
         self._slots = threading.BoundedSemaphore(max_active_connections)
         self._stop = threading.Event()
+        self._active_lock = threading.Lock()
+        self._active_connections = 0
+        self._last_activity = time.monotonic()
 
     def stop(self) -> None:
         self._stop.set()
@@ -869,6 +874,7 @@ class TunnelTcpRelay:
             log.warning("relay handshake timed out, retrying over existing transport...")
         if self._stop.is_set() or self._transport_closed():
             return
+        self._touch_activity()
         while not self._stop.is_set():
             packet = self._hub.accept_open(timeout=0.25)
             if packet is None:
@@ -887,8 +893,12 @@ class TunnelTcpRelay:
             log.warning("relay handshake timed out, retrying over existing transport...")
         if self._stop.is_set() or self._transport_closed():
             return
+        self._touch_activity()
         while not self._stop.is_set():
             if self._transport_closed():
+                return
+            if self._idle_expired():
+                log.info("relay idle timeout elapsed; returning to answer mode")
                 return
             packet = self._hub.accept_open(timeout=0.25)
             if packet is None:
@@ -901,6 +911,7 @@ class TunnelTcpRelay:
         return self._hub.closed
 
     def _handle_connection(self, packet: ProxyPacket) -> None:
+        self._mark_connection_started()
         if not self._slots.acquire(blocking=False):
             log.warning("proxy_open_rejected target=%s:%s conn_id=%s reason=too_many_connections", packet.host, packet.port, packet.conn_id)
             try:
@@ -913,6 +924,7 @@ class TunnelTcpRelay:
                 )
             finally:
                 self._hub.unregister(packet.conn_id)
+                self._mark_connection_finished()
             return
         log.info("proxy_open target=%s:%s conn_id=%s", packet.host, packet.port, packet.conn_id)
         try:
@@ -930,6 +942,7 @@ class TunnelTcpRelay:
             finally:
                 self._hub.unregister(packet.conn_id)
                 self._slots.release()
+                self._mark_connection_finished()
             return
 
         with sock:
@@ -982,3 +995,27 @@ class TunnelTcpRelay:
                 worker.join(timeout=1.0)
                 self._hub.unregister(packet.conn_id)
                 self._slots.release()
+                self._mark_connection_finished()
+
+    def _mark_connection_started(self) -> None:
+        with self._active_lock:
+            self._active_connections += 1
+            self._last_activity = time.monotonic()
+
+    def _mark_connection_finished(self) -> None:
+        with self._active_lock:
+            self._active_connections = max(0, self._active_connections - 1)
+            self._last_activity = time.monotonic()
+
+    def _idle_expired(self) -> bool:
+        if self._idle_timeout is None:
+            return False
+        with self._active_lock:
+            if self._active_connections > 0:
+                return False
+            idle_for = time.monotonic() - self._last_activity
+        return idle_for >= self._idle_timeout
+
+    def _touch_activity(self) -> None:
+        with self._active_lock:
+            self._last_activity = time.monotonic()

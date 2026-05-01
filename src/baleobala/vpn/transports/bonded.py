@@ -93,15 +93,22 @@ class BondedTransport:
 
     @property
     def closed(self) -> bool:
-        return self._closed
+        return self._closed or all(bool(getattr(ch, "closed", False)) for ch in self._channels)
 
     def send_bytes(self, data: bytes) -> None:
-        if self._closed:
+        if self.closed:
             raise RuntimeError("bonded transport closed")
         with self._send_lock:
             # Round-robin across channels.
-            ch = self._channels[self._send_idx]
-            self._send_idx = (self._send_idx + 1) % len(self._channels)
+            live_channels = [
+                ch for ch in self._channels
+                if not bool(getattr(ch, "closed", False))
+            ]
+            if not live_channels:
+                self._closed = True
+                raise RuntimeError("bonded transport closed")
+            ch = live_channels[self._send_idx % len(live_channels)]
+            self._send_idx = (self._send_idx + 1) % len(live_channels)
         ch.send_bytes(data)
 
     # Alias for the proxy transport adapter interface.
@@ -109,7 +116,7 @@ class BondedTransport:
         self.send_bytes(data)
 
     def recv_bytes(self, timeout: float | None = None) -> bytes | None:
-        if self._closed:
+        if self.closed:
             return None
         try:
             return self._recv_queue.get(timeout=timeout)
@@ -135,10 +142,14 @@ class BondedTransport:
 
     def _read_loop(self, ch: _TransportLike) -> None:
         while not self._stop.is_set():
+            if bool(getattr(ch, "closed", False)):
+                return
             try:
                 data = ch.recv_bytes(timeout=0.25)
             except Exception:  # noqa: BLE001
                 if self._stop.is_set():
+                    return
+                if bool(getattr(ch, "closed", False)):
                     return
                 continue
             if data is not None:
