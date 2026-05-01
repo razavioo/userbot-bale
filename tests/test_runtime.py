@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import os
+import time
 
 import baleobala
 
@@ -87,7 +89,69 @@ def test_build_parser_exposes_bale_tunnel() -> None:
             break
     assert "bale-tunnel" in subcommands
     assert "bale-proxy" in subcommands
+    proxy_parser = subcommands["bale-proxy"]
+    proxy_subcommands = {}
+    for action in proxy_parser._actions:
+        choices = getattr(action, "choices", None)
+        if isinstance(choices, dict):
+            proxy_subcommands = choices
+            break
+    assert "browser" in proxy_subcommands
+    assert "system" in proxy_subcommands
     assert "doctor" in subcommands
+
+
+def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
+    import baleobala.cli as cli
+
+    monkeypatch.setattr("sys.platform", "darwin")
+    events: list[str] = []
+
+    class FakeTransport:
+        def close(self) -> None:
+            events.append("transport.close")
+
+    class FakeServer:
+        def __init__(self, on_listen):  # noqa: ANN001
+            self._on_listen = on_listen
+
+        def serve_forever(self) -> None:
+            events.append("serve")
+            self._on_listen("127.0.0.1", 1080)
+            time.sleep(0.01)
+
+        def stop(self) -> None:
+            events.append("server.stop")
+
+    class FakeSystemProxy:
+        def __init__(self, **kwargs):  # noqa: ANN001
+            events.append(f"proxy.init:{kwargs['services']}")
+
+        def start(self) -> None:
+            events.append("proxy.start")
+
+        def stop(self) -> None:
+            events.append("proxy.stop")
+
+        def status(self) -> dict[str, str]:
+            return {"proxy": "127.0.0.1:1080"}
+
+    def fake_start_proxy_client_runtime(args, *, on_listen=None):  # noqa: ANN001
+        return "dc", FakeTransport(), FakeServer(on_listen)
+
+    monkeypatch.setattr(cli, "_start_proxy_client_runtime", fake_start_proxy_client_runtime)
+    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeSystemProxy)
+
+    args = argparse.Namespace(
+        listen_host="127.0.0.1",
+        listen_port=1080,
+        service=["Wi-Fi"],
+        proxy_ready_timeout=1.0,
+    )
+
+    assert cli.cmd_bale_proxy_system(args) == 0
+    assert events.index("serve") < events.index("proxy.start")
+    assert events[-3:] == ["proxy.stop", "server.stop", "transport.close"]
 
 
 def test_clean_qt_environment_removes_sdk_overrides() -> None:

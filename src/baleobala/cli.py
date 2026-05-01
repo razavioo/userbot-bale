@@ -21,10 +21,12 @@ import importlib.util
 import json
 import logging
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Iterator, Literal
 
@@ -1359,7 +1361,7 @@ def cmd_vpn(args: argparse.Namespace) -> int:
 
         pairing = pairing_store.connectable(profile.pairing_id) or pairing_store.active()
         backend = backend_for_profile(profile)
-        backend_status = backend.status()
+        backend_status = backend.status() if hasattr(backend, "status") else {}
         if (
             backend_status.get("state") == "running"
             and backend_status.get("call_established") == "yes"
@@ -1456,6 +1458,13 @@ def cmd_vpn(args: argparse.Namespace) -> int:
             backend.down()
 
     client_args = _vpn_namespace_from_profile(profile, auth_record)
+    if profile.backend == "proxy" and sys.platform == "darwin":
+        if not hasattr(client_args, "service"):
+            client_args.service = None
+        if not hasattr(client_args, "proxy_ready_timeout"):
+            client_args.proxy_ready_timeout = 30.0
+        return cmd_bale_proxy_system(client_args)
+
     backend = backend_for_profile(profile)
     backend_state = _backend_up(backend, profile, auth_record, pairing_store.connectable(profile.pairing_id))
     try:
@@ -1572,9 +1581,16 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
         )
 
     from baleobala.bale.api import BaleApiClient
+    from baleobala.bale.ws_client import WsTlsConfig
     from baleobala.carrier.bale import BaleCarrierController
 
-    controller = BaleCarrierController(client=BaleApiClient(jwt=jwt))
+    ws_tls_config = WsTlsConfig.from_sources(
+        ca_file=getattr(args, "ws_ca_file", None),
+        ca_path=getattr(args, "ws_ca_path", None),
+        insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
+        allow_insecure_debug=True,
+    )
+    controller = BaleCarrierController(client=BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config))
     try:
         peer_id = args.peer_id
         if peer_id is None and args.peer_name:
@@ -1727,6 +1743,75 @@ def _emit_marker(marker: str) -> None:
     print(marker, file=sys.stderr)
 
 
+def _add_bale_ws_tls_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ws-ca-file",
+        default=None,
+        help="custom CA bundle for Bale WS TLS verification on intercepted networks",
+    )
+    parser.add_argument(
+        "--ws-ca-path",
+        default=None,
+        help="custom CA directory for Bale WS TLS verification on intercepted networks",
+    )
+    parser.add_argument(
+        "--ws-ssl-no-verify",
+        action="store_true",
+        help="debug-only: disable Bale WS TLS verification for this run",
+    )
+
+
+def _browser_launch_args(browser: str, *, proxy_url: str, target_url: str, profile_dir: Path) -> list[str]:
+    if sys.platform == "darwin":
+        app_name = {
+            "auto": "Google Chrome",
+            "chrome": "Google Chrome",
+            "chromium": "Chromium",
+            "edge": "Microsoft Edge",
+        }.get(browser)
+        if app_name is None:
+            raise ValueError(f"unsupported browser: {browser}")
+        return [
+            "-na",
+            app_name,
+            "--args",
+            f"--proxy-server={proxy_url}",
+            f"--user-data-dir={profile_dir}",
+            target_url,
+        ]
+    exe = {
+        "auto": shutil.which("chromium")
+        or shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+        or shutil.which("microsoft-edge"),
+        "chrome": shutil.which("google-chrome") or shutil.which("google-chrome-stable"),
+        "chromium": shutil.which("chromium"),
+        "edge": shutil.which("microsoft-edge"),
+    }.get(browser)
+    if not exe:
+        raise RuntimeError(f"could not find a browser executable for {browser!r}")
+    return [exe, f"--proxy-server={proxy_url}", f"--user-data-dir={profile_dir}", target_url]
+
+
+def _start_proxy_client_runtime(args: argparse.Namespace, *, on_listen=None):
+    from baleobala.runtime import Socks5ProxyServer
+    from baleobala.runtime.frame import TunnelRole
+
+    transport_name, transport = _open_proxy_transport(args, TunnelRole.CLIENT)
+    def _handle_listen(host, port):  # noqa: ANN001
+        _emit_marker(f"proxy_listening={host or args.listen_host}:{port or args.listen_port}")
+        if on_listen is not None:
+            on_listen(host, port)
+    server = Socks5ProxyServer(
+        transport,
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        secret=_resolve_proxy_secret(args),
+        on_listen=_handle_listen,
+    )
+    return transport_name, transport, server
+
+
 class _ProxyTransportAdapter:
     """Adapt VPN byte transports to the proxy runtime's send/recv shape."""
 
@@ -1791,19 +1876,7 @@ def _open_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN001
 
 def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
     """Run a local SOCKS5/HTTP CONNECT server over Bale-backed transport."""
-    from baleobala.runtime import Socks5ProxyServer
-    from baleobala.runtime.frame import TunnelRole
-
-    transport_name, transport = _open_proxy_transport(args, TunnelRole.CLIENT)
-    server = Socks5ProxyServer(
-        transport,
-        listen_host=args.listen_host,
-        listen_port=args.listen_port,
-        secret=_resolve_proxy_secret(args),
-        on_listen=lambda host, port: _emit_marker(
-            f"proxy_listening={host or args.listen_host}:{port or args.listen_port}"
-        ),
-    )
+    transport_name, transport, server = _start_proxy_client_runtime(args)
     try:
         _emit_marker("call_established")
         _emit_marker(f"transport_selected={transport_name}")
@@ -1813,6 +1886,127 @@ def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
     finally:
         _emit_marker("teardown_done")
         transport.close()
+    return 0
+
+
+def cmd_bale_proxy_browser(args: argparse.Namespace) -> int:
+    """Start the Bale proxy client and launch a browser with per-app proxy flags."""
+    from baleobala.control.paths import config_dir
+
+    ready = threading.Event()
+    transport_name, transport, server = _start_proxy_client_runtime(args, on_listen=lambda _host, _port: ready.set())
+
+    def _run_server() -> None:
+        try:
+            _emit_marker("call_established")
+            _emit_marker(f"transport_selected={transport_name}")
+            server.serve_forever()
+        except Exception as exc:
+            _emit_marker(f"proxy_browser_error={type(exc).__name__}:{exc}")
+
+    thread = threading.Thread(target=_run_server, daemon=True)
+    thread.start()
+    profile_dir = config_dir() / "browser-proxy" / args.browser
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if not ready.wait(timeout=15.0):
+            raise RuntimeError("proxy listener did not become ready")
+        proxy_url = f"socks5://{args.listen_host}:{args.listen_port}"
+        browser_cmd = _browser_launch_args(args.browser, proxy_url=proxy_url, target_url=args.url, profile_dir=profile_dir)
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", *browser_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(browser_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"browser_started={args.browser}", file=sys.stderr)
+        try:
+            while thread.is_alive():
+                thread.join(timeout=0.25)
+        except KeyboardInterrupt:
+            pass
+    finally:
+        try:
+            server.stop()
+        except Exception:
+            pass
+        try:
+            transport.close()
+        except Exception:
+            pass
+        _emit_marker("teardown_done")
+    return 0
+
+
+def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
+    """Start the Bale proxy client and point the OS proxy at it while running."""
+    if sys.platform != "darwin":
+        raise SystemExit("bale-proxy system currently supports macOS system proxy settings.")
+
+    from baleobala.control.macos import MacOSSystemProxySession
+
+    ready = threading.Event()
+    stop_requested = threading.Event()
+    transport_name, transport, server = _start_proxy_client_runtime(args, on_listen=lambda _host, _port: ready.set())
+    system_proxy = MacOSSystemProxySession(
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        services=args.service or None,
+    )
+
+    def _run_server() -> None:
+        try:
+            _emit_marker("call_established")
+            _emit_marker(f"transport_selected={transport_name}")
+            server.serve_forever()
+        except Exception as exc:
+            _emit_marker(f"proxy_system_error={type(exc).__name__}:{exc}")
+
+    thread = threading.Thread(target=_run_server, daemon=True)
+    thread.start()
+    previous_handlers: dict[int, object] = {}
+
+    def _request_stop(signum, frame) -> None:  # noqa: ANN001
+        stop_requested.set()
+        try:
+            server.stop()
+        except Exception:
+            pass
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _request_stop)
+        except (OSError, ValueError):
+            pass
+    try:
+        if not ready.wait(timeout=args.proxy_ready_timeout):
+            raise RuntimeError("proxy listener did not become ready")
+        system_proxy.start()
+        status = system_proxy.status()
+        _emit_marker(f"system_proxy_active={status.get('proxy', f'{args.listen_host}:{args.listen_port}')}")
+        try:
+            while thread.is_alive() and not stop_requested.is_set():
+                thread.join(timeout=0.25)
+        except KeyboardInterrupt:
+            pass
+    finally:
+        for sig, previous in previous_handlers.items():
+            try:
+                signal.signal(sig, previous)
+            except (OSError, ValueError):
+                pass
+        try:
+            system_proxy.stop()
+        except Exception as exc:
+            _emit_marker(f"system_proxy_restore_error={type(exc).__name__}:{exc}")
+        try:
+            server.stop()
+        except Exception:
+            pass
+        try:
+            transport.close()
+        except Exception:
+            pass
+        _emit_marker("teardown_done")
     return 0
 
 
@@ -2270,7 +2464,62 @@ def build_parser() -> argparse.ArgumentParser:
     bp_client.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
     bp_client.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_client.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
+    _add_bale_ws_tls_args(bp_client)
     bp_client.set_defaults(func=cmd_bale_proxy_client)
+
+    bp_browser = bp_sub.add_parser(
+        "browser",
+        help="start the proxy client and open a browser with per-app proxy flags",
+    )
+    bp_browser.add_argument("--listen-host", default="127.0.0.1")
+    bp_browser.add_argument("--listen-port", type=int, default=1080)
+    bp_browser.add_argument("--livekit-url", default=None)
+    bp_browser.add_argument("--livekit-token", default=None)
+    bp_browser.add_argument("--livekit-room", default=None)
+    bp_browser.add_argument("--bale-jwt", default=None)
+    bp_browser.add_argument("--bale-jwt-file", default=None)
+    bp_browser.add_argument("--peer-id", type=int, default=None)
+    bp_browser.add_argument("--peer", default=None)
+    bp_browser.add_argument("--peer-name", default=None)
+    bp_browser.add_argument("--answer", action="store_true")
+    bp_browser.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_browser.add_argument("--identity", default="baleobala")
+    bp_browser.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
+    bp_browser.add_argument("--volume", type=int, default=50)
+    bp_browser.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
+    bp_browser.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
+    bp_browser.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
+    bp_browser.add_argument("--browser", choices=["auto", "chrome", "chromium", "edge"], default="auto")
+    bp_browser.add_argument("--url", default="https://web.bale.ai", help="page to open in the browser")
+    _add_bale_ws_tls_args(bp_browser)
+    bp_browser.set_defaults(func=cmd_bale_proxy_browser)
+
+    bp_system = bp_sub.add_parser(
+        "system",
+        help="start the proxy client and enable macOS system proxy while it runs",
+    )
+    bp_system.add_argument("--listen-host", default="127.0.0.1")
+    bp_system.add_argument("--listen-port", type=int, default=1080)
+    bp_system.add_argument("--livekit-url", default=None)
+    bp_system.add_argument("--livekit-token", default=None)
+    bp_system.add_argument("--livekit-room", default=None)
+    bp_system.add_argument("--bale-jwt", default=None)
+    bp_system.add_argument("--bale-jwt-file", default=None)
+    bp_system.add_argument("--peer-id", type=int, default=None)
+    bp_system.add_argument("--peer", default=None)
+    bp_system.add_argument("--peer-name", default=None)
+    bp_system.add_argument("--answer", action="store_true")
+    bp_system.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_system.add_argument("--identity", default="baleobala")
+    bp_system.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
+    bp_system.add_argument("--volume", type=int, default=50)
+    bp_system.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
+    bp_system.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
+    bp_system.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
+    bp_system.add_argument("--service", action="append", default=[], help="macOS network service to modify; repeat for more services")
+    bp_system.add_argument("--proxy-ready-timeout", type=float, default=30.0)
+    _add_bale_ws_tls_args(bp_system)
+    bp_system.set_defaults(func=cmd_bale_proxy_system)
 
     bp_relay = bp_sub.add_parser("relay", help="relay proxy traffic to TCP targets")
     bp_relay.add_argument("--livekit-url", default=None)
@@ -2289,6 +2538,7 @@ def build_parser() -> argparse.ArgumentParser:
     bp_relay.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
     bp_relay.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_relay.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
+    _add_bale_ws_tls_args(bp_relay)
     bp_relay.set_defaults(func=cmd_bale_proxy_relay)
 
     bc = sub.add_parser(
