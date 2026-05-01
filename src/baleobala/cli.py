@@ -2007,6 +2007,9 @@ def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
         except Exception:
             pass
         _emit_marker("teardown_done")
+    if not stop_requested.is_set():
+        _emit_marker("proxy_system_unexpected_exit")
+        return 1
     return 0
 
 
