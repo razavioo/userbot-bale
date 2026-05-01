@@ -456,8 +456,12 @@ class Socks5ProxyServer:
         self._hub.close()
 
     def serve_once(self) -> None:
-        if not self._hub.negotiate(timeout=self._handshake_timeout):
-            raise TimeoutError("proxy handshake failed")
+        while not self._stop.is_set() and not self._transport_closed():
+            if self._hub.negotiate(timeout=self._handshake_timeout):
+                break
+            log.warning("proxy handshake timed out, retrying over existing transport...")
+        if self._stop.is_set() or self._transport_closed():
+            return
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._listen_host, self._listen_port))
@@ -475,8 +479,12 @@ class Socks5ProxyServer:
                 return
 
     def serve_forever(self) -> None:
-        if not self._hub.negotiate(timeout=self._handshake_timeout):
-            raise TimeoutError("proxy handshake failed")
+        while not self._stop.is_set() and not self._transport_closed():
+            if self._hub.negotiate(timeout=self._handshake_timeout):
+                break
+            log.warning("proxy handshake timed out, retrying over existing transport...")
+        if self._stop.is_set() or self._transport_closed():
+            return
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._listen_host, self._listen_port))
@@ -855,8 +863,12 @@ class TunnelTcpRelay:
         self._hub.close()
 
     def serve_once(self) -> None:
-        if not self._hub.negotiate(timeout=self._handshake_timeout):
-            raise TimeoutError("proxy handshake failed")
+        while not self._stop.is_set() and not self._transport_closed():
+            if self._hub.negotiate(timeout=self._handshake_timeout):
+                break
+            log.warning("relay handshake timed out, retrying over existing transport...")
+        if self._stop.is_set() or self._transport_closed():
+            return
         while not self._stop.is_set():
             packet = self._hub.accept_open(timeout=0.25)
             if packet is None:
@@ -869,8 +881,12 @@ class TunnelTcpRelay:
             return
 
     def serve_forever(self) -> None:
-        if not self._hub.negotiate(timeout=self._handshake_timeout):
-            raise TimeoutError("proxy handshake failed")
+        while not self._stop.is_set() and not self._transport_closed():
+            if self._hub.negotiate(timeout=self._handshake_timeout):
+                break
+            log.warning("relay handshake timed out, retrying over existing transport...")
+        if self._stop.is_set() or self._transport_closed():
+            return
         while not self._stop.is_set():
             if self._transport_closed():
                 return

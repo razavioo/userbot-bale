@@ -341,6 +341,22 @@ class LiveKitSession:
             else:
                 log.debug("data on unhandled topic=%r (%d bytes)", topic, len(packet.data))
 
+        @room.on("disconnected")  # type: ignore[misc]
+        def on_disconnected(reason=None):  # type: ignore[no-untyped-def]
+            log.error("LiveKit room disconnected: reason=%s", reason)
+            self._set_terminal_failure(
+                RuntimeError(f"LiveKit room disconnected: {reason}")
+            )
+            self._stopped.set()
+
+        @room.on("reconnecting")  # type: ignore[misc]
+        def on_reconnecting():  # type: ignore[no-untyped-def]
+            log.warning("LiveKit room reconnecting...")
+
+        @room.on("reconnected")  # type: ignore[misc]
+        def on_reconnected():  # type: ignore[no-untyped-def]
+            log.info("LiveKit room reconnected successfully")
+
         await room.connect(self.url, self.token)
         log.info("LiveKit room connected: %s identity=%s",
                  room.name, self.identity)
