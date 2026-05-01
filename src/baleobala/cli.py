@@ -1859,7 +1859,7 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
     url, token = _resolve_livekit_credentials(args)
     session = LiveKitSession(url=url, token=token, identity=args.identity)
     session.start()
-    keepalive = LiveKitKeepalive(session, interval=20.0)
+    keepalive = LiveKitKeepalive(session, interval=10.0)
     keepalive.start()
     if not hasattr(args, "psk"):
         args.psk = None
@@ -1953,7 +1953,7 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
 
     session = LiveKitSession(url=creds.url, token=creds.token, identity=args.identity)
     session.start()
-    keepalive = LiveKitKeepalive(session, interval=20.0)
+    keepalive = LiveKitKeepalive(session, interval=10.0)
     keepalive.start()
 
     # Allow tracks to settle.
@@ -2045,45 +2045,22 @@ def cmd_bale_proxy_browser(args: argparse.Namespace) -> int:
 
 
 def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
-    """Start the Bale proxy client and point the OS proxy at it while running."""
+    """Start the Bale proxy client and point the OS proxy at it while running.
+
+    Includes auto-reconnect: when the LiveKit transport dies (ping timeout,
+    signal failure, connection reset), the transport is rebuilt with fresh
+    credentials while the macOS system proxy settings stay active.
+    """
     if sys.platform != "darwin":
         raise SystemExit("bale-proxy system currently supports macOS system proxy settings.")
 
     from baleobala.control.macos import MacOSSystemProxySession
 
-    ready = threading.Event()
     stop_requested = threading.Event()
-    server_failed_before_ready = threading.Event()
-    server_errors: list[BaseException] = []
-    transport_name, transport, server = _start_proxy_client_runtime(args, on_listen=lambda _host, _port: ready.set())
-    system_proxy = MacOSSystemProxySession(
-        listen_host=args.listen_host,
-        listen_port=args.listen_port,
-        services=args.service or None,
-    )
-
-    def _run_server() -> None:
-        try:
-            _emit_marker("call_established")
-            _emit_marker(f"transport_selected={transport_name}")
-            server.serve_forever()
-        except Exception as exc:
-            server_errors.append(exc)
-            _emit_marker(f"proxy_system_error={type(exc).__name__}:{exc}")
-        finally:
-            if not ready.is_set():
-                server_failed_before_ready.set()
-
-    thread = threading.Thread(target=_run_server, daemon=True)
-    thread.start()
     previous_handlers: dict[int, object] = {}
 
     def _request_stop(signum, frame) -> None:  # noqa: ANN001
         stop_requested.set()
-        try:
-            server.stop()
-        except Exception:
-            pass
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -2091,53 +2068,141 @@ def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
             signal.signal(sig, _request_stop)
         except (OSError, ValueError):
             pass
+
+    system_proxy = MacOSSystemProxySession(
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        services=args.service or None,
+    )
+    system_proxy_started = False
+
+    # Reconnect parameters (exponential backoff).
+    initial_backoff = 2.0
+    max_backoff = 30.0
+    backoff_factor = 2.0
+    backoff = initial_backoff
+    attempt = 0
+
     try:
-        deadline = time.monotonic() + args.proxy_ready_timeout
-        while not ready.is_set():
-            if server_failed_before_ready.is_set():
-                if server_errors:
-                    exc = server_errors[-1]
-                    raise RuntimeError(
-                        f"proxy server exited before listening: {type(exc).__name__}: {exc}"
-                    ) from exc
-                raise RuntimeError("proxy server exited before listening")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+        while not stop_requested.is_set():
+            attempt += 1
+            ready = threading.Event()
+            server_failed_before_ready = threading.Event()
+            server_errors: list[BaseException] = []
+            transport_name = ""
+            transport = None
+            server = None
+
+            try:
+                _emit_marker(f"proxy_session_attempt={attempt}")
+                transport_name, transport, server = _start_proxy_client_runtime(
+                    args, on_listen=lambda _host, _port: ready.set(),
+                )
+            except Exception as exc:
+                log.error("proxy transport setup failed (attempt %d): %s", attempt, exc)
+                _emit_marker(f"proxy_transport_setup_failed={type(exc).__name__}:{exc}")
+                if stop_requested.is_set():
+                    break
+                _emit_marker(f"proxy_reconnect_backoff={backoff:.1f}s")
+                stop_requested.wait(timeout=backoff)
+                backoff = min(backoff * backoff_factor, max_backoff)
+                continue
+
+            # Server thread: drives the SOCKS5/HTTP CONNECT listener.
+            current_server = server
+            current_transport = transport
+
+            def _run_server() -> None:
+                try:
+                    _emit_marker("call_established")
+                    _emit_marker(f"transport_selected={transport_name}")
+                    current_server.serve_forever()
+                except Exception as exc:
+                    server_errors.append(exc)
+                    _emit_marker(f"proxy_system_error={type(exc).__name__}:{exc}")
+                finally:
+                    if not ready.is_set():
+                        server_failed_before_ready.set()
+
+            thread = threading.Thread(target=_run_server, daemon=True)
+            thread.start()
+
+            try:
+                # Wait for the proxy listener to bind.
+                deadline = time.monotonic() + args.proxy_ready_timeout
+                while not ready.is_set():
+                    if server_failed_before_ready.is_set():
+                        if server_errors:
+                            exc = server_errors[-1]
+                            raise RuntimeError(
+                                f"proxy server exited before listening: {type(exc).__name__}: {exc}"
+                            ) from exc
+                        raise RuntimeError("proxy server exited before listening")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    ready.wait(timeout=min(0.1, remaining))
+
+                if not ready.is_set():
+                    raise RuntimeError("proxy listener did not become ready")
+
+                # Start system proxy on first successful session.
+                if not system_proxy_started:
+                    system_proxy.start()
+                    system_proxy_started = True
+                    status = system_proxy.status()
+                    _emit_marker(f"system_proxy_active={status.get('proxy', f'{args.listen_host}:{args.listen_port}')}")
+
+                # Reset backoff on successful connection.
+                backoff = initial_backoff
+
+                # Block until the server thread exits (transport death) or stop.
+                while thread.is_alive() and not stop_requested.is_set():
+                    thread.join(timeout=0.25)
+
+            except RuntimeError as exc:
+                log.error("proxy session failed (attempt %d): %s", attempt, exc)
+                _emit_marker(f"proxy_session_failed={type(exc).__name__}:{exc}")
+            finally:
+                # Tear down this session's transport.
+                try:
+                    if current_server is not None:
+                        current_server.stop()
+                except Exception:
+                    pass
+                try:
+                    if current_transport is not None:
+                        current_transport.close()
+                except Exception:
+                    pass
+
+            if stop_requested.is_set():
                 break
-            ready.wait(timeout=min(0.1, remaining))
-        if not ready.is_set():
-            raise RuntimeError("proxy listener did not become ready")
-        system_proxy.start()
-        status = system_proxy.status()
-        _emit_marker(f"system_proxy_active={status.get('proxy', f'{args.listen_host}:{args.listen_port}')}")
-        try:
-            while thread.is_alive() and not stop_requested.is_set():
-                thread.join(timeout=0.25)
-        except KeyboardInterrupt:
-            pass
+
+            # Transport died — reconnect with backoff.
+            _emit_marker(f"proxy_reconnect_backoff={backoff:.1f}s")
+            log.info("transport closed; reconnect in %.1fs (attempt %d)", backoff, attempt)
+            stop_requested.wait(timeout=backoff)
+            backoff = min(backoff * backoff_factor, max_backoff)
+
     finally:
         for sig, previous in previous_handlers.items():
             try:
                 signal.signal(sig, previous)
             except (OSError, ValueError):
                 pass
-        try:
-            system_proxy.stop()
-        except Exception as exc:
-            _emit_marker(f"system_proxy_restore_error={type(exc).__name__}:{exc}")
-        try:
-            server.stop()
-        except Exception:
-            pass
-        try:
-            transport.close()
-        except Exception:
-            pass
+        if system_proxy_started:
+            try:
+                system_proxy.stop()
+            except Exception as exc:
+                _emit_marker(f"system_proxy_restore_error={type(exc).__name__}:{exc}")
         _emit_marker("teardown_done")
+
     if not stop_requested.is_set():
         _emit_marker("proxy_system_unexpected_exit")
         return 1
     return 0
+
 
 
 def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
