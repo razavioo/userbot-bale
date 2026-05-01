@@ -1,26 +1,26 @@
 # baleobala
 
-`baleobala` هسته‌ی ارتباطی برای Bale است — یک پروکسی SOCKS5 که ترافیک شبکه را از طریق DataChannel یک تماس Bale بین دو حساب کاربری انتقال می‌دهد. هیچ سرور میانجی مجزایی لازم نیست؛ کانال مستقیم‌ترین مسیر ممکن است.
+`baleobala` is the communication core for Bale — a SOCKS5 proxy that tunnels network traffic through the DataChannel of a Bale call between two user accounts. No separate relay server is needed; the channel is the most direct path possible.
 
 ---
 
-## اتصال سریع (macOS)
+## Quick Connect (macOS)
 
-> **پیش‌نیاز:** سرویس relay سمت VPS باید روشن باشد (دستور آن پایین‌تر آمده).
+> **Prerequisite:** The relay service on the VPS must be running (instructions below).
 
-### وصل شدن
+### Connect
 
 ```bash
 bash scripts/run-proxy-client.sh
 ```
 
-یا اگر LaunchAgent نصب شده (بعد از login خودکار بالا می‌آید):
+Or if the LaunchAgent is installed (it starts automatically after login):
 
 ```bash
 launchctl start ai.baleobala.proxy-client
 ```
 
-وقتی پروکسی آماده شد این پیام‌ها در log می‌آیند:
+When the proxy is ready, you will see these messages in the log:
 
 ```
 call_established
@@ -29,26 +29,26 @@ proxy_listening=127.0.0.1:1080
 system_proxy_active=127.0.0.1:1080
 ```
 
-Wi-Fi SOCKS proxy سیستم به‌صورت خودکار روشن می‌شود.
+The system's Wi-Fi SOCKS proxy will be enabled automatically.
 
-### تست
+### Test
 
 ```bash
-# باید IP سرور VPS را برگرداند (68.183.118.171)
+# Should return the VPS server IP (68.183.118.171)
 curl --socks5-hostname 127.0.0.1:1080 https://ifconfig.me
 ```
 
-### قطع کردن
+### Disconnect
 
 ```bash
 launchctl stop ai.baleobala.proxy-client
 ```
 
-یا اگر foreground اجرا شده: `Ctrl-C`
+Or if running in the foreground: `Ctrl-C`
 
-هر دو حالت Wi-Fi proxy سیستم را بلافاصله restore می‌کنند (SIGTERM → Python cleanup).
+Both methods immediately restore the system's Wi-Fi proxy settings (SIGTERM → Python cleanup).
 
-### وضعیت
+### Status
 
 ```bash
 bash scripts/install-launchagent-client.sh --status
@@ -57,7 +57,7 @@ bash scripts/install-launchagent-client.sh --logs
 
 ---
 
-## معماری
+## Architecture
 
 ```
 Mac (Account B)                    VPS / Ubuntu (Account A)
@@ -73,15 +73,15 @@ bale-proxy system                  bale-proxy relay
   Wi-Fi proxy ON                    exit node = VPS IP
 ```
 
-- **Account A** (relay): بر روی VPS اجرا می‌شود، تماس ورودی را جواب می‌دهد و ترافیک TCP را به اینترنت forward می‌کند.
-- **Account B** (client): روی Mac اجرا می‌شود، به Account A زنگ می‌زند و یک SOCKS5 server روی `127.0.0.1:1080` باز می‌کند و macOS Wi-Fi proxy را فعال می‌کند.
-- **Transport**: WebRTC DataChannel (`--transport dc`) با رمزنگاری PSK (`--proxy-secret-file`).
+- **Account A** (relay): Runs on the VPS, answers incoming calls, and forwards TCP traffic to the internet.
+- **Account B** (client): Runs on the Mac, calls Account A, opens a SOCKS5 server on `127.0.0.1:1080`, and enables the macOS Wi-Fi proxy.
+- **Transport**: WebRTC DataChannel (`--transport dc`) with PSK encryption (`--proxy-secret-file`).
 
 ---
 
-## نصب و راه‌اندازی
+## Installation and Setup
 
-### پیش‌نیازها
+### Prerequisites
 
 ```bash
 python3 -m venv .venv
@@ -89,7 +89,7 @@ source .venv/bin/activate
 pip install -e ".[dev,bale,desktop]"
 ```
 
-### نصب LaunchAgent (اجرای خودکار بعد از login)
+### Install LaunchAgent (Auto-start on login)
 
 ```bash
 BALEOBALA_JWT_FILE=~/.bale_jwt_b \
@@ -98,20 +98,20 @@ BALEOBALA_RELAY_PEER_ID=1519372475 \
 bash scripts/install-launchagent-client.sh --install
 ```
 
-متغیرهای مهم:
+Important Variables:
 
-| متغیر | پیش‌فرض | توضیح |
+| Variable | Default | Description |
 |---|---|---|
-| `BALEOBALA_JWT_FILE` | `~/.bale_jwt_b` | JWT حساب client (Mac) |
-| `BALEOBALA_PSK_FILE` | `~/.baleobala/baleobala-vpn.psk` | Pre-shared key رمزنگاری |
-| `BALEOBALA_RELAY_PEER_ID` | `1519372475` | user_id حساب relay (VPS) |
-| `BALEOBALA_LISTEN_PORT` | `1080` | پورت SOCKS5 محلی |
-| `BALEOBALA_SERVICE` | `Wi-Fi` | سرویس شبکه macOS |
+| `BALEOBALA_JWT_FILE` | `~/.bale_jwt_b` | Client account (Mac) JWT |
+| `BALEOBALA_PSK_FILE` | `~/.baleobala/baleobala-vpn.psk` | Encryption pre-shared key |
+| `BALEOBALA_RELAY_PEER_ID` | `1519372475` | Relay account (VPS) user_id |
+| `BALEOBALA_LISTEN_PORT` | `1080` | Local SOCKS5 port |
+| `BALEOBALA_SERVICE` | `Wi-Fi` | macOS network service name |
 
-### راه‌اندازی relay روی VPS (Ubuntu)
+### Setup Relay on VPS (Ubuntu)
 
 ```bash
-# یک بار اجرا کنید تا systemd service نصب شود
+# Run once to install the systemd service
 ssh root@<VPS-IP> bash << 'EOF'
 cat > /etc/systemd/system/baleobala-relay.service << 'SVC'
 [Unit]
@@ -138,33 +138,33 @@ EOF
 ```
 
 ```bash
-# وضعیت relay
+# Check relay status
 ssh root@<VPS-IP> systemctl status baleobala-relay.service
 ```
 
 ---
 
-## دستورات رایج
+## Common Commands
 
 ```bash
-# احراز هویت
+# Authentication
 baleobala auth bale-login --phone +98912xxxxxxx --method browser --headful --save
 baleobala auth status
 
-# سلامت‌سنجی
+# Health check
 baleobala doctor
 
-# پروکسی دستی (بدون LaunchAgent)
+# Manual proxy (without LaunchAgent)
 bash scripts/run-proxy-client.sh
 
-# مدیریت LaunchAgent
+# LaunchAgent management
 bash scripts/install-launchagent-client.sh --status
 bash scripts/install-launchagent-client.sh --logs
 bash scripts/install-launchagent-client.sh --start
 bash scripts/install-launchagent-client.sh --stop
 bash scripts/install-launchagent-client.sh --uninstall
 
-# تست دودی دو حساب
+# Two-account smoke test
 baleobala vpn live-smoke \
     --caller-jwt-file ~/.bale_jwt_b \
     --callee-jwt-file ~/.bale_jwt_a \
@@ -173,17 +173,17 @@ baleobala vpn live-smoke \
 
 ---
 
-## دستورات پیشرفته
+## Advanced Commands
 
 ```bash
-# relay سمت سرور (دستی)
+# Server-side relay (manual)
 baleobala bale-proxy relay \
     --bale-jwt-file ~/.bale_jwt_a \
     --answer --answer-timeout 86400 \
     --proxy-secret-file ~/.baleobala/baleobala-vpn.psk \
     --ws-ssl-no-verify
 
-# client سمت مک (دستی، با system proxy)
+# Mac client (manual, with system proxy)
 baleobala bale-proxy system \
     --bale-jwt-file ~/.bale_jwt_b \
     --peer-id 1519372475 \
@@ -191,27 +191,27 @@ baleobala bale-proxy system \
     --service Wi-Fi \
     --ws-ssl-no-verify
 
-# loopback test
+# Loopback tests
 baleobala loopback "hello" "world"
 baleobala tunnel-loopback
 ```
 
 ---
 
-## رفع اشکال
+## Troubleshooting
 
-| علامت | احتمال | راه‌حل |
+| Symptom | Probable Cause | Solution |
 |---|---|---|
-| `No module named 'cryptography'` | dependency نصب نیست | `pip install cryptography>=42` |
-| `WS did not connect within 15s` | شبکه یا Bale WS قطع | `--ws-ssl-no-verify` یا بررسی اتصال |
-| `OSError: EINVAL` روی TCP_NODELAY | macOS daemon context | خودکار patch می‌شود (ws_client.py) |
-| `BrokenPipeError` در SSL handshake | SIGPIPE بدون handler | wrapper script آن را handle می‌کند |
-| `proxy_listening` نمی‌آید | relay جواب نداد | مطمئن شوید relay سمت VPS روشن است |
-| Wi-Fi proxy بعد از stop خاموش نشد | SIGKILL به جای SIGTERM | `launchctl stop` (نه `kill -9`) |
+| `No module named 'cryptography'` | Missing dependency | `pip install cryptography>=42` |
+| `WS did not connect within 15s` | Network or Bale WS down | Use `--ws-ssl-no-verify` or check connectivity |
+| `OSError: EINVAL` on TCP_NODELAY | macOS daemon context | Automatically patched in `ws_client.py` |
+| `BrokenPipeError` in SSL handshake | SIGPIPE without handler | Handled by the wrapper script |
+| `proxy_listening` does not appear | Relay did not answer | Ensure VPS relay is running |
+| Wi-Fi proxy remains ON after stop | SIGKILL instead of SIGTERM | Use `launchctl stop` (not `kill -9`) |
 
 ---
 
-## مستندات
+## Documentation
 
 - [Getting Started](docs/SETUP.md)
 - [Install and Bootstrap](docs/INSTALL.md)
@@ -223,17 +223,17 @@ baleobala tunnel-loopback
 
 ---
 
-## واژه‌نامه
+## Glossary
 
-| کد | اصطلاح VPN | معنی |
+| Term | VPN Equivalence | Meaning |
 |---|---|---|
-| `ControlService` / `ProvisioningService` | control plane | مدیریت auth، pairing، و credential |
-| `CarrierSession` | carrier / call session | session تماس زنده |
-| `Transport` | bearer transport | لایه انتقال بایت (DataChannel، audio، QR) |
-| `TransportPool` / `TransportChain` | transport selector | انتخاب و سوئیچ بین transport ها |
-| `Tunnel` | tunnel engine | framing، ARQ، reassembly |
-| `VpnRunner` | tunnel runner | اتصال TUN به tunnel |
-| `TunnelBridge` / `TunnelService` | tunnel service boundary | سطح IPC |
-| `VpnBackend` | VPN backend adapter | لایه یکپارچگی platform-specific |
-| `CredentialEpoch` | credential lease | پنجره credential کوتاه‌مدت |
-| `TUN` | kernel tunnel interface | دستگاه OS برای بسته‌های IP |
+| `ControlService` / `ProvisioningService` | Control plane | Auth, pairing, and credential management |
+| `CarrierSession` | Carrier / call session | Active live media session |
+| `Transport` | Bearer transport | Byte transport layer (DataChannel, audio, QR) |
+| `TransportPool` / `TransportChain` | Transport selector | Switches between available transports |
+| `Tunnel` | Tunnel engine | Handles framing, ARQ, reassembly |
+| `VpnRunner` | Tunnel runner | Connects TUN to tunnel engine |
+| `TunnelBridge` / `TunnelService` | Tunnel service boundary | IPC interface |
+| `VpnBackend` | VPN backend adapter | Platform-specific integration layer |
+| `CredentialEpoch` | Credential lease | Short-lived secret window |
+| `TUN` | Kernel tunnel interface | OS device for IP packets |
