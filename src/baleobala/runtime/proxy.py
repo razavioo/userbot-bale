@@ -563,7 +563,7 @@ class Socks5ProxyServer:
         def pump_client_to_transport() -> None:
             try:
                 while not stop.is_set():
-                    data = client.recv(4096)
+                    data = client.recv(self._max_chunk_size)
                     if not data:
                         break
                     for chunk in _chunk_bytes(data, self._max_chunk_size):
@@ -616,7 +616,7 @@ class Socks5ProxyServer:
         def pump_client_to_transport() -> None:
             try:
                 while not stop.is_set():
-                    data = client.recv(4096)
+                    data = client.recv(self._max_chunk_size)
                     if not data:
                         break
                     for chunk in _chunk_bytes(data, self._max_chunk_size):
@@ -926,7 +926,7 @@ class TunnelTcpRelay:
                 try:
                     while not stop.is_set():
                         try:
-                            data = sock.recv(4096)
+                            data = sock.recv(self._max_chunk_size)
                         except TimeoutError:
                             continue
                         except OSError:
