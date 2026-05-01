@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.BaleobalaVpn" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+    <style name="Theme.BaleobalaVpn" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#1249FF</item>
+        <item name="colorPrimaryContainer">#DDE5FF</item>
+        <item name="colorSecondary">#0F766E</item>
+        <item name="colorTertiary">#F59E0B</item>
+        <item name="android:statusBarColor">#0B1020</item>
+        <item name="android:navigationBarColor">#0B1020</item>
+    </style>
 </resources>
