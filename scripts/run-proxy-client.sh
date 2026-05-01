@@ -32,6 +32,37 @@ wait_for_network() {
     echo "$(date -u +%FT%TZ) [proxy-client] WARNING: network check timed out, starting anyway" >&2
 }
 
+# Disable system proxies to prevent connection deadlocks before starting
+disable_proxies() {
+    local svc="$NETWORK_SERVICE"
+    echo "$(date -u +%FT%TZ) [proxy-client] ensuring system proxies are disabled for $svc..." >&2
+    networksetup -setwebproxystate "$svc" off 2>/dev/null || true
+    networksetup -setsecurewebproxystate "$svc" off 2>/dev/null || true
+    networksetup -setsocksfirewallproxystate "$svc" off 2>/dev/null || true
+}
+
+# Kill any stale proxy processes and free the listen port
+cleanup_stale() {
+    # Kill previous bale-proxy system processes (but not ourselves)
+    local stale
+    stale=$(pgrep -f "bale-proxy system" 2>/dev/null | grep -v "^$$\$" || true)
+    if [[ -n "$stale" ]]; then
+        echo "$(date -u +%FT%TZ) [proxy-client] killing stale proxy processes: $stale" >&2
+        echo "$stale" | xargs kill -9 2>/dev/null || true
+        sleep 1
+    fi
+    # Free the listen port if anything else is holding it
+    local port_pids
+    port_pids=$(lsof -ti :"$LISTEN_PORT" 2>/dev/null || true)
+    if [[ -n "$port_pids" ]]; then
+        echo "$(date -u +%FT%TZ) [proxy-client] freeing port $LISTEN_PORT (pids: $port_pids)" >&2
+        echo "$port_pids" | xargs kill -9 2>/dev/null || true
+        sleep 1
+    fi
+}
+
+cleanup_stale
+disable_proxies
 echo "$(date -u +%FT%TZ) [proxy-client] waiting for network..." >&2
 wait_for_network
 echo "$(date -u +%FT%TZ) [proxy-client] network ready, starting proxy..." >&2
