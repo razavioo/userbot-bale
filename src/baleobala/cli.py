@@ -1908,30 +1908,42 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
         allow_insecure_debug=True,
     )
     
-    _emit_marker("bonded_transport_connecting")
-    client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
-    client.start()
-    try:
-        if is_answer:
-            answer_timeout = getattr(args, "answer_timeout", 120.0)
-            import threading
-            got = threading.Event()
-            holder: list = []
+    max_retries = 3
+    for attempt in range(max_retries):
+        _emit_marker(f"bonded_transport_connecting attempt={attempt+1}/{max_retries}")
+        client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+        try:
+            client.start()
+            if is_answer:
+                answer_timeout = getattr(args, "answer_timeout", 120.0)
+                import threading
+                got = threading.Event()
+                holder: list = []
 
-            def on_creds(event, _h=holder, _g=got):  # noqa: ANN001
-                if not _h:
-                    _h.append(event.credentials)
-                    _g.set()
+                def on_creds(event, _h=holder, _g=got):  # noqa: ANN001
+                    if not _h:
+                        _h.append(event.credentials)
+                        _g.set()
 
-            client.listen_incoming_calls(on_creds)
-            if not got.wait(timeout=answer_timeout):
-                raise TimeoutError("no incoming call received")
-            creds = holder[0]
-        else:
-            creds_timeout = float(getattr(args, "creds_timeout", 45.0))
-            creds = client.fetch_livekit_credentials(peer_id, creds_timeout=creds_timeout)
-    finally:
-        client.stop()
+                client.listen_incoming_calls(on_creds)
+                if not got.wait(timeout=answer_timeout):
+                    raise TimeoutError("no incoming call received")
+                creds = holder[0]
+            else:
+                creds_timeout = float(getattr(args, "creds_timeout", 45.0))
+                creds = client.fetch_livekit_credentials(peer_id, creds_timeout=creds_timeout)
+            break  # Success
+        except Exception as e:  # noqa: BLE001
+            client.stop()
+            if attempt == max_retries - 1:
+                raise
+            import time as _time
+            _time.sleep(2.0)
+        finally:
+            # We don't stop the client here if successful, we stop it at the very end of the transport lifecycle?
+            # Wait, previously `client.stop()` was in a `finally` block unconditionally!
+            pass
+    client.stop()
 
     session = LiveKitSession(url=creds.url, token=creds.token, identity=args.identity)
     session.start()
