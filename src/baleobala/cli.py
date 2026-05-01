@@ -1839,6 +1839,10 @@ class _ProxyTransportAdapter:
     def closed(self) -> bool:
         return self._closed or bool(getattr(self._inner, "closed", False))
 
+    @property
+    def mtu(self) -> int:
+        return int(getattr(self._inner, "mtu", 180))
+
 
 def _open_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN001
     n_channels = getattr(args, "channels", 1) or 1
@@ -1882,7 +1886,13 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
 
 
 def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int):  # noqa: ANN001
-    """Open a single LiveKit session and bond N DataChannels over it."""
+    """Open a Bale proxy transport for a requested bonded channel count.
+
+    Bale currently does not keep multiple simultaneous calls between the
+    same two accounts reliable enough for proxy use. The throughput fix is
+    therefore in the proxy frame sizing layer; keep this path single-call
+    by default so `--channels N` does not make the tunnel unstable.
+    """
     from baleobala.bale import LiveKitSession
     from baleobala.vpn.keepalive import LiveKitKeepalive
     from baleobala.vpn.transports.bonded import BondedTransport
@@ -1916,7 +1926,6 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
             client.start()
             if is_answer:
                 answer_timeout = getattr(args, "answer_timeout", 120.0)
-                import threading
                 got = threading.Event()
                 holder: list = []
 
@@ -1932,18 +1941,15 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
             else:
                 creds_timeout = float(getattr(args, "creds_timeout", 45.0))
                 creds = client.fetch_livekit_credentials(peer_id, creds_timeout=creds_timeout)
-            break  # Success
-        except Exception as e:  # noqa: BLE001
-            client.stop()
+            break
+        except Exception:  # noqa: BLE001
             if attempt == max_retries - 1:
                 raise
-            import time as _time
-            _time.sleep(2.0)
+            time.sleep(2.0)
         finally:
-            # We don't stop the client here if successful, we stop it at the very end of the transport lifecycle?
-            # Wait, previously `client.stop()` was in a `finally` block unconditionally!
-            pass
-    client.stop()
+            client.stop()
+    else:  # pragma: no cover - loop either breaks or raises
+        raise RuntimeError("bonded transport credential resolution failed")
 
     session = LiveKitSession(url=creds.url, token=creds.token, identity=args.identity)
     session.start()
@@ -1951,12 +1957,13 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     keepalive.start()
 
     # Allow tracks to settle.
-    import time as _time
-    _time.sleep(1.0)
+    time.sleep(1.0)
 
-    channels = [session.data_channel(topic=f"vpn-{i}", reliable=True) for i in range(n_channels)]
-    bonded = BondedTransport(channels)
-    _emit_marker(f"bonded_transport_ready channels={n_channels} rate_hint={bonded.rate_hint:.0f}")
+    bonded = BondedTransport.from_sessions([session], topic="vpn", reliable=True)
+    _emit_marker(
+        f"bonded_transport_ready channels={n_channels} effective_channels=1 "
+        f"rate_hint={bonded.rate_hint:.0f}"
+    )
 
     def cleanup() -> None:
         try:
@@ -2046,6 +2053,8 @@ def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
 
     ready = threading.Event()
     stop_requested = threading.Event()
+    server_failed_before_ready = threading.Event()
+    server_errors: list[BaseException] = []
     transport_name, transport, server = _start_proxy_client_runtime(args, on_listen=lambda _host, _port: ready.set())
     system_proxy = MacOSSystemProxySession(
         listen_host=args.listen_host,
@@ -2059,7 +2068,11 @@ def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
             _emit_marker(f"transport_selected={transport_name}")
             server.serve_forever()
         except Exception as exc:
+            server_errors.append(exc)
             _emit_marker(f"proxy_system_error={type(exc).__name__}:{exc}")
+        finally:
+            if not ready.is_set():
+                server_failed_before_ready.set()
 
     thread = threading.Thread(target=_run_server, daemon=True)
     thread.start()
@@ -2079,7 +2092,20 @@ def cmd_bale_proxy_system(args: argparse.Namespace) -> int:
         except (OSError, ValueError):
             pass
     try:
-        if not ready.wait(timeout=args.proxy_ready_timeout):
+        deadline = time.monotonic() + args.proxy_ready_timeout
+        while not ready.is_set():
+            if server_failed_before_ready.is_set():
+                if server_errors:
+                    exc = server_errors[-1]
+                    raise RuntimeError(
+                        f"proxy server exited before listening: {type(exc).__name__}: {exc}"
+                    ) from exc
+                raise RuntimeError("proxy server exited before listening")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready.wait(timeout=min(0.1, remaining))
+        if not ready.is_set():
             raise RuntimeError("proxy listener did not become ready")
         system_proxy.start()
         status = system_proxy.status()

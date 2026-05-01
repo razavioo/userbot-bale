@@ -21,12 +21,14 @@ log = logging.getLogger(__name__)
 MAGIC = b"PX"
 VERSION = 1
 MAX_HOST_LEN = 180
-MAX_DATA_LEN = 180
+MAX_DATA_LEN = 60 * 1024
 NONCE_SIZE = 8
 TAG_SIZE = 16
 FLAG_ENCRYPTED = 0x01
 HEADER_FMT = f"<2sBBB I H {NONCE_SIZE}s {TAG_SIZE}s"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
+BODY_OVERHEAD = 5
+LEGACY_DATA_LEN = 180
 
 
 class ProxyPacketType(IntEnum):
@@ -181,6 +183,15 @@ def _auth_tag(secret: bytes, header_wo_tag: bytes, body: bytes) -> bytes:
 
 def _chunk_bytes(data: bytes, size: int) -> list[bytes]:
     return [data[i : i + size] for i in range(0, len(data), size)] or [b""]
+
+
+def _chunk_size_for_transport(transport: TunnelTransport, requested: int | None) -> int:
+    if requested is not None:
+        return max(1, min(requested, MAX_DATA_LEN))
+    mtu = getattr(transport, "mtu", None)
+    if isinstance(mtu, int) and mtu > HEADER_SIZE + BODY_OVERHEAD + 1:
+        return max(1, min(MAX_DATA_LEN, mtu - HEADER_SIZE - BODY_OVERHEAD))
+    return LEGACY_DATA_LEN
 
 
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -421,7 +432,7 @@ class Socks5ProxyServer:
         listen_host: str = "127.0.0.1",
         listen_port: int = 1080,
         handshake_timeout: float = 15.0,
-        max_chunk_size: int = MAX_DATA_LEN,
+        max_chunk_size: int | None = None,
         max_active_connections: int = 128,
         secret: bytes | None = None,
         on_listen=None,
@@ -430,7 +441,7 @@ class Socks5ProxyServer:
         self._listen_host = listen_host
         self._listen_port = listen_port
         self._handshake_timeout = handshake_timeout
-        self._max_chunk_size = max_chunk_size
+        self._max_chunk_size = _chunk_size_for_transport(transport, max_chunk_size)
         self._on_listen = on_listen
         self._client_slots = threading.BoundedSemaphore(max_active_connections)
         self._stop = threading.Event()
@@ -828,14 +839,14 @@ class TunnelTcpRelay:
         *,
         connect_timeout: float = 5.0,
         handshake_timeout: float = 15.0,
-        max_chunk_size: int = MAX_DATA_LEN,
+        max_chunk_size: int | None = None,
         max_active_connections: int = 64,
         secret: bytes | None = None,
     ) -> None:
         self._hub = ProxyHub(transport, secret=secret)
         self._connect_timeout = connect_timeout
         self._handshake_timeout = handshake_timeout
-        self._max_chunk_size = max_chunk_size
+        self._max_chunk_size = _chunk_size_for_transport(transport, max_chunk_size)
         self._slots = threading.BoundedSemaphore(max_active_connections)
         self._stop = threading.Event()
 

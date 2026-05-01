@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from types import SimpleNamespace
 
 import baleobala
+import pytest
 
 from baleobala.carrier.bale import BaleCarrierController
 from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, TunnelRole, TunnelSession
@@ -149,9 +151,141 @@ def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
         proxy_ready_timeout=1.0,
     )
 
-    assert cli.cmd_bale_proxy_system(args) == 0
+    assert cli.cmd_bale_proxy_system(args) == 1
     assert events.index("serve") < events.index("proxy.start")
     assert events[-3:] == ["proxy.stop", "server.stop", "transport.close"]
+
+
+def test_bale_proxy_system_surfaces_prelisten_server_error(monkeypatch) -> None:
+    import baleobala.cli as cli
+
+    monkeypatch.setattr("sys.platform", "darwin")
+    events: list[str] = []
+
+    class FakeTransport:
+        def close(self) -> None:
+            events.append("transport.close")
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            raise TimeoutError("proxy handshake failed")
+
+        def stop(self) -> None:
+            events.append("server.stop")
+
+    class FakeSystemProxy:
+        def __init__(self, **kwargs):  # noqa: ANN001
+            pass
+
+        def start(self) -> None:
+            events.append("proxy.start")
+
+        def stop(self) -> None:
+            events.append("proxy.stop")
+
+    def fake_start_proxy_client_runtime(args, *, on_listen=None):  # noqa: ANN001
+        return "dc", FakeTransport(), FakeServer()
+
+    monkeypatch.setattr(cli, "_start_proxy_client_runtime", fake_start_proxy_client_runtime)
+    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeSystemProxy)
+
+    args = argparse.Namespace(
+        listen_host="127.0.0.1",
+        listen_port=1080,
+        service=["Wi-Fi"],
+        proxy_ready_timeout=1.0,
+    )
+
+    with pytest.raises(RuntimeError, match="proxy server exited before listening: TimeoutError: proxy handshake failed"):
+        cli.cmd_bale_proxy_system(args)
+
+    assert "proxy.start" not in events
+    assert events[-2:] == ["server.stop", "transport.close"]
+
+
+def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch) -> None:
+    import baleobala.bale as bale_pkg
+    import baleobala.cli as cli
+    import baleobala.bale.api as bale_api
+    import baleobala.vpn.keepalive as keepalive_mod
+
+    topics: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):  # noqa: ANN001
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def fetch_livekit_credentials(self, peer_id, *, creds_timeout):  # noqa: ANN001
+            return SimpleNamespace(url="wss://meet.example", token="token")
+
+        def stop(self) -> None:
+            pass
+
+    class FakeChannel:
+        mtu = 1400
+        rate_hint = 100.0
+        closed = False
+
+        def send_bytes(self, data: bytes) -> None:
+            pass
+
+        def recv_bytes(self, timeout=None):  # noqa: ANN001
+            time.sleep(min(timeout or 0, 0.001))
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeSession:
+        def __init__(self, *, url: str, token: str, identity: str) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def data_channel(self, *, topic: str, reliable: bool):  # noqa: ANN001
+            topics.append(topic)
+            return FakeChannel()
+
+        def stop(self) -> None:
+            pass
+
+    class FakeKeepalive:
+        def __init__(self, session, *, interval: float) -> None:  # noqa: ANN001
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(bale_api, "BaleApiClient", FakeClient)
+    monkeypatch.setattr(bale_pkg, "LiveKitSession", FakeSession)
+    monkeypatch.setattr(keepalive_mod, "LiveKitKeepalive", FakeKeepalive)
+    monkeypatch.setattr(cli, "_emit_marker", lambda marker: None)
+    monkeypatch.setattr(cli, "LIVEKIT_SETTLE_DELAY", 0.0, raising=False)
+
+    args = argparse.Namespace(
+        bale_jwt="jwt",
+        bale_jwt_file=None,
+        peer_id=123,
+        answer=False,
+        creds_timeout=1.0,
+        identity="client",
+        ws_ca_file=None,
+        ws_ca_path=None,
+        ws_ssl_no_verify=False,
+    )
+
+    _name, transport = cli._open_bonded_proxy_transport(args, object(), 4)
+    try:
+        assert topics == ["vpn"]
+    finally:
+        transport.close()
 
 
 def test_clean_qt_environment_removes_sdk_overrides() -> None:
