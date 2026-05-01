@@ -117,11 +117,13 @@ def test_proxy_server_uses_legacy_chunks_without_transport_mtu() -> None:
     assert server._max_chunk_size == 180  # noqa: SLF001
 
 
-def test_relay_idle_timeout_tracks_active_connections() -> None:
+def test_relay_idle_timeout_tracks_recent_activity() -> None:
     relay = TunnelTcpRelay(_FakeTransport(), idle_timeout=0.01)
     assert not relay._idle_expired()  # noqa: SLF001
     relay._mark_connection_started()  # noqa: SLF001
     time.sleep(0.02)
+    assert relay._idle_expired()  # noqa: SLF001
+    relay._touch_activity()  # noqa: SLF001
     assert not relay._idle_expired()  # noqa: SLF001
     relay._mark_connection_finished()  # noqa: SLF001
     time.sleep(0.02)

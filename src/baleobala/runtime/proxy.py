@@ -905,6 +905,7 @@ class TunnelTcpRelay:
                 continue
             if packet.packet_type != ProxyPacketType.OPEN:
                 continue
+            self._touch_activity()
             threading.Thread(target=self._handle_connection, args=(packet,), daemon=True).start()
 
     def _transport_closed(self) -> bool:
@@ -963,6 +964,7 @@ class TunnelTcpRelay:
                         if not data:
                             break
                         for chunk in _chunk_bytes(data, self._max_chunk_size):
+                            self._touch_activity()
                             self._hub.send(
                                 ProxyPacket(
                                     packet_type=ProxyPacketType.DATA,
@@ -987,6 +989,7 @@ class TunnelTcpRelay:
                             break
                         continue
                     if incoming.packet_type == ProxyPacketType.DATA and incoming.payload:
+                        self._touch_activity()
                         sock.sendall(incoming.payload)
                     elif incoming.packet_type in (ProxyPacketType.CLOSE, ProxyPacketType.ERROR):
                         break
@@ -1011,8 +1014,6 @@ class TunnelTcpRelay:
         if self._idle_timeout is None:
             return False
         with self._active_lock:
-            if self._active_connections > 0:
-                return False
             idle_for = time.monotonic() - self._last_activity
         return idle_for >= self._idle_timeout
 
