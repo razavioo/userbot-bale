@@ -1841,6 +1841,13 @@ class _ProxyTransportAdapter:
 
 
 def _open_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN001
+    n_channels = getattr(args, "channels", 1) or 1
+    if n_channels > 1:
+        return _open_bonded_proxy_transport(args, role, n_channels)
+    return _open_single_proxy_transport(args, role)
+
+
+def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN001
     from baleobala.bale import LiveKitSession
     from baleobala.vpn.cli import _build_transport_chain
     from baleobala.vpn.keepalive import LiveKitKeepalive
@@ -1872,6 +1879,133 @@ def _open_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN001
             session.stop()
 
     return transport_name, _ProxyTransportAdapter(transport, cleanup=cleanup)
+
+
+def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int):  # noqa: ANN001
+    """Open N parallel LiveKit sessions and bond them for N× throughput."""
+    from baleobala.bale import LiveKitSession
+    from baleobala.vpn.keepalive import LiveKitKeepalive
+    from baleobala.vpn.transports.bonded import BondedTransport
+
+    sessions: list[LiveKitSession] = []
+    keepalives: list[LiveKitKeepalive] = []
+
+    jwt = getattr(args, "bale_jwt", None) or os.environ.get("BALE_JWT")
+    jwt_file = getattr(args, "bale_jwt_file", None) or "/tmp/bale_jwt.txt"
+    if not jwt:
+        from pathlib import Path
+        jwt_path = Path(jwt_file)
+        if jwt_path.exists():
+            jwt = jwt_path.read_text().strip()
+
+    is_answer = getattr(args, "answer", False)
+    peer_id = getattr(args, "peer_id", None)
+
+    if is_answer:
+        # Relay mode: answer N incoming calls sequentially.
+        from baleobala.bale.api import BaleApiClient
+        from baleobala.bale.ws_client import WsTlsConfig
+
+        ws_tls_config = WsTlsConfig.from_sources(
+            ca_file=getattr(args, "ws_ca_file", None),
+            ca_path=getattr(args, "ws_ca_path", None),
+            insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
+            allow_insecure_debug=True,
+        )
+        answer_timeout = getattr(args, "answer_timeout", 120.0)
+
+        for i in range(n_channels):
+            _emit_marker(f"bonded_channel_waiting={i+1}/{n_channels}")
+            client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+            client.start()
+            try:
+                import threading
+                got = threading.Event()
+                holder: list = []
+
+                def on_creds(event, _h=holder, _g=got):  # noqa: ANN001
+                    if not _h:
+                        _h.append(event.credentials)
+                        _g.set()
+
+                client.listen_incoming_calls(on_creds)
+                if not got.wait(timeout=answer_timeout):
+                    raise TimeoutError(f"no incoming call for channel {i+1}")
+                creds = holder[0]
+                session = LiveKitSession(
+                    url=creds.url, token=creds.token,
+                    identity=f"{args.identity}-{i}",
+                )
+                session.start()
+                ka = LiveKitKeepalive(session, interval=20.0)
+                ka.start()
+                sessions.append(session)
+                keepalives.append(ka)
+                _emit_marker(f"bonded_channel_up={i+1}/{n_channels}")
+            finally:
+                client.stop()
+    else:
+        # Client mode: place N calls to the same peer.
+        from baleobala.bale.api import BaleApiClient
+        from baleobala.bale.ws_client import WsTlsConfig
+        import time as _time
+
+        ws_tls_config = WsTlsConfig.from_sources(
+            ca_file=getattr(args, "ws_ca_file", None),
+            ca_path=getattr(args, "ws_ca_path", None),
+            insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
+            allow_insecure_debug=True,
+        )
+        creds_timeout = float(getattr(args, "creds_timeout", 45.0))
+
+        for i in range(n_channels):
+            _emit_marker(f"bonded_channel_dialing={i+1}/{n_channels}")
+            client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+            client.start()
+            try:
+                creds = client.fetch_livekit_credentials(
+                    peer_id, creds_timeout=creds_timeout,
+                )
+                session = LiveKitSession(
+                    url=creds.url, token=creds.token,
+                    identity=f"{args.identity}-{i}",
+                )
+                session.start()
+                ka = LiveKitKeepalive(session, interval=20.0)
+                ka.start()
+                sessions.append(session)
+                keepalives.append(ka)
+                _emit_marker(f"bonded_channel_up={i+1}/{n_channels}")
+            finally:
+                client.stop()
+            if i < n_channels - 1:
+                _time.sleep(2.0)  # Avoid Bale rate-limit on rapid calls.
+
+    # Allow tracks to settle.
+    import time as _time
+    _time.sleep(1.0)
+
+    topic = "vpn"
+    bonded = BondedTransport.from_sessions(sessions, topic=topic, reliable=True)
+    _emit_marker(f"bonded_transport_ready channels={n_channels} rate_hint={bonded.rate_hint:.0f}")
+
+    def cleanup() -> None:
+        try:
+            bonded.close()
+        except Exception:  # noqa: BLE001
+            pass
+        for ka in keepalives:
+            try:
+                ka.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        for s in sessions:
+            try:
+                s.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    return "dc-bonded", _ProxyTransportAdapter(bonded, cleanup=cleanup)
 
 
 def cmd_bale_proxy_client(args: argparse.Namespace) -> int:
@@ -2467,6 +2601,7 @@ def build_parser() -> argparse.ArgumentParser:
     bp_client.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
     bp_client.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_client.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
+    bp_client.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
     _add_bale_ws_tls_args(bp_client)
     bp_client.set_defaults(func=cmd_bale_proxy_client)
 
@@ -2541,6 +2676,7 @@ def build_parser() -> argparse.ArgumentParser:
     bp_relay.add_argument("--transport", choices=["auto", "dc", "qr", "audio", "rpc", "mtproto_rpc"], default="dc")
     bp_relay.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_relay.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
+    bp_relay.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
     _add_bale_ws_tls_args(bp_relay)
     bp_relay.set_defaults(func=cmd_bale_proxy_relay)
 
