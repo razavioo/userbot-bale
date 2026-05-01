@@ -762,7 +762,7 @@ class LiveKitDataChannel:
     fit.
     """
 
-    MTU = 14 * 1024
+    MTU = 32 * 1024
     RATE_HINT = 200_000.0  # bytes/s; realistic over Bale's SFU
 
     def __init__(
@@ -772,6 +772,13 @@ class LiveKitDataChannel:
         self._topic = topic
         self._reliable = reliable
         self._closed = False
+        self._outgoing: "queue.Queue[bytes | None]" = queue.Queue(maxsize=64)
+        self._sender = threading.Thread(
+            target=self._send_loop,
+            name=f"livekit-data-{topic}",
+            daemon=True,
+        )
+        self._sender.start()
 
     @property
     def closed(self) -> bool:
@@ -788,9 +795,11 @@ class LiveKitDataChannel:
     def send_bytes(self, data: bytes) -> None:
         if self._closed:
             raise RuntimeError("data channel closed")
+        if self._session.is_terminal():
+            self._session._raise_if_not_operational("data channel closed")
         if len(data) > self.MTU:
             raise ValueError(f"frame {len(data)} > datachannel MTU {self.MTU}")
-        self._session._submit_data(data, topic=self._topic, reliable=self._reliable)
+        self._outgoing.put(bytes(data))
 
     def recv_bytes(self, timeout: float | None = None) -> bytes | None:
         if self._closed:
@@ -801,4 +810,15 @@ class LiveKitDataChannel:
         if self._closed:
             return
         self._closed = True
+        self._outgoing.put(None)
+        self._sender.join(timeout=5)
         self._session._close_data(self._topic)
+
+    def _send_loop(self) -> None:
+        while True:
+            item = self._outgoing.get()
+            if item is None:
+                return
+            if self._session.is_terminal():
+                return
+            self._session._submit_data(item, topic=self._topic, reliable=self._reliable)
