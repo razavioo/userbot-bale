@@ -1882,13 +1882,10 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
 
 
 def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int):  # noqa: ANN001
-    """Open N parallel LiveKit sessions and bond them for N× throughput."""
+    """Open a single LiveKit session and bond N DataChannels over it."""
     from baleobala.bale import LiveKitSession
     from baleobala.vpn.keepalive import LiveKitKeepalive
     from baleobala.vpn.transports.bonded import BondedTransport
-
-    sessions: list[LiveKitSession] = []
-    keepalives: list[LiveKitKeepalive] = []
 
     jwt = getattr(args, "bale_jwt", None) or os.environ.get("BALE_JWT")
     jwt_file = getattr(args, "bale_jwt_file", None) or "/tmp/bale_jwt.txt"
@@ -1901,92 +1898,52 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     is_answer = getattr(args, "answer", False)
     peer_id = getattr(args, "peer_id", None)
 
-    if is_answer:
-        # Relay mode: answer N incoming calls sequentially.
-        from baleobala.bale.api import BaleApiClient
-        from baleobala.bale.ws_client import WsTlsConfig
+    from baleobala.bale.api import BaleApiClient
+    from baleobala.bale.ws_client import WsTlsConfig
 
-        ws_tls_config = WsTlsConfig.from_sources(
-            ca_file=getattr(args, "ws_ca_file", None),
-            ca_path=getattr(args, "ws_ca_path", None),
-            insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
-            allow_insecure_debug=True,
-        )
-        answer_timeout = getattr(args, "answer_timeout", 120.0)
+    ws_tls_config = WsTlsConfig.from_sources(
+        ca_file=getattr(args, "ws_ca_file", None),
+        ca_path=getattr(args, "ws_ca_path", None),
+        insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
+        allow_insecure_debug=True,
+    )
+    
+    _emit_marker("bonded_transport_connecting")
+    client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+    client.start()
+    try:
+        if is_answer:
+            answer_timeout = getattr(args, "answer_timeout", 120.0)
+            import threading
+            got = threading.Event()
+            holder: list = []
 
-        for i in range(n_channels):
-            _emit_marker(f"bonded_channel_waiting={i+1}/{n_channels}")
-            client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
-            client.start()
-            try:
-                import threading
-                got = threading.Event()
-                holder: list = []
+            def on_creds(event, _h=holder, _g=got):  # noqa: ANN001
+                if not _h:
+                    _h.append(event.credentials)
+                    _g.set()
 
-                def on_creds(event, _h=holder, _g=got):  # noqa: ANN001
-                    if not _h:
-                        _h.append(event.credentials)
-                        _g.set()
+            client.listen_incoming_calls(on_creds)
+            if not got.wait(timeout=answer_timeout):
+                raise TimeoutError("no incoming call received")
+            creds = holder[0]
+        else:
+            creds_timeout = float(getattr(args, "creds_timeout", 45.0))
+            creds = client.fetch_livekit_credentials(peer_id, creds_timeout=creds_timeout)
+    finally:
+        client.stop()
 
-                client.listen_incoming_calls(on_creds)
-                if not got.wait(timeout=answer_timeout):
-                    raise TimeoutError(f"no incoming call for channel {i+1}")
-                creds = holder[0]
-                session = LiveKitSession(
-                    url=creds.url, token=creds.token,
-                    identity=f"{args.identity}-{i}",
-                )
-                session.start()
-                ka = LiveKitKeepalive(session, interval=20.0)
-                ka.start()
-                sessions.append(session)
-                keepalives.append(ka)
-                _emit_marker(f"bonded_channel_up={i+1}/{n_channels}")
-            finally:
-                client.stop()
-    else:
-        # Client mode: place N calls to the same peer.
-        from baleobala.bale.api import BaleApiClient
-        from baleobala.bale.ws_client import WsTlsConfig
-        import time as _time
-
-        ws_tls_config = WsTlsConfig.from_sources(
-            ca_file=getattr(args, "ws_ca_file", None),
-            ca_path=getattr(args, "ws_ca_path", None),
-            insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
-            allow_insecure_debug=True,
-        )
-        creds_timeout = float(getattr(args, "creds_timeout", 45.0))
-
-        for i in range(n_channels):
-            _emit_marker(f"bonded_channel_dialing={i+1}/{n_channels}")
-            client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
-            client.start()
-            try:
-                creds = client.fetch_livekit_credentials(
-                    peer_id, creds_timeout=creds_timeout,
-                )
-                session = LiveKitSession(
-                    url=creds.url, token=creds.token,
-                    identity=f"{args.identity}-{i}",
-                )
-                session.start()
-                ka = LiveKitKeepalive(session, interval=20.0)
-                ka.start()
-                sessions.append(session)
-                keepalives.append(ka)
-                _emit_marker(f"bonded_channel_up={i+1}/{n_channels}")
-            finally:
-                client.stop()
-            if i < n_channels - 1:
-                _time.sleep(2.0)  # Avoid Bale rate-limit on rapid calls.
+    session = LiveKitSession(url=creds.url, token=creds.token, identity=args.identity)
+    session.start()
+    keepalive = LiveKitKeepalive(session, interval=20.0)
+    keepalive.start()
 
     # Allow tracks to settle.
     import time as _time
     _time.sleep(1.0)
 
-    topic = "vpn"
-    bonded = BondedTransport.from_sessions(sessions, topic=topic, reliable=True)
+    channels = [session.data_channel(topic=f"vpn-{i}", reliable=True) for i in range(n_channels)]
+    bonded = BondedTransport(channels)
     _emit_marker(f"bonded_transport_ready channels={n_channels} rate_hint={bonded.rate_hint:.0f}")
 
     def cleanup() -> None:
@@ -1994,16 +1951,14 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
             bonded.close()
         except Exception:  # noqa: BLE001
             pass
-        for ka in keepalives:
-            try:
-                ka.stop()
-            except Exception:  # noqa: BLE001
-                pass
-        for s in sessions:
-            try:
-                s.stop()
-            except Exception:  # noqa: BLE001
-                pass
+        try:
+            keepalive.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            session.stop()
+        except Exception:  # noqa: BLE001
+            pass
 
     return "dc-bonded", _ProxyTransportAdapter(bonded, cleanup=cleanup)
 
