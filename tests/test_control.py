@@ -1651,6 +1651,7 @@ def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypa
     assert b"bale-proxy" in payload
     assert b"--peer-id" in payload
     assert b"1519372475" in payload
+    assert b"--direct-first" not in payload
     assert b"/tmp/baleobala-vpn.psk" in payload
     assert b"SSL_CERT_FILE" in payload
     assert b"HOME" in payload

@@ -600,7 +600,15 @@ def _vpn_namespace_from_profile(profile, auth_record):
     ns.protocol = profile.protocol
     ns.volume = profile.volume
     ns.proxy_secret = profile.proxy_secret
+    ns.direct_first = profile.backend == "proxy" or _truthy_env("BALEOBALA_PROXY_DIRECT_FIRST")
+    ns.proxy_policy_refresh = _truthy_env("BALEOBALA_PROXY_POLICY_REFRESH")
+    ns.direct_only_domain = []
+    ns.tunnel_only_domain = []
     return ns
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _tunnel_namespace_from_profile(profile, auth_record):
@@ -1794,20 +1802,31 @@ def _browser_launch_args(browser: str, *, proxy_url: str, target_url: str, profi
 
 
 def _start_proxy_client_runtime(args: argparse.Namespace, *, on_listen=None):
-    from baleobala.runtime import Socks5ProxyServer
+    from baleobala.runtime import DirectFirstSocks5ProxyServer, Socks5ProxyServer
     from baleobala.runtime.frame import TunnelRole
+    from baleobala.runtime.proxy_policy import load_proxy_domain_policy
 
     transport_name, transport = _open_proxy_transport(args, TunnelRole.CLIENT)
     def _handle_listen(host, port):  # noqa: ANN001
         _emit_marker(f"proxy_listening={host or args.listen_host}:{port or args.listen_port}")
         if on_listen is not None:
             on_listen(host, port)
-    server = Socks5ProxyServer(
+    direct_first = getattr(args, "direct_first", False)
+    server_cls = DirectFirstSocks5ProxyServer if direct_first else Socks5ProxyServer
+    server_kwargs = {}
+    if direct_first:
+        policy = load_proxy_domain_policy(refresh=bool(getattr(args, "proxy_policy_refresh", False)))
+        server_kwargs.update(
+            direct_only_domains=tuple(policy.direct_only_domains) + tuple(getattr(args, "direct_only_domain", ())),
+            tunnel_only_domains=tuple(policy.tunnel_only_domains) + tuple(getattr(args, "tunnel_only_domain", ())),
+        )
+    server = server_cls(
         transport,
         listen_host=args.listen_host,
         listen_port=args.listen_port,
         secret=_resolve_proxy_secret(args),
         on_listen=_handle_listen,
+        **server_kwargs,
     )
     return transport_name, transport, server
 
@@ -2713,6 +2732,12 @@ def build_parser() -> argparse.ArgumentParser:
     bp_client.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_client.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_client.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
+    bp_client.set_defaults(direct_first=True)
+    bp_client.add_argument("--direct-first", dest="direct_first", action="store_true", help="try each CONNECT directly before falling back through Bale")
+    bp_client.add_argument("--no-direct-first", dest="direct_first", action="store_false", help="send every CONNECT through Bale")
+    bp_client.add_argument("--direct-only-domain", action="append", default=[], help="domain suffix that must not fall back through Bale when direct fails")
+    bp_client.add_argument("--tunnel-only-domain", action="append", default=[], help="domain suffix that should skip direct and go through Bale")
+    bp_client.add_argument("--proxy-policy-refresh", action="store_true", help="refresh cached Iran-hosted/gfwlist domain policies before starting")
     _add_bale_ws_tls_args(bp_client)
     bp_client.set_defaults(func=cmd_bale_proxy_client)
 
@@ -2739,6 +2764,12 @@ def build_parser() -> argparse.ArgumentParser:
     bp_browser.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_browser.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_browser.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
+    bp_browser.set_defaults(direct_first=True)
+    bp_browser.add_argument("--direct-first", dest="direct_first", action="store_true", help="try each CONNECT directly before falling back through Bale")
+    bp_browser.add_argument("--no-direct-first", dest="direct_first", action="store_false", help="send every CONNECT through Bale")
+    bp_browser.add_argument("--direct-only-domain", action="append", default=[], help="domain suffix that must not fall back through Bale when direct fails")
+    bp_browser.add_argument("--tunnel-only-domain", action="append", default=[], help="domain suffix that should skip direct and go through Bale")
+    bp_browser.add_argument("--proxy-policy-refresh", action="store_true", help="refresh cached Iran-hosted/gfwlist domain policies before starting")
     bp_browser.add_argument("--browser", choices=["auto", "chrome", "chromium", "edge"], default="auto")
     bp_browser.add_argument("--url", default="https://web.bale.ai", help="page to open in the browser")
     _add_bale_ws_tls_args(bp_browser)
@@ -2767,6 +2798,12 @@ def build_parser() -> argparse.ArgumentParser:
     bp_system.add_argument("--proxy-secret", default=None, help="shared secret for packet auth/encryption")
     bp_system.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_system.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
+    bp_system.set_defaults(direct_first=True)
+    bp_system.add_argument("--direct-first", dest="direct_first", action="store_true", help="try each CONNECT directly before falling back through Bale")
+    bp_system.add_argument("--no-direct-first", dest="direct_first", action="store_false", help="send every CONNECT through Bale")
+    bp_system.add_argument("--direct-only-domain", action="append", default=[], help="domain suffix that must not fall back through Bale when direct fails")
+    bp_system.add_argument("--tunnel-only-domain", action="append", default=[], help="domain suffix that should skip direct and go through Bale")
+    bp_system.add_argument("--proxy-policy-refresh", action="store_true", help="refresh cached Iran-hosted/gfwlist domain policies before starting")
     bp_system.add_argument("--service", action="append", default=[], help="macOS network service to modify; repeat for more services")
     bp_system.add_argument("--proxy-ready-timeout", type=float, default=30.0)
     _add_bale_ws_tls_args(bp_system)

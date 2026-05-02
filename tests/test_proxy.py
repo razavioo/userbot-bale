@@ -5,7 +5,14 @@ import threading
 import time
 
 from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, QueuedTunnelTransport, TunnelRole, TunnelSession
-from baleobala.runtime.proxy import ProxyHub, ProxyPacket, ProxyPacketType, Socks5ProxyServer, TunnelTcpRelay
+from baleobala.runtime.proxy import (
+    DirectFirstSocks5ProxyServer,
+    ProxyHub,
+    ProxyPacket,
+    ProxyPacketType,
+    Socks5ProxyServer,
+    TunnelTcpRelay,
+)
 
 PROXY_SECRET = b"proxy-secret"
 
@@ -200,6 +207,253 @@ def test_socks5_proxy_roundtrip_over_memory_tunnel() -> None:
     right.close()
     server_thread.join(timeout=2.0)
     relay_thread.join(timeout=2.0)
+
+
+def test_direct_first_proxy_uses_direct_socket_when_available() -> None:
+    echo_port, _echo_thread = _start_echo_server()
+
+    left_ch, right_ch = MemoryByteChannel.pair()
+    left = TunnelSession(left_ch, role=TunnelRole.CLIENT, security=NullSecurityProvider(session_id="left"))
+    right = TunnelSession(right_ch, role=TunnelRole.SERVER, security=NullSecurityProvider(session_id="right"))
+    left.open()
+    right.open()
+
+    left_transport = QueuedTunnelTransport(left)
+    right_transport = QueuedTunnelTransport(right)
+
+    relay = TunnelTcpRelay(right_transport, secret=PROXY_SECRET)
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+
+    server = DirectFirstSocks5ProxyServer(
+        left_transport,
+        listen_host="127.0.0.1",
+        listen_port=0,
+        secret=PROXY_SECRET,
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    deadline = time.time() + 2.0
+    while server.bound_port is None and time.time() < deadline:
+        time.sleep(0.01)
+    assert server.bound_port is not None
+
+    assert _start_socks_client(server.bound_port, echo_port, b"direct hello") == b"direct hello"
+    assert not relay._hub._queues  # noqa: SLF001
+
+    server.stop()
+    relay.stop()
+    left_transport.close()
+    right_transport.close()
+    left.close()
+    right.close()
+    server_thread.join(timeout=2.0)
+    relay_thread.join(timeout=2.0)
+
+
+def test_direct_first_proxy_falls_back_to_tunnel_when_direct_fails() -> None:
+    echo_port, _echo_thread = _start_echo_server()
+
+    left_ch, right_ch = MemoryByteChannel.pair()
+    left = TunnelSession(left_ch, role=TunnelRole.CLIENT, security=NullSecurityProvider(session_id="left"))
+    right = TunnelSession(right_ch, role=TunnelRole.SERVER, security=NullSecurityProvider(session_id="right"))
+    left.open()
+    right.open()
+
+    left_transport = QueuedTunnelTransport(left)
+    right_transport = QueuedTunnelTransport(right)
+
+    relay = TunnelTcpRelay(right_transport, secret=PROXY_SECRET)
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+
+    server = DirectFirstSocks5ProxyServer(
+        left_transport,
+        listen_host="127.0.0.1",
+        listen_port=0,
+        secret=PROXY_SECRET,
+    )
+    server._connect_direct = lambda _host, _port: None  # type: ignore[method-assign]  # noqa: SLF001
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    deadline = time.time() + 2.0
+    while server.bound_port is None and time.time() < deadline:
+        time.sleep(0.01)
+    assert server.bound_port is not None
+
+    assert _start_socks_client(server.bound_port, echo_port, b"fallback hello") == b"fallback hello"
+
+    server.stop()
+    relay.stop()
+    left_transport.close()
+    right_transport.close()
+    left.close()
+    right.close()
+    server_thread.join(timeout=2.0)
+    relay_thread.join(timeout=2.0)
+
+
+def test_direct_first_proxy_respects_direct_only_domains() -> None:
+    echo_port, _echo_thread = _start_echo_server()
+
+    left_ch, right_ch = MemoryByteChannel.pair()
+    left = TunnelSession(left_ch, role=TunnelRole.CLIENT, security=NullSecurityProvider(session_id="left"))
+    right = TunnelSession(right_ch, role=TunnelRole.SERVER, security=NullSecurityProvider(session_id="right"))
+    left.open()
+    right.open()
+
+    left_transport = QueuedTunnelTransport(left)
+    right_transport = QueuedTunnelTransport(right)
+
+    relay = TunnelTcpRelay(right_transport, secret=PROXY_SECRET)
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+
+    server = DirectFirstSocks5ProxyServer(
+        left_transport,
+        listen_host="127.0.0.1",
+        listen_port=0,
+        secret=PROXY_SECRET,
+        direct_only_domains=["example.test"],
+    )
+    server._connect_direct = lambda _host, _port: None  # type: ignore[method-assign]  # noqa: SLF001
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    deadline = time.time() + 2.0
+    while server.bound_port is None and time.time() < deadline:
+        time.sleep(0.01)
+    assert server.bound_port is not None
+
+    with socket.create_connection(("127.0.0.1", server.bound_port), timeout=2.0) as sock:
+        sock.sendall(b"\x05\x01\x00")
+        assert _recv_exact(sock, 2) == b"\x05\x00"
+        host = b"shop.example.test"
+        sock.sendall(
+            b"\x05\x01\x00\x03"
+            + bytes([len(host)])
+            + host
+            + echo_port.to_bytes(2, "big")
+        )
+        reply = _recv_exact(sock, 10)
+        assert reply[:2] == b"\x05\x05"
+
+    assert not relay._hub._queues  # noqa: SLF001
+
+    server.stop()
+    relay.stop()
+    left_transport.close()
+    right_transport.close()
+    left.close()
+    right.close()
+    server_thread.join(timeout=2.0)
+    relay_thread.join(timeout=2.0)
+
+
+def test_direct_first_proxy_respects_tunnel_only_domains() -> None:
+    echo_port, _echo_thread = _start_echo_server()
+
+    left_ch, right_ch = MemoryByteChannel.pair()
+    left = TunnelSession(left_ch, role=TunnelRole.CLIENT, security=NullSecurityProvider(session_id="left"))
+    right = TunnelSession(right_ch, role=TunnelRole.SERVER, security=NullSecurityProvider(session_id="right"))
+    left.open()
+    right.open()
+
+    left_transport = QueuedTunnelTransport(left)
+    right_transport = QueuedTunnelTransport(right)
+
+    relay = TunnelTcpRelay(right_transport, secret=PROXY_SECRET)
+    relay_thread = threading.Thread(target=relay.serve_forever, daemon=True)
+    relay_thread.start()
+
+    direct_attempts = {"count": 0}
+    server = DirectFirstSocks5ProxyServer(
+        left_transport,
+        listen_host="127.0.0.1",
+        listen_port=0,
+        secret=PROXY_SECRET,
+        tunnel_only_domains=["127.0.0.1"],
+    )
+
+    def count_direct(_host, _port):  # noqa: ANN001
+        direct_attempts["count"] += 1
+        return None
+
+    server._connect_direct = count_direct  # type: ignore[method-assign]  # noqa: SLF001
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    deadline = time.time() + 2.0
+    while server.bound_port is None and time.time() < deadline:
+        time.sleep(0.01)
+    assert server.bound_port is not None
+
+    assert _start_socks_client(server.bound_port, echo_port, b"tunnel only") == b"tunnel only"
+    assert direct_attempts["count"] == 0
+
+    server.stop()
+    relay.stop()
+    left_transport.close()
+    right_transport.close()
+    left.close()
+    right.close()
+    server_thread.join(timeout=2.0)
+    relay_thread.join(timeout=2.0)
+
+
+def test_proxy_policy_parses_iran_and_gfw_domain_lists() -> None:
+    from baleobala.runtime.proxy_policy import parse_domain_lines, parse_gfwlist_domains
+
+    iran_domains = parse_domain_lines(
+        """
+        # comment
+        digikala.com
+        https://www.shaparak.ir/path
+        *.example.ir
+        """
+    )
+    assert {"digikala.com", "www.shaparak.ir", "example.ir"} <= iran_domains
+
+    gfw_domains = parse_gfwlist_domains(
+        """
+        ! comment
+        ||blocked.example^
+        |https://www.youtube.com/path
+        @@||allowed.example^
+        """
+    )
+    assert {"blocked.example", "www.youtube.com"} <= gfw_domains
+    assert "allowed.example" not in gfw_domains
+
+
+def test_proxy_policy_direct_domains_win_over_tunnel_domains(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("BALEOBALA_PROXY_DIRECT_ONLY_DOMAIN", "digikala.com")
+    monkeypatch.setenv("BALEOBALA_PROXY_TUNNEL_ONLY_DOMAIN", "digikala.com,blocked.example")
+    monkeypatch.setenv("BALEOBALA_IRAN_HOSTED_DOMAINS_URL", "file:///missing")
+    monkeypatch.setenv("BALEOBALA_GFWLIST_URL", "file:///missing")
+
+    from baleobala.runtime.proxy_policy import load_proxy_domain_policy
+
+    policy = load_proxy_domain_policy(timeout=0.01)
+
+    assert "digikala.com" in policy.direct_only_domains
+    assert "digikala.com" not in policy.tunnel_only_domains
+    assert "blocked.example" in policy.tunnel_only_domains
+
+
+def test_proxy_policy_loads_bundled_lists_without_network(monkeypatch) -> None:
+    from baleobala.runtime import proxy_policy
+
+    monkeypatch.setattr(proxy_policy, "_fetch_text", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network used")))
+
+    policy = proxy_policy.load_proxy_domain_policy(refresh=False, timeout=0.01)
+
+    assert "ir" in policy.direct_only_domains
+    assert "digikala.com" in policy.direct_only_domains
+    assert "youtube.com" in policy.tunnel_only_domains
 
 
 def test_socks5_proxy_multiplexes_multiple_connections() -> None:

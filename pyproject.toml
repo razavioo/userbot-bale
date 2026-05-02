@@ -57,6 +57,9 @@ baleobala = "baleobala.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"baleobala.runtime.policy_data" = ["*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q"

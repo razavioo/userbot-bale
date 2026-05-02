@@ -12,6 +12,7 @@ from baleobala.runtime.frame import (
 )
 from baleobala.runtime.interfaces import ByteChannel, SecurityProvider
 from baleobala.runtime.proxy import (
+    DirectFirstSocks5ProxyServer,
     ProxyPacket,
     ProxyPacketType,
     QueuedTunnelTransport,
@@ -30,6 +31,7 @@ __all__ = [
     "ProxyPacket",
     "ProxyPacketType",
     "QueuedTunnelTransport",
+    "DirectFirstSocks5ProxyServer",
     "Socks5ProxyServer",
     "SecurityProvider",
     "TunnelConfig",
