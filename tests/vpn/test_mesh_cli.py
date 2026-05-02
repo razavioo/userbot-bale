@@ -19,14 +19,55 @@ def test_exit_node_mesh_subcommand_parses():
         "--skip-nat-setup",
         "--psk", "shared-secret",
         "--provision-timeout", "12",
+        "--max-peers-per-server-jwt", "4",
     ])
     assert args.cmd == "tunnel"
     assert args.vpn_cmd == "exit-node-mesh"
+    assert args.bale_jwt == ["eyJ.X.Y"]
     assert args.tun == "vpn0"
     assert args.pool_cidr == "10.99.0.0/24"
     assert args.provision_timeout == 12
     assert args.skip_nat_setup is True
     assert args.psk == "shared-secret"
+    assert args.max_peers_per_server_jwt == 4
+
+
+def test_exit_node_mesh_accepts_multiple_server_accounts():
+    parser = build_parser()
+    args = parser.parse_args([
+        "tunnel", "exit-node-mesh",
+        "--bale-jwt-file", "/tmp/a.jwt",
+        "--bale-jwt-file", "/tmp/b.jwt",
+        "--skip-nat-setup",
+    ])
+    assert args.bale_jwt_file == ["/tmp/a.jwt", "/tmp/b.jwt"]
+
+
+def test_live_smoke_parses_datachannel_experiment_options():
+    parser = build_parser()
+    args = parser.parse_args([
+        "vpn", "live-smoke",
+        "--caller-jwt-file", "/tmp/caller.jwt",
+        "--callee-jwt-file", "/tmp/callee.jwt",
+        "--callee-peer-id", "123",
+        "--datachannels", "4",
+        "--rounds", "3",
+        "--payload-size", "4096",
+    ])
+    assert args.datachannels == 4
+    assert args.rounds == 3
+    assert args.payload_size == 4096
+
+
+def test_proxy_relay_parses_capacity_options():
+    parser = build_parser()
+    args = parser.parse_args([
+        "bale-proxy", "relay",
+        "--bale-jwt-file", "/tmp/server.jwt",
+        "--answer",
+        "--relay-max-active-connections", "192",
+    ])
+    assert args.relay_max_active_connections == 192
 
 
 def test_mesh_accepts_peers_via_transport_list():
