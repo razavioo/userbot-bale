@@ -1,0 +1,10 @@
+#include "Base.xcconfig"
+
+PRODUCT_NAME = BaleobalaProxy
+PRODUCT_BUNDLE_IDENTIFIER = com.baleobala.proxy
+INFOPLIST_FILE = ../macos/BaleobalaProxyApp/Info.plist
+CODE_SIGN_ENTITLEMENTS = ../macos/BaleobalaProxyApp/BaleobalaProxy.entitlements
+ENABLE_APP_SANDBOX = NO
+ENABLE_HARDENED_RUNTIME = YES
+TARGETED_DEVICE_FAMILY = 1
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
