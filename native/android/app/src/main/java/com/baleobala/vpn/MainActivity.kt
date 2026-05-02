@@ -4,12 +4,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -17,6 +18,7 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.baleobala.vpn.bale.AuthStore
 import com.baleobala.vpn.databinding.ActivityMainBinding
 import com.baleobala.vpn.ui.LoginActivity
+import com.google.android.material.snackbar.Snackbar
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
@@ -24,25 +26,40 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var store: AuthStore
     private lateinit var settings: AppSettings
-    private val logBuffer = ArrayDeque<String>()
+
     private var receiverRegistered: Boolean = false
-    private var connected: Boolean = false
-    private var currentStatusText: String = "Disconnected"
-    private var currentCarrierText: String = "Auto"
-    private var detailsVisible: Boolean = true
-    private var currentStats: JSONObject = JSONObject()
+    private var uiState: UiState = UiState.Disconnected
+    private var lastSnapshot: JSONObject? = null
+
+    private enum class UiState { Disconnected, Connecting, Connected, Stopping, Failed }
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK) startVpnService()
-        else appendLog("permission denied")
+        if (result.resultCode == RESULT_OK) {
+            startVpnService()
+        } else {
+            setState(UiState.Disconnected)
+            showSnackbar(
+                getString(R.string.snackbar_vpn_permission_denied),
+                actionLabel = getString(R.string.action_open_settings),
+            ) { openAppSettings() }
+        }
     }
 
     private val settingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {
-        refreshSettingsUi()
+    ) { refreshSettingsUi() }
+
+    private val notifPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            showSnackbar(
+                getString(R.string.snackbar_notif_permission_denied),
+                actionLabel = getString(R.string.action_open_settings),
+            ) { openAppSettings() }
+        }
     }
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -50,27 +67,14 @@ class MainActivity : AppCompatActivity() {
             val kind = intent.getStringExtra("kind") ?: return
             val value = intent.getStringExtra("value") ?: return
             when (kind) {
-                "status" -> {
-                    connected = value == "connected"
-                    currentStatusText = when (value) {
-                        "connected" -> getString(R.string.status_connected)
-                        "connecting" -> getString(R.string.status_connecting)
-                        else -> getString(R.string.status_disconnected)
-                    }
-                    syncStateUi()
-                }
+                "status" -> applyStatus(value)
                 "snapshot" -> {
-                    currentStats = JSONObject(value)
-                    connected = currentStats.optString("status") == "connected"
-                    currentStatusText = when (currentStats.optString("status")) {
-                        "connected" -> getString(R.string.status_connected)
-                        "connecting" -> getString(R.string.status_connecting)
-                        else -> getString(R.string.status_disconnected)
-                    }
-                    updateStatsUi()
-                    syncStateUi()
+                    val snap = runCatching { JSONObject(value) }.getOrNull() ?: return
+                    lastSnapshot = snap
+                    applyStatus(snap.optString("status"))
+                    renderDetail()
                 }
-                "log", "error" -> appendLog(value)
+                "error" -> handleError(value)
             }
         }
     }
@@ -84,31 +88,21 @@ class MainActivity : AppCompatActivity() {
 
         maybeRequestNotificationPermission()
         refreshSettingsUi()
-        syncStateUi()
-        appendLog(getString(R.string.log_ready))
+        renderState()
 
         binding.settingsButton.setOnClickListener {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
 
-        val toggleClick = View.OnClickListener {
-            if (connected) {
-                val i = Intent(this, BaleVpnService::class.java).apply { action = BaleVpnService.ACTION_DISCONNECT }
-                ContextCompat.startForegroundService(this, i)
-            } else {
-                startVpnOrLogin()
-            }
-        }
-        binding.toggleButton.setOnClickListener(toggleClick)
-        binding.toggleCard.setOnClickListener(toggleClick)
+        binding.toggleCard.setOnClickListener { onTogglePressed() }
 
         binding.signOutButton.setOnClickListener {
             store.clear()
             refreshAuthUi()
         }
 
-        if (settings.reconnectOnLaunch && canStartWithoutLogin()) {
-            binding.toggleButton.post { if (!connected) startVpnOrLogin() }
+        if (settings.reconnectOnLaunch && canStart()) {
+            binding.toggleCard.post { if (uiState == UiState.Disconnected) onTogglePressed() }
         }
         handleDebugAutostart(intent)
     }
@@ -140,12 +134,117 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         if (receiverRegistered) {
-            try {
-                LocalBroadcastManager.getInstance(this).unregisterReceiver(stateReceiver)
-            } catch (_: Throwable) {}
+            runCatching { LocalBroadcastManager.getInstance(this).unregisterReceiver(stateReceiver) }
             receiverRegistered = false
         }
         super.onDestroy()
+    }
+
+    // --- Toggle ---
+
+    private fun onTogglePressed() {
+        when (uiState) {
+            UiState.Connecting, UiState.Stopping -> return // locked
+            UiState.Connected -> requestDisconnect()
+            UiState.Disconnected, UiState.Failed -> requestConnect()
+        }
+    }
+
+    private fun requestConnect() {
+        if (store.jwt() == null) {
+            showSnackbar(
+                getString(R.string.snackbar_sign_in_required),
+                actionLabel = getString(R.string.action_sign_in),
+            ) { startActivity(Intent(this, LoginActivity::class.java)) }
+            return
+        }
+        if (settings.exitPeerId <= 0L) {
+            showSnackbar(
+                getString(R.string.snackbar_relay_required),
+                actionLabel = getString(R.string.action_choose),
+            ) { settingsLauncher.launch(Intent(this, SettingsActivity::class.java)) }
+            return
+        }
+        setState(UiState.Connecting)
+        val prep = VpnService.prepare(this)
+        if (prep != null) vpnPermissionLauncher.launch(prep) else startVpnService()
+    }
+
+    private fun requestDisconnect() {
+        setState(UiState.Stopping)
+        val i = Intent(this, BaleVpnService::class.java).apply { action = BaleVpnService.ACTION_DISCONNECT }
+        ContextCompat.startForegroundService(this, i)
+    }
+
+    private fun startVpnService() {
+        val intent = Intent(this, BaleVpnService::class.java).apply {
+            putExtra(BaleVpnService.EXTRA_CARRIER, settings.carrierMode)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun canStart(): Boolean = store.jwt() != null && settings.exitPeerId > 0L
+
+    // --- State ---
+
+    private fun applyStatus(value: String) {
+        val newState = when (value) {
+            "connected" -> UiState.Connected
+            "connecting" -> UiState.Connecting
+            "disconnected" -> UiState.Disconnected
+            else -> uiState
+        }
+        if (newState != uiState) setState(newState) else renderState()
+    }
+
+    private fun setState(s: UiState) {
+        uiState = s
+        if (s == UiState.Disconnected) lastSnapshot = null
+        renderState()
+    }
+
+    private fun renderState() {
+        val (statusRes, bgColorRes, busy, cdRes) = when (uiState) {
+            UiState.Disconnected -> Quad(R.string.status_disconnected, R.color.state_idle, false, R.string.cd_toggle_idle)
+            UiState.Connecting -> Quad(R.string.status_connecting, R.color.state_connecting, true, R.string.cd_toggle_busy)
+            UiState.Connected -> Quad(R.string.status_connected, R.color.state_connected, false, R.string.cd_toggle_connected)
+            UiState.Stopping -> Quad(R.string.state_disconnecting, R.color.state_idle, true, R.string.cd_toggle_busy)
+            UiState.Failed -> Quad(R.string.state_failed, R.color.state_error, false, R.string.cd_toggle_idle)
+        }
+        binding.statusText.setText(statusRes)
+        binding.toggleCard.setCardBackgroundColor(ContextCompat.getColor(this, bgColorRes))
+        binding.toggleCard.contentDescription = getString(cdRes)
+        binding.connectingProgress.visibility = if (busy) View.VISIBLE else View.GONE
+        binding.toggleCard.isClickable = !busy
+        renderDetail()
+        refreshAuthUi()
+    }
+
+    private fun renderDetail() {
+        val snap = lastSnapshot
+        val text: String? = when (uiState) {
+            UiState.Connected -> {
+                val peer = settings.exitPeerId
+                val uptime = snap?.optLong("uptime_sec", 0L) ?: 0L
+                val bIn = snap?.optLong("bytes_in", 0L) ?: 0L
+                val bOut = snap?.optLong("bytes_out", 0L) ?: 0L
+                getString(
+                    R.string.notif_text_connected_fmt,
+                    peer,
+                    formatDuration(uptime),
+                    humanBytes(bIn),
+                    humanBytes(bOut),
+                )
+            }
+            UiState.Failed -> snap?.optString("last_error", "")?.takeIf { it.isNotBlank() }
+            else -> null
+        }
+        if (text.isNullOrBlank()) {
+            binding.statusDetail.visibility = View.GONE
+        } else {
+            binding.statusDetail.text = text
+            binding.statusDetail.visibility = View.VISIBLE
+        }
     }
 
     private fun refreshAuthUi() {
@@ -153,58 +252,95 @@ class MainActivity : AppCompatActivity() {
         if (store.jwt() != null) {
             binding.authStatus.text = if (settings.exitPeerId <= 0L) {
                 getString(R.string.relay_not_set)
-            } else if (phone != null)
+            } else if (phone != null) {
                 getString(R.string.login_logged_in, phone.toString())
-            else
-                "Signed in"
+            } else {
+                getString(R.string.login_logged_in, "")
+            }
             binding.signOutButton.visibility = View.VISIBLE
         } else {
-            binding.authStatus.text = if (settings.carrierMode == BaleVpnService.CARRIER_BALE) {
-                getString(R.string.login_not_signed_in_bale)
-            } else {
-                getString(R.string.login_not_signed_in_local)
-            }
+            binding.authStatus.text = getString(R.string.login_not_signed_in_bale)
             binding.signOutButton.visibility = View.GONE
         }
     }
 
     private fun refreshSettingsUi() {
         settings = AppSettings(this)
-        currentCarrierText = when (settings.carrierMode) {
-            BaleVpnService.CARRIER_BALE -> getString(R.string.settings_carrier_bale)
-            else -> getString(R.string.settings_carrier_bale)
-        }
-        detailsVisible = settings.showLogs
-        binding.quickActionSecondary.text = if (connected) getString(R.string.dashboard_disconnect_hint) else getString(R.string.dashboard_login_hint)
-        binding.detailsGroup.visibility = if (detailsVisible) View.VISIBLE else View.GONE
-        syncStateUi()
+        renderState()
     }
 
-    private fun startVpnService() {
-        binding.statusText.text = getString(R.string.status_connecting)
-        val intent = Intent(this, BaleVpnService::class.java).apply {
-            putExtra(BaleVpnService.EXTRA_CARRIER, settings.carrierMode)
+    // --- Errors ---
+
+    private fun handleError(raw: String) {
+        val lower = raw.lowercase()
+        val (msg, action, onAction) = when {
+            "no bale jwt" in lower || "sign in" in lower || "401" in lower -> {
+                store.clear()
+                Triple(getString(R.string.snackbar_auth_expired), getString(R.string.action_sign_in)) {
+                    startActivity(Intent(this, LoginActivity::class.java))
+                }
+            }
+            "relay" in lower && "peer" in lower -> Triple(
+                getString(R.string.snackbar_relay_required),
+                getString(R.string.action_choose),
+            ) { settingsLauncher.launch(Intent(this, SettingsActivity::class.java)) }
+            "all dns targets timed out" in lower || "offline" in lower -> Triple(
+                getString(R.string.snackbar_offline),
+                getString(R.string.action_retry),
+            ) { onTogglePressed() }
+            else -> Triple(
+                getString(R.string.snackbar_generic_error, raw.take(120)),
+                getString(R.string.action_retry),
+            ) { onTogglePressed() }
         }
-        ContextCompat.startForegroundService(this, intent)
+        if (uiState == UiState.Connecting) setState(UiState.Failed)
+        showSnackbar(msg, action, onAction)
     }
 
-    private fun startVpnOrLogin() {
-        if (store.jwt() == null) {
-            startActivity(Intent(this, LoginActivity::class.java))
-            return
-        }
-        if (settings.exitPeerId <= 0L) {
-            appendLog("relay peer ID is missing")
-            Toast.makeText(this, getString(R.string.relay_not_set), Toast.LENGTH_LONG).show()
-            settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
-            return
-        }
-        val prep = VpnService.prepare(this)
-        if (prep != null) vpnPermissionLauncher.launch(prep) else startVpnService()
+    // --- Notification permission ---
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted = ActivityCompat.checkSelfPermission(
+            this, android.Manifest.permission.POST_NOTIFICATIONS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    private fun canStartWithoutLogin(): Boolean {
-        return store.jwt() != null && settings.exitPeerId > 0L
+    private fun openAppSettings() {
+        val i = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        startActivity(i)
+    }
+
+    // --- Helpers ---
+
+    private fun showSnackbar(text: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
+        val sb = Snackbar.make(binding.rootCoordinator, text, Snackbar.LENGTH_LONG)
+        if (actionLabel != null && onAction != null) {
+            sb.setAction(actionLabel) { onAction() }
+        }
+        sb.show()
+    }
+
+    private fun humanBytes(n: Long): String {
+        if (n < 1024) return "${n}B"
+        val units = listOf("KB", "MB", "GB", "TB")
+        var v = n.toDouble() / 1024.0
+        var idx = 0
+        while (v >= 1024.0 && idx < units.size - 1) { v /= 1024.0; idx++ }
+        return String.format("%.1f%s", v, units[idx])
+    }
+
+    private fun formatDuration(seconds: Long): String {
+        val s = seconds % 60
+        val m = (seconds / 60) % 60
+        val h = seconds / 3600
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s)
+        else String.format("%02d:%02d", m, s)
     }
 
     private fun handleDebugAutostart(intent: Intent?) {
@@ -214,61 +350,15 @@ class MainActivity : AppCompatActivity() {
             settings.carrierMode = BaleVpnService.CARRIER_BALE
             refreshSettingsUi()
         }
-        binding.toggleButton.post { if (!connected) startVpnOrLogin() }
-    }
-
-    companion object {
-        private const val EXTRA_DEBUG_AUTOSTART = "debug_autostart"
+        binding.toggleCard.post { if (uiState == UiState.Disconnected) onTogglePressed() }
     }
 
     private fun isDebuggable(): Boolean =
         (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
-    private fun appendLog(line: String) {
-        logBuffer.addLast(line)
-        while (logBuffer.size > 200) logBuffer.removeFirst()
-        updateStatsUi()
+    companion object {
+        private const val EXTRA_DEBUG_AUTOSTART = "debug_autostart"
     }
 
-    private fun syncStateUi() {
-        binding.statusText.text = currentStatusText
-        binding.toggleButton.text = if (connected) getString(R.string.disconnect) else getString(R.string.connect)
-        binding.connectionPill.text = if (connected) getString(R.string.dashboard_pill_connected) else getString(R.string.dashboard_pill_disconnected)
-        binding.connectionPill.isSelected = connected
-        binding.carrierText.text = currentCarrierText
-        binding.quickActionSecondary.text = if (connected) getString(R.string.dashboard_disconnect_hint) else getString(R.string.dashboard_login_hint)
-        refreshAuthUi()
-        binding.detailsGroup.visibility = if (detailsVisible) View.VISIBLE else View.GONE
-        updateStatsUi()
-    }
-
-    private fun updateStatsUi() {
-        if (!detailsVisible) {
-            binding.logText.text = ""
-            return
-        }
-        val stats = buildString {
-            appendLine(logBuffer.joinToString("\n"))
-            if (logBuffer.isNotEmpty()) appendLine("")
-            appendLine("status=${currentStats.optString("status", currentStatusText)}")
-            appendLine("carrier=${currentStats.optString("carrier", currentCarrierText)}")
-            appendLine("uptime_sec=${currentStats.optLong("uptime_sec", 0)}")
-            appendLine("pkts_in=${currentStats.optLong("pkts_in", 0)} pkts_out=${currentStats.optLong("pkts_out", 0)}")
-            appendLine("bytes_in=${currentStats.optLong("bytes_in", 0)} bytes_out=${currentStats.optLong("bytes_out", 0)}")
-            appendLine("queue_depth=${currentStats.optInt("queue_depth", 0)}")
-            val lastError = currentStats.optString("last_error", "")
-            if (lastError.isNotBlank()) appendLine("last_error=$lastError")
-        }
-        binding.logText.text = stats.trimEnd()
-    }
-
-    private fun maybeRequestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            val granted = ActivityCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 901)
-            }
-        }
-    }
+    private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 }

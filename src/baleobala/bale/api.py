@@ -99,6 +99,7 @@ class BaleApiClient:
         self._message_subs: dict[int, Callable[[bytes], None]] = {}
         self._seen_rids: set[int] = set()
         self._seen_rids_order: list[int] = []
+        self._seen_rids_lock = threading.Lock()
         # Tracks the callId of the last UpdateCallReceived we auto-
         # accepted so we don't fire AcceptCall twice for the same call
         # (the server often re-sends the same update several times).
@@ -277,8 +278,28 @@ class BaleApiClient:
         for p in phones:
             if isinstance(p, str):
                 p = p.strip().lstrip("+")
+                if not p.isdigit():
+                    raise ValueError(
+                        f"phone {p!r} is not a digit string after stripping +"
+                    )
                 p = int(p)
-            normalized.append(int(p))
+            n = int(p)
+            # E.164 caps national numbers at 15 digits; anything wider
+            # is either malformed input or a probe Bale's server may
+            # log/flag. Reject before we send.
+            if n <= 0 or len(str(n)) > 15:
+                raise ValueError(
+                    f"phone {p!r} is not a valid E.164 number"
+                )
+            normalized.append(n)
+        # Cap per-call import size. Bale's own client batches contacts
+        # in small groups; a request with thousands of numbers looks
+        # exactly like phone-enumeration abuse and risks an account ban.
+        if len(normalized) > 100:
+            raise ValueError(
+                f"refusing to import {len(normalized)} phones in one call "
+                "(>100 looks like enumeration; split the request)"
+            )
 
         phone_msgs = [
             PhoneToImport(phone_number=n, name=f"{name_prefix}-{n}")
@@ -500,10 +521,11 @@ class BaleApiClient:
     def _dispatch_inbound_messages(self, raw: bytes) -> None:
         messages = find_inbound_messages(raw)
         for m in messages:
-            if m.rid and m.rid in self._seen_rids:
-                continue
             if m.rid:
-                self._remember_rid(m.rid)
+                with self._seen_rids_lock:
+                    if m.rid in self._seen_rids:
+                        continue
+                    self._remember_rid_locked(m.rid)
             cb = (
                 self._message_subs.get(m.sender_uid)
                 or self._message_subs.get(m.peer_user_id)
@@ -515,9 +537,14 @@ class BaleApiClient:
             except Exception:  # noqa: BLE001
                 log.exception("inbound-message callback failed")
 
-    def _remember_rid(self, rid: int) -> None:
+    def _remember_rid_locked(self, rid: int) -> None:
+        """Caller must hold self._seen_rids_lock."""
         self._seen_rids.add(rid)
         self._seen_rids_order.append(rid)
         while len(self._seen_rids_order) > 1024:
             old = self._seen_rids_order.pop(0)
             self._seen_rids.discard(old)
+
+    def _remember_rid(self, rid: int) -> None:
+        with self._seen_rids_lock:
+            self._remember_rid_locked(rid)

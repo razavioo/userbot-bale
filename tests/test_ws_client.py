@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import queue
 import ssl
 from types import SimpleNamespace
 
 import pytest
 
 from baleobala.bale import ws_client
+from baleobala.bale.rpc_envelope import DEFAULT_METADATA, Request, Response
 
 
 def test_build_ssl_context_defaults_to_none(monkeypatch) -> None:
@@ -133,3 +135,60 @@ def test_ws_client_disables_auto_proxy(monkeypatch) -> None:
     client.stop()
 
     assert captured["proxy"] is None
+
+
+def test_dispatch_does_not_drop_when_response_arrives_before_get():
+    """Regression: _dispatch must not silently drop a response that
+    arrives before the caller reaches q.get(). Previously the pending
+    queue had maxsize=1 and a fast second response (or a same-seq
+    duplicate) would hit queue.Full and be discarded."""
+    client = ws_client.WsClient.__new__(ws_client.WsClient)
+    client._lock = __import__("threading").Lock()
+    client._pending = {}
+    client._on_update = None
+
+    q: "queue.Queue[Response]" = queue.Queue()
+    client._pending[7] = q
+
+    resp = Response(seq=7, payload=b"ok")
+    # encode/decode roundtrip via _dispatch's Response.decode path:
+    # easier: bypass decode by stubbing Response.decode for this call.
+    import baleobala.bale.ws_client as wc
+
+    original = wc.Response.decode
+    wc.Response.decode = staticmethod(lambda buf: resp)
+    try:
+        client._dispatch(b"\x00")
+        # A second arrival with same seq must also not raise / drop silently;
+        # with the unbounded queue both are queued.
+        client._dispatch(b"\x00")
+    finally:
+        wc.Response.decode = original
+
+    assert q.get_nowait() is resp
+    assert q.get_nowait() is resp
+
+
+def test_request_metadata_default_is_unchanged():
+    req = Request(service="s", method="m")
+    assert req.metadata == DEFAULT_METADATA
+
+
+def test_request_metadata_env_override_merges_into_defaults(monkeypatch):
+    monkeypatch.setenv(
+        "BALE_RPC_METADATA_OVERRIDE",
+        '{"app_version": "999999", "extra_field": "x"}',
+    )
+    req = Request(service="s", method="m")
+    assert req.metadata["app_version"] == "999999"
+    assert req.metadata["extra_field"] == "x"
+    # Other defaults preserved.
+    assert req.metadata["os_type"] == DEFAULT_METADATA["os_type"]
+
+
+def test_request_metadata_invalid_override_falls_back(monkeypatch, caplog):
+    caplog.set_level("WARNING")
+    monkeypatch.setenv("BALE_RPC_METADATA_OVERRIDE", "{not-json")
+    req = Request(service="s", method="m")
+    assert req.metadata == DEFAULT_METADATA
+    assert any("not valid JSON" in r.message for r in caplog.records)

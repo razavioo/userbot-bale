@@ -63,7 +63,7 @@ class BaleVpnService : VpnService() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIF_ID, buildNotification("Connecting…"))
+        startForeground(NOTIF_ID, buildNotification("connecting"))
         carrierKind = intent?.getStringExtra(EXTRA_CARRIER) ?: AppSettings(this).carrierMode
         if (carrierKind == CARRIER_AUTO) carrierKind = detectCarrier()
         startTunnelAsync(carrierKind)
@@ -83,7 +83,7 @@ class BaleVpnService : VpnService() {
                 startTunnel(carrierKind)
             } catch (t: Throwable) {
                 broadcast("error", "startup failed: ${t.message}")
-                updateNotification("Failed")
+                updateNotification("failed", t.message)
                 stopTunnel()
                 stopSelf()
             } finally {
@@ -98,20 +98,20 @@ class BaleVpnService : VpnService() {
         outQueue.clear()
         if (carrierKind != CARRIER_BALE) {
             broadcast("error", "Local NAT is disabled. Baleobala must use a real Bale tunnel.")
-            updateNotification("Not connected")
+            updateNotification("failed", "Local NAT is disabled")
             stopSelf()
             return
         }
         if (AuthStore(this).jwt() == null) {
             broadcast("error", "Sign in to Bale before connecting the system VPN.")
-            updateNotification("Sign in required")
+            updateNotification("failed", "Sign in required")
             stopSelf()
             return
         }
         exitPeerId = AppSettings(this).exitPeerId
         if (exitPeerId <= 0L) {
             broadcast("error", "Set a Bale relay peer ID before connecting.")
-            updateNotification("Relay required")
+            updateNotification("failed", "Relay peer required")
             stopSelf()
             return
         }
@@ -126,7 +126,7 @@ class BaleVpnService : VpnService() {
         val fd = builder.establish()
         if (fd == null) {
             broadcast("error", "VpnService.establish() returned null")
-            updateNotification("Failed"); stopSelf(); return
+            updateNotification("failed", "VpnService.establish() returned null"); stopSelf(); return
         }
         tunFd = fd
         running = true
@@ -150,7 +150,7 @@ class BaleVpnService : VpnService() {
         Thread({ selfTestProtectedDns() }, "self-test").apply { isDaemon = true; start() }
 
         startedAt.set(System.currentTimeMillis())
-        updateNotification("Connected")
+        updateNotification("connected", connectedDetail())
         broadcastSnapshot("connected")
         broadcast("log", "tun up: 10.77.0.2/24 mtu 1400")
     }
@@ -289,10 +289,15 @@ class BaleVpnService : VpnService() {
     private fun isIpv4Literal(value: String): Boolean = Companion.isIpv4Literal(value)
 
     private fun statsLoop() {
+        var tick = 0
         while (running) {
             try {
                 Thread.sleep(2000)
-                if (running) broadcastSnapshot("connected")
+                if (!running) break
+                broadcastSnapshot("connected")
+                // Refresh notification every ~6s to keep traffic counters fresh
+                // without spamming the notification manager.
+                if (tick++ % 3 == 0) updateNotification("connected", connectedDetail())
             } catch (_: InterruptedException) {
                 break
             } catch (t: Throwable) {
@@ -395,28 +400,79 @@ class BaleVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= 26) {
             val nm = getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
-                nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Baleobala VPN", NotificationManager.IMPORTANCE_LOW))
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, getString(R.string.vpn_channel_name), NotificationManager.IMPORTANCE_LOW)
+                )
             }
         }
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildNotification(state: String, detail: String? = null): Notification {
         ensureChannel()
         val openIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("Baleobala VPN")
+        val disconnectIntent = PendingIntent.getService(
+            this, 1,
+            Intent(this, BaleVpnService::class.java).apply { action = ACTION_DISCONNECT },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val title = when (state) {
+            "connected" -> getString(R.string.status_connected)
+            "connecting" -> getString(R.string.status_connecting)
+            "failed" -> getString(R.string.state_failed)
+            else -> getString(R.string.status_disconnected)
+        }
+        val text = detail ?: when (state) {
+            "connected" -> getString(R.string.notif_text_idle)
+            "connecting" -> getString(R.string.notif_text_connecting)
+            "failed" -> getString(R.string.notif_text_failed)
+            else -> getString(R.string.notif_text_idle)
+        }
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_shield)
+            .setContentTitle(title)
             .setContentText(text)
-            .setOngoing(true)
+            .setOngoing(state == "connected" || state == "connecting")
+            .setOnlyAlertOnce(true)
             .setContentIntent(openIntent)
-            .build()
+        if (state == "connected" || state == "connecting") {
+            builder.addAction(0, getString(R.string.notif_action_disconnect), disconnectIntent)
+        }
+        return builder.build()
     }
 
-    private fun updateNotification(text: String) {
-        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))
+    private fun updateNotification(state: String, detail: String? = null) {
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(state, detail))
+    }
+
+    private fun connectedDetail(): String {
+        val uptimeSec = if (startedAt.get() > 0) (System.currentTimeMillis() - startedAt.get()) / 1000 else 0L
+        return getString(
+            R.string.notif_text_connected_fmt,
+            exitPeerId,
+            formatDuration(uptimeSec),
+            humanBytes(bytesIn.get()),
+            humanBytes(bytesOut.get()),
+        )
+    }
+
+    private fun humanBytes(n: Long): String {
+        if (n < 1024) return "${n}B"
+        val units = listOf("KB", "MB", "GB", "TB")
+        var v = n.toDouble() / 1024.0
+        var idx = 0
+        while (v >= 1024.0 && idx < units.size - 1) { v /= 1024.0; idx++ }
+        return String.format("%.1f%s", v, units[idx])
+    }
+
+    private fun formatDuration(seconds: Long): String {
+        val s = seconds % 60
+        val m = (seconds / 60) % 60
+        val h = seconds / 3600
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s)
+        else String.format("%02d:%02d", m, s)
     }
 
     companion object {

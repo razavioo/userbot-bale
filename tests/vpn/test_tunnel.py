@@ -78,6 +78,43 @@ def test_arq_recovers_from_loss():
         b_tx.close()
 
 
+def test_orphan_split_packet_is_gc_after_ttl():
+    """SPLIT fragment without LAST must not leak reassembly state forever."""
+    from baleobala.vpn.framing_vpn import VpnFlag, VpnFrame
+
+    a_tx, b_tx = InMemoryTransport.pair(mtu=200)
+    b = Tunnel(
+        b_tx,
+        sess_id=1,
+        ack_timeout=0.05,
+        max_retries=1,
+        reassembly_timeout=0.1,
+    )
+    events: list[tuple[str, dict]] = []
+    b.add_event_handler(lambda e, p: events.append((e, p)))
+    try:
+        b.start(on_packet=lambda _: None)
+        # Inject a SPLIT-only frame directly via the paired transport.
+        orphan = VpnFrame(
+            sess_id=1, seq=42, flags=VpnFlag.SPLIT, payload=b"orphan"
+        )
+        a_tx.send_bytes(orphan.encode())
+        # Wait long enough for the retry loop to GC.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if any(e == "reassembly_dropped" for e, _ in events):
+                break
+            time.sleep(0.05)
+        assert any(
+            e == "reassembly_dropped" and p.get("reason") == "ttl"
+            for e, p in events
+        ), f"expected ttl drop event; got {events}"
+    finally:
+        b.stop()
+        a_tx.close()
+        b_tx.close()
+
+
 def test_session_id_mismatch_is_dropped():
     a_tx, b_tx = InMemoryTransport.pair(mtu=200)
     a = Tunnel(a_tx, sess_id=1, ack_timeout=0.05)

@@ -58,7 +58,18 @@ class RpcTransport:
         self._peer_id = peer_id
         self._rx: "queue.Queue[bytes]" = queue.Queue()
         self._closed = False
+        self._decode_failures = 0  # non-utf8 bodies
+        self._b64_failures = 0  # malformed VPN-prefixed messages
+        self._unexpected_prefix = 0  # likely real chat from peer
         self._wire_receive()
+
+    @property
+    def stats(self) -> dict[str, int]:
+        return {
+            "decode_failures": self._decode_failures,
+            "b64_failures": self._b64_failures,
+            "unexpected_prefix": self._unexpected_prefix,
+        }
 
     # ---- public API ------------------------------------------------------
 
@@ -107,11 +118,29 @@ class RpcTransport:
         try:
             text = body.decode("utf-8")
         except UnicodeDecodeError:
+            self._decode_failures += 1
+            log.debug(
+                "rpc transport: dropping non-UTF8 body (%d bytes) from peer=%d",
+                len(body), self._peer_id,
+            )
             return
         if not text.startswith(MSG_PREFIX):
+            self._unexpected_prefix += 1
+            # Real chat messages from a peer who's also our VPN partner
+            # land here; only log at debug to avoid drowning operator
+            # logs in user content.
+            log.debug(
+                "rpc transport: ignoring non-VPN message from peer=%d (%d chars)",
+                self._peer_id, len(text),
+            )
             return
         try:
             frame = base64.b64decode(text[len(MSG_PREFIX) :], validate=True)
-        except (ValueError, base64.binascii.Error):
+        except (ValueError, base64.binascii.Error) as exc:
+            self._b64_failures += 1
+            log.warning(
+                "rpc transport: malformed VPN frame from peer=%d: %s",
+                self._peer_id, exc,
+            )
             return
         self._rx.put(frame)

@@ -46,6 +46,41 @@ def inspect(jwt: str) -> JwtInfo:
     return JwtInfo(exp=exp, iat=iat, seconds_until_expiry=ttl)
 
 
+class JwtExpiredError(RuntimeError):
+    """Raised when a Bale JWT has already expired (or is about to)."""
+
+    def __init__(self, message: str, *, exp: Optional[int]) -> None:
+        super().__init__(message)
+        self.exp = exp
+
+
+def is_expired(jwt: str, *, skew_seconds: float = 0.0) -> bool:
+    """Return True if the JWT's `exp` claim is in the past (with optional
+    safety skew). Tokens without a parseable `exp` are treated as
+    non-expired — Bale will still reject them at WS upgrade time, and we
+    don't want to block users on tokens we can't decode."""
+    info = inspect(jwt)
+    if info.seconds_until_expiry is None:
+        return False
+    return info.seconds_until_expiry <= skew_seconds
+
+
+def require_unexpired(jwt: str, *, skew_seconds: float = 60.0) -> None:
+    """Raise JwtExpiredError if the JWT is already expired or expires
+    within `skew_seconds`. Default skew is 60s so we don't race the
+    server's clock on a token that will die mid-handshake."""
+    info = inspect(jwt)
+    if info.seconds_until_expiry is None:
+        return
+    if info.seconds_until_expiry <= skew_seconds:
+        raise JwtExpiredError(
+            f"Bale JWT expired or expires within {skew_seconds:.0f}s "
+            f"(exp={info.exp}, ttl={info.seconds_until_expiry:.0f}s). "
+            "Re-authenticate via the login flow.",
+            exp=info.exp,
+        )
+
+
 def warn_if_near_expiry(jwt: str, *, days: float = 14.0) -> None:
     info = inspect(jwt)
     if info.seconds_until_expiry is None:

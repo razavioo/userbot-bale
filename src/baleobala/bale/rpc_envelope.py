@@ -22,8 +22,13 @@ web.bale.ai client on 2026-04-19. See docs/CAPTURE.md.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from dataclasses import dataclass, field
 from typing import Dict
+
+log = logging.getLogger(__name__)
 
 
 def _enc_varint(n: int) -> bytes:
@@ -80,6 +85,36 @@ DEFAULT_METADATA: Dict[str, str] = {
 }
 
 
+def _resolve_metadata() -> Dict[str, str]:
+    """Allow operators to override the per-RPC client fingerprint via
+    BALE_RPC_METADATA_OVERRIDE (a JSON object). Useful for matching the
+    current web client's exact strings when DEFAULT_METADATA goes stale,
+    without code changes. Invalid JSON falls back to DEFAULT_METADATA
+    with a warning."""
+    raw = os.environ.get("BALE_RPC_METADATA_OVERRIDE")
+    if not raw:
+        return dict(DEFAULT_METADATA)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning(
+            "BALE_RPC_METADATA_OVERRIDE is not valid JSON (%s); using defaults",
+            exc,
+        )
+        return dict(DEFAULT_METADATA)
+    if not isinstance(parsed, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()
+    ):
+        log.warning(
+            "BALE_RPC_METADATA_OVERRIDE must be a flat {string: string} map; "
+            "using defaults",
+        )
+        return dict(DEFAULT_METADATA)
+    merged = dict(DEFAULT_METADATA)
+    merged.update(parsed)
+    return merged
+
+
 def _enc_metadata(md: Dict[str, str]) -> bytes:
     """Metadata map serialization.
 
@@ -106,7 +141,7 @@ class Request:
     service: str
     method: str
     payload: bytes = b""
-    metadata: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_METADATA))
+    metadata: Dict[str, str] = field(default_factory=_resolve_metadata)
     seq: int | None = None
 
     def encode(self) -> bytes:
