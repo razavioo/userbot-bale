@@ -372,6 +372,21 @@ def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch, tmp_
         transport.close()
 
 
+def test_bonded_proxy_transport_reports_missing_jwt_file(tmp_path) -> None:
+    import baleobala.cli as cli
+
+    missing = tmp_path / "missing.jwt"
+    args = argparse.Namespace(
+        bale_jwt=None,
+        bale_jwt_file=str(missing),
+        peer_id=123,
+        answer=False,
+    )
+
+    with pytest.raises(RuntimeError, match=f"Bale JWT file not found: {missing}"):
+        cli._open_bonded_proxy_transport(args, object(), 4)
+
+
 def test_clean_qt_environment_removes_sdk_overrides() -> None:
     from baleobala.cli import _clean_qt_environment, _qt_environment_is_contaminated
 

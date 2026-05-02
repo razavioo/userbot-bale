@@ -265,10 +265,26 @@ def _read_secret_text(value: str | None, fallback_env: str, fallback_file: str |
     if fallback_file is not None:
         from pathlib import Path
 
-        path = Path(fallback_file)
+        path = Path(fallback_file).expanduser()
         if path.exists():
             return path.read_text(encoding="utf-8").strip()
     return None
+
+
+def _read_required_bale_jwt(args: argparse.Namespace, *, default_file: str = "/tmp/bale_jwt.txt") -> str:
+    jwt = getattr(args, "bale_jwt", None) or os.environ.get("BALE_JWT")
+    if jwt:
+        return jwt.strip()
+
+    jwt_file = getattr(args, "bale_jwt_file", None) or default_file
+    jwt_path = Path(jwt_file).expanduser()
+    if not jwt_path.exists():
+        raise RuntimeError(f"Bale JWT file not found: {jwt_path}")
+
+    jwt = jwt_path.read_text(encoding="utf-8").strip()
+    if not jwt:
+        raise RuntimeError(f"Bale JWT file is empty: {jwt_path}")
+    return jwt
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
@@ -1576,17 +1592,13 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
             identity=args.identity,
         )
 
-    jwt = _first_arg_value(args.bale_jwt) or os.environ.get("BALE_JWT")
-    jwt_file = _first_arg_value(args.bale_jwt_file) or "/tmp/bale_jwt.txt"
-    if not jwt:
-        from pathlib import Path
-        jwt_path = Path(jwt_file).expanduser()
-        if jwt_path.exists():
-            jwt = jwt_path.read_text().strip()
-    if not jwt:
+    try:
+        jwt = _read_required_bale_jwt(args)
+    except RuntimeError as exc:
         raise SystemExit(
-            "Need either --livekit-url/--livekit-token OR --bale-jwt (or BALE_JWT env var / /tmp/bale_jwt.txt)."
-        )
+            "Need either --livekit-url/--livekit-token OR a readable Bale JWT "
+            f"(--bale-jwt, BALE_JWT, or --bale-jwt-file): {exc}"
+        ) from exc
 
     from baleobala.bale.api import BaleApiClient
     from baleobala.bale.ws_client import WsTlsConfig
@@ -1927,13 +1939,7 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     from baleobala.vpn.keepalive import LiveKitKeepalive
     from baleobala.vpn.transports.bonded import BondedTransport
 
-    jwt = getattr(args, "bale_jwt", None) or os.environ.get("BALE_JWT")
-    jwt_file = getattr(args, "bale_jwt_file", None) or "/tmp/bale_jwt.txt"
-    if not jwt:
-        from pathlib import Path
-        jwt_path = Path(jwt_file).expanduser()
-        if jwt_path.exists():
-            jwt = jwt_path.read_text().strip()
+    jwt = _read_required_bale_jwt(args)
 
     is_answer = getattr(args, "answer", False)
     peer_id = getattr(args, "peer_id", None)
