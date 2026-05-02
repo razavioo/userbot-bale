@@ -101,6 +101,85 @@ def test_build_parser_exposes_bale_tunnel() -> None:
     assert "browser" in proxy_subcommands
     assert "system" in proxy_subcommands
     assert "doctor" in subcommands
+    assert parser.parse_args(["bale-proxy", "client"]).direct_first is True
+    assert parser.parse_args(["bale-proxy", "browser"]).direct_first is True
+    assert parser.parse_args(["bale-proxy", "system"]).direct_first is True
+    assert parser.parse_args(["bale-proxy", "system", "--no-direct-first"]).direct_first is False
+    parsed = parser.parse_args(
+        [
+            "bale-proxy",
+            "system",
+            "--direct-first",
+            "--direct-only-domain",
+            "digikala.com",
+            "--tunnel-only-domain",
+            "example.org",
+        ]
+    )
+    assert parsed.direct_only_domain == ["digikala.com"]
+    assert parsed.tunnel_only_domain == ["example.org"]
+
+
+def test_vpn_proxy_profile_enables_policy_backed_direct_first(monkeypatch) -> None:
+    from baleobala.cli import _vpn_namespace_from_profile
+    from baleobala.control.vpn import VpnProfile
+
+    monkeypatch.delenv("BALEOBALA_PROXY_DIRECT_FIRST", raising=False)
+    monkeypatch.delenv("BALEOBALA_PROXY_POLICY_REFRESH", raising=False)
+    proxy_args = _vpn_namespace_from_profile(
+        VpnProfile(profile_id="p1", name="proxy", backend="proxy"),
+        auth_record=None,
+    )
+    assert proxy_args.direct_first is True
+    assert proxy_args.proxy_policy_refresh is False
+    assert proxy_args.direct_only_domain == []
+    assert proxy_args.tunnel_only_domain == []
+
+    monkeypatch.setenv("BALEOBALA_PROXY_POLICY_REFRESH", "1")
+    env_args = _vpn_namespace_from_profile(
+        VpnProfile(profile_id="p2", name="proxy", backend="proxy"),
+        auth_record=None,
+    )
+
+    assert env_args.direct_first is True
+    assert env_args.proxy_policy_refresh is True
+
+
+def test_proxy_runtime_uses_direct_first_by_default(monkeypatch) -> None:
+    import baleobala.cli as cli
+
+    class FakeTransport:
+        mtu = 1400
+        closed = False
+
+        def send(self, data):  # noqa: ANN001
+            pass
+
+        def recv(self, timeout=None):  # noqa: ANN001
+            return None
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "_open_proxy_transport", lambda args, role: ("dc", FakeTransport()))
+    monkeypatch.setattr(cli, "_resolve_proxy_secret", lambda args: None)
+    monkeypatch.setattr("baleobala.runtime.proxy_policy.load_proxy_domain_policy", lambda **kwargs: type("P", (), {"direct_only_domains": ("ir",), "tunnel_only_domains": ("youtube.com",)})())
+
+    args = argparse.Namespace(
+        listen_host="127.0.0.1",
+        listen_port=0,
+        direct_first=True,
+        direct_only_domain=[],
+        tunnel_only_domain=[],
+        proxy_policy_refresh=False,
+    )
+    _name, _transport, server = cli._start_proxy_client_runtime(args)
+
+    from baleobala.runtime.proxy import DirectFirstSocks5ProxyServer
+
+    assert isinstance(server, DirectFirstSocks5ProxyServer)
+    assert server._matches_direct_only("example.ir") is True  # noqa: SLF001
+    assert server._matches_tunnel_only("www.youtube.com") is True  # noqa: SLF001
 
 
 def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:

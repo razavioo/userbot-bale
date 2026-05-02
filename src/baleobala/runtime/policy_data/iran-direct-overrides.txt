@@ -1,0 +1,4 @@
+# Baleobala-maintained direct-only overrides for Iranian services not covered
+# by the bundled upstream snapshot.
+digikala.com
+www.digikala.com

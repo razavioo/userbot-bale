@@ -678,6 +678,165 @@ class Socks5ProxyServer:
         return False, "closed"
 
 
+class DirectFirstSocks5ProxyServer(Socks5ProxyServer):
+    """SOCKS5/HTTP CONNECT proxy that tries direct TCP before tunnel fallback."""
+
+    def __init__(
+        self,
+        transport: TunnelTransport,
+        *,
+        direct_connect_timeout: float = 3.0,
+        direct_only_domains: tuple[str, ...] | list[str] = (),
+        tunnel_only_domains: tuple[str, ...] | list[str] = (),
+        **kwargs,
+    ) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(transport, **kwargs)
+        self._direct_connect_timeout = direct_connect_timeout
+        self._direct_only_domains = _normalize_domain_rules(direct_only_domains)
+        self._tunnel_only_domains = _normalize_domain_rules(tunnel_only_domains)
+
+    def _handle_socks5(self, client: socket.socket) -> None:
+        nmethods = _recv_exact(client, 1)[0]
+        methods = _recv_exact(client, nmethods)
+        if 0x00 not in methods:
+            client.sendall(b"\x05\xff")
+            return
+        client.sendall(b"\x05\x00")
+
+        try:
+            target_host, target_port = _parse_socks5_target(client)
+        except (ValueError, EOFError, OSError):
+            _socks5_reply(client, 0x01)
+            return
+
+        direct_only = self._matches_direct_only(target_host)
+        tunnel_only = False if direct_only else self._matches_tunnel_only(target_host)
+        direct = None if tunnel_only else self._connect_direct(target_host, target_port)
+        if direct is not None:
+            log.info("proxy_direct_open_ok target=%s:%s", target_host, target_port)
+            _socks5_reply(client, 0x00)
+            with direct:
+                DirectSocks5Server._splice(client, direct)
+            return
+
+        if direct_only:
+            log.info("proxy_direct_open_failed_no_fallback target=%s:%s", target_host, target_port)
+            _socks5_reply(client, 0x05)
+            return
+
+        log.info("proxy_direct_open_failed_falling_back target=%s:%s", target_host, target_port)
+        conn_id = self._open_proxy_stream(client, target_host, target_port)
+        if conn_id is None:
+            _socks5_reply(client, 0x01)
+            return
+        _socks5_reply(client, 0x00)
+        self._pump_tunnel_stream(client, conn_id)
+
+    def _handle_http_connect(self, client: socket.socket, first_byte: bytes) -> None:
+        try:
+            target_host, target_port = _read_http_connect_target(client, first_byte)
+        except (ValueError, EOFError, OSError):
+            _http_connect_reply(client, 400, "Bad Request")
+            return
+
+        direct_only = self._matches_direct_only(target_host)
+        tunnel_only = False if direct_only else self._matches_tunnel_only(target_host)
+        direct = None if tunnel_only else self._connect_direct(target_host, target_port)
+        if direct is not None:
+            log.info("proxy_direct_open_ok target=%s:%s", target_host, target_port)
+            _http_connect_reply(client, 200, "Connection Established")
+            with direct:
+                DirectSocks5Server._splice(client, direct)
+            return
+
+        if direct_only:
+            log.info("proxy_direct_open_failed_no_fallback target=%s:%s", target_host, target_port)
+            _http_connect_reply(client, 502, "Bad Gateway")
+            return
+
+        log.info("proxy_direct_open_failed_falling_back target=%s:%s", target_host, target_port)
+        conn_id = self._open_proxy_stream(client, target_host, target_port)
+        if conn_id is None:
+            _http_connect_reply(client, 502, "Bad Gateway")
+            return
+        _http_connect_reply(client, 200, "Connection Established")
+        self._pump_tunnel_stream(client, conn_id)
+
+    def _connect_direct(self, host: str, port: int) -> socket.socket | None:
+        try:
+            return socket.create_connection((host, port), timeout=self._direct_connect_timeout)
+        except OSError:
+            return None
+
+    def _matches_direct_only(self, host: str) -> bool:
+        return _host_matches_domain_rules(host, self._direct_only_domains)
+
+    def _matches_tunnel_only(self, host: str) -> bool:
+        return _host_matches_domain_rules(host, self._tunnel_only_domains)
+
+    def _pump_tunnel_stream(self, client: socket.socket, conn_id: int) -> None:
+        stop = threading.Event()
+
+        def pump_client_to_transport() -> None:
+            try:
+                while not stop.is_set():
+                    data = client.recv(self._max_chunk_size)
+                    if not data:
+                        break
+                    for chunk in _chunk_bytes(data, self._max_chunk_size):
+                        self._hub.send(
+                            ProxyPacket(
+                                packet_type=ProxyPacketType.DATA,
+                                conn_id=conn_id,
+                                payload=chunk,
+                            )
+                        )
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                pass
+            finally:
+                stop.set()
+                try:
+                    self._hub.send(ProxyPacket(packet_type=ProxyPacketType.CLOSE, conn_id=conn_id))
+                except RuntimeError:
+                    pass
+
+        worker = threading.Thread(target=pump_client_to_transport, daemon=True)
+        worker.start()
+        try:
+            while not stop.is_set():
+                packet = self._hub.recv(conn_id, timeout=0.25)
+                if packet is None:
+                    if self._transport_closed():
+                        break
+                    continue
+                if packet.packet_type == ProxyPacketType.DATA and packet.payload:
+                    client.sendall(packet.payload)
+                elif packet.packet_type in (ProxyPacketType.CLOSE, ProxyPacketType.ERROR):
+                    break
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            stop.set()
+            worker.join(timeout=1.0)
+            self._hub.unregister(conn_id)
+
+
+def _normalize_domain_rules(domains: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    rules: list[str] = []
+    for item in domains:
+        rule = str(item).strip().lower().lstrip(".")
+        if rule:
+            rules.append(rule)
+    return tuple(rules)
+
+
+def _host_matches_domain_rules(host: str, domains: tuple[str, ...]) -> bool:
+    if not domains:
+        return False
+    normalized = host.strip().lower().rstrip(".")
+    return any(normalized == domain or normalized.endswith(f".{domain}") for domain in domains)
+
+
 class DirectSocks5Server:
     """SOCKS5 + HTTP CONNECT proxy that opens real outbound sockets.
 
