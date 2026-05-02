@@ -1580,7 +1580,7 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
     jwt_file = _first_arg_value(args.bale_jwt_file) or "/tmp/bale_jwt.txt"
     if not jwt:
         from pathlib import Path
-        jwt_path = Path(jwt_file)
+        jwt_path = Path(jwt_file).expanduser()
         if jwt_path.exists():
             jwt = jwt_path.read_text().strip()
     if not jwt:
@@ -1931,7 +1931,7 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     jwt_file = getattr(args, "bale_jwt_file", None) or "/tmp/bale_jwt.txt"
     if not jwt:
         from pathlib import Path
-        jwt_path = Path(jwt_file)
+        jwt_path = Path(jwt_file).expanduser()
         if jwt_path.exists():
             jwt = jwt_path.read_text().strip()
 

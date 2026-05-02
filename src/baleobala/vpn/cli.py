@@ -437,7 +437,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
     jwt = _first_bale_jwt_arg(args)
     if not jwt and _first_bale_jwt_file_arg(args):
         try:
-            jwt = Path(_first_bale_jwt_file_arg(args)).read_text().strip()
+            jwt = Path(_first_bale_jwt_file_arg(args)).expanduser().read_text().strip()
         except OSError:
             jwt = None
     if jwt:
@@ -715,7 +715,7 @@ def _build_transport_chain(name: str, session, args):  # type: ignore[no-untyped
         jwt = _first_bale_jwt_arg(args)
         jwt_file = _first_bale_jwt_file_arg(args)
         if not jwt and jwt_file:
-            jwt = Path(jwt_file).read_text().strip()
+            jwt = Path(jwt_file).expanduser().read_text().strip()
         if not jwt:
             raise RuntimeError("rpc transport requires --bale-jwt(-file)")
         client = BaleApiClient(jwt=jwt)
@@ -745,7 +745,7 @@ def _build_transport_chain(name: str, session, args):  # type: ignore[no-untyped
         jwt = _first_bale_jwt_arg(args)
         jwt_file = _first_bale_jwt_file_arg(args)
         if not jwt and jwt_file:
-            jwt = Path(jwt_file).read_text().strip()
+            jwt = Path(jwt_file).expanduser().read_text().strip()
         client = MtprotoMessagingBackend(jwt=jwt)
         client.start()
         t = RpcTransport(client, peer_id=args.peer_id)
