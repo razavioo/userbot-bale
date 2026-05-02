@@ -1,11 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.BaleobalaVpn" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">#1249FF</item>
-        <item name="colorPrimaryContainer">#DDE5FF</item>
+    <style name="Theme.BaleobalaVpn" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorOnPrimary">@color/brand_on_primary</item>
+        <item name="colorPrimaryContainer">@color/brand_primary_dark</item>
+        <item name="colorOnPrimaryContainer">@color/text_primary_on_dark</item>
         <item name="colorSecondary">#0F766E</item>
         <item name="colorTertiary">#F59E0B</item>
-        <item name="android:statusBarColor">#0B1020</item>
-        <item name="android:navigationBarColor">#0B1020</item>
+
+        <item name="android:colorBackground">@color/surface_dark</item>
+        <item name="colorSurface">@color/surface_dark_elevated</item>
+        <item name="colorOnSurface">@color/text_primary_on_dark</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary_on_dark</item>
+        <item name="colorOutlineVariant">#26FFFFFF</item>
+
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/surface_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+    <style name="Theme.BaleobalaVpn.Toolbar" parent="Widget.Material3.Toolbar">
+        <item name="titleTextColor">@color/text_primary_on_dark</item>
+        <item name="navigationIconTint">@color/text_primary_on_dark</item>
+        <item name="android:background">@android:color/transparent</item>
     </style>
 </resources>

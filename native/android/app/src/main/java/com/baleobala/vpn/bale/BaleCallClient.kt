@@ -3,6 +3,7 @@ package com.baleobala.vpn.bale
 class BaleCallClient(
     private val jwt: String,
     private val onLog: (String) -> Unit = {},
+    private val onWsCreated: (BaleWsClient) -> Unit = {},
 ) {
     fun startCall(peerId: Long, timeoutMs: Long = 120_000): BaleProtos.CallCredentials {
         var pushed: BaleProtos.CallCredentials? = null
@@ -18,6 +19,7 @@ class BaleCallClient(
                 }
             },
         )
+        onWsCreated(ws)
         ws.start()
         try {
             val req = BaleProtos.encodeStartLiveKitCall(peerId = peerId)
@@ -37,12 +39,17 @@ class BaleCallClient(
             val deadline = System.currentTimeMillis() + timeoutMs
             synchronized(lock) {
                 while (pushed == null) {
+                    if (Thread.currentThread().isInterrupted) {
+                        throw InterruptedException("StartCall wait interrupted")
+                    }
                     val remaining = deadline - System.currentTimeMillis()
                     if (remaining <= 0) break
                     lock.wait(minOf(remaining, 250))
                 }
             }
-            return pushed ?: throw RuntimeException("StartCall ACKed but no LiveKit credentials arrived")
+            return pushed ?: throw RuntimeException(
+                "StartCall ACKed but no LiveKit credentials arrived (peer offline or busy?)"
+            )
         } finally {
             ws.close()
         }

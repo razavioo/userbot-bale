@@ -51,6 +51,16 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { refreshSettingsUi() }
 
+    private val loginLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        refreshAuthUi()
+        if (it.resultCode == RESULT_OK && canStart()) {
+            // User just signed in; offer to start the VPN with one tap.
+            onTogglePressed()
+        }
+    }
+
     private val notifPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -88,6 +98,13 @@ class MainActivity : AppCompatActivity() {
 
         maybeRequestNotificationPermission()
         refreshSettingsUi()
+        // Recover state from the running Service (survives Activity recreation
+        // on rotation, returning from background, or process restart while the
+        // foreground VPN service is still alive).
+        BaleVpnService.sharedSnapshotJson?.let {
+            lastSnapshot = runCatching { JSONObject(it) }.getOrNull()
+        }
+        applyStatus(BaleVpnService.sharedStatus)
         renderState()
 
         binding.settingsButton.setOnClickListener {
@@ -144,8 +161,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun onTogglePressed() {
         when (uiState) {
-            UiState.Connecting, UiState.Stopping -> return // locked
-            UiState.Connected -> requestDisconnect()
+            UiState.Stopping -> return
+            UiState.Connecting, UiState.Connected -> requestDisconnect()
             UiState.Disconnected, UiState.Failed -> requestConnect()
         }
     }
@@ -155,7 +172,7 @@ class MainActivity : AppCompatActivity() {
             showSnackbar(
                 getString(R.string.snackbar_sign_in_required),
                 actionLabel = getString(R.string.action_sign_in),
-            ) { startActivity(Intent(this, LoginActivity::class.java)) }
+            ) { loginLauncher.launch(Intent(this, LoginActivity::class.java)) }
             return
         }
         if (settings.exitPeerId <= 0L) {
@@ -204,18 +221,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderState() {
-        val (statusRes, bgColorRes, busy, cdRes) = when (uiState) {
-            UiState.Disconnected -> Quad(R.string.status_disconnected, R.color.state_idle, false, R.string.cd_toggle_idle)
-            UiState.Connecting -> Quad(R.string.status_connecting, R.color.state_connecting, true, R.string.cd_toggle_busy)
-            UiState.Connected -> Quad(R.string.status_connected, R.color.state_connected, false, R.string.cd_toggle_connected)
-            UiState.Stopping -> Quad(R.string.state_disconnecting, R.color.state_idle, true, R.string.cd_toggle_busy)
-            UiState.Failed -> Quad(R.string.state_failed, R.color.state_error, false, R.string.cd_toggle_idle)
+        data class Render(val statusRes: Int, val bgColorRes: Int, val showProgress: Boolean, val clickable: Boolean, val cdRes: Int)
+        val r = when (uiState) {
+            UiState.Disconnected -> Render(R.string.status_disconnected, R.color.state_idle, false, true, R.string.cd_toggle_idle)
+            UiState.Connecting -> Render(R.string.status_connecting, R.color.state_connecting, true, true, R.string.cd_toggle_connecting)
+            UiState.Connected -> Render(R.string.status_connected, R.color.state_connected, false, true, R.string.cd_toggle_connected)
+            UiState.Stopping -> Render(R.string.state_disconnecting, R.color.state_idle, true, false, R.string.cd_toggle_busy)
+            UiState.Failed -> Render(R.string.state_failed, R.color.state_error, false, true, R.string.cd_toggle_idle)
         }
-        binding.statusText.setText(statusRes)
-        binding.toggleCard.setCardBackgroundColor(ContextCompat.getColor(this, bgColorRes))
-        binding.toggleCard.contentDescription = getString(cdRes)
-        binding.connectingProgress.visibility = if (busy) View.VISIBLE else View.GONE
-        binding.toggleCard.isClickable = !busy
+        binding.statusText.setText(r.statusRes)
+        binding.toggleCard.setCardBackgroundColor(ContextCompat.getColor(this, r.bgColorRes))
+        binding.toggleCard.contentDescription = getString(r.cdRes)
+        binding.connectingProgress.visibility = if (r.showProgress) View.VISIBLE else View.GONE
+        binding.toggleCard.isClickable = r.clickable
         renderDetail()
         refreshAuthUi()
     }
@@ -277,7 +295,7 @@ class MainActivity : AppCompatActivity() {
             "no bale jwt" in lower || "sign in" in lower || "401" in lower -> {
                 store.clear()
                 Triple(getString(R.string.snackbar_auth_expired), getString(R.string.action_sign_in)) {
-                    startActivity(Intent(this, LoginActivity::class.java))
+                    loginLauncher.launch(Intent(this, LoginActivity::class.java))
                 }
             }
             "relay" in lower && "peer" in lower -> Triple(
@@ -359,6 +377,4 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val EXTRA_DEBUG_AUTOSTART = "debug_autostart"
     }
-
-    private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 }

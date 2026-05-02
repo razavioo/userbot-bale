@@ -59,6 +59,35 @@ class BaleWsClient(
             throw RuntimeException("Bale WS did not connect within ${timeoutMs}ms")
         }
         connectError?.let { throw RuntimeException("Bale WS failed to connect: ${it.message}", it) }
+        // Subscribe to update stream — without this Bale never pushes
+        // call credentials / message updates to this WS session (they go
+        // to the phone session instead). Mirrors the Python client's
+        // _subscribe_updates / web.bale.ai post-handshake GetDiff.
+        try {
+            sendOneway(
+                "bale.ghasedak.v1.GhasedakService",
+                "GetDiff",
+                GET_DIFF_PAYLOAD,
+            )
+            onLog("bale ws subscribed to updates via GetDiff")
+        } catch (t: Throwable) {
+            onLog("bale ws GetDiff send failed: ${t.message}")
+        }
+    }
+
+    /**
+     * Send an RPC frame without waiting for the response. Used for
+     * subscription RPCs (GetDiff) where we only care about the push
+     * stream that follows.
+     */
+    fun sendOneway(service: String, method: String, payload: ByteArray) {
+        val webSocket = ws ?: throw IllegalStateException("Bale WS not connected")
+        val id = seq.getAndIncrement()
+        val frame = RpcEnvelope.encodeRequest(service, method, payload, id)
+        if (!webSocket.send(frame.toByteString())) {
+            throw RuntimeException("Bale WS send returned false")
+        }
+        onLog("bale rpc oneway $service/$method seq=$id frame=${frame.size}B")
     }
 
     fun rpc(service: String, method: String, payload: ByteArray, timeoutMs: Long = 10_000): RpcEnvelope.Response {
@@ -105,5 +134,11 @@ class BaleWsClient(
 
     companion object {
         const val DEFAULT_URL = "wss://next-ws.bale.ai/ws/"
+
+        // Minimal GetDiff body (`optimizations` packed-repeated [8, 10, 12])
+        // captured from the live web client. Empty bodies are dropped by
+        // some Bale accounts, so this matches the web fingerprint.
+        // Source: src/baleobala/bale/api.py::_GET_DIFF_PAYLOAD
+        private val GET_DIFF_PAYLOAD = byteArrayOf(0x12, 0x03, 0x08, 0x0a, 0x0c)
     }
 }

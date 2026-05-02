@@ -45,8 +45,11 @@ class BaleVpnService : VpnService() {
     private var readerThread: Thread? = null
     private var writerThread: Thread? = null
     private var statsThread: Thread? = null
+    private var startupHeartbeatThread: Thread? = null
     private var carrier: Carrier? = null
     private var exitPeerId: Long = 0L
+    @Volatile private var inflightWs: com.baleobala.vpn.bale.BaleWsClient? = null
+    @Volatile private var inflightTransport: LiveKitDataChannelTransport? = null
     private val outQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(1024)
 
     private val pktsOut = AtomicLong(0)
@@ -78,9 +81,22 @@ class BaleVpnService : VpnService() {
         if (running || starting) return
         starting = true
         broadcast("status", "connecting")
+        startupHeartbeatThread = Thread({
+            // Re-broadcast "connecting" every second so freshly recreated
+            // Activities (e.g. after a rotation) can pick up the in-progress
+            // state immediately instead of seeing a stale "disconnected".
+            while (starting && !running) {
+                try { Thread.sleep(1000) } catch (_: InterruptedException) { return@Thread }
+                if (starting && !running) broadcast("status", "connecting")
+            }
+        }, "vpn-startup-heartbeat").apply { isDaemon = true; start() }
         startupThread = Thread({
             try {
                 startTunnel(carrierKind)
+            } catch (_: InterruptedException) {
+                broadcast("log", "startup canceled")
+                stopTunnel()
+                stopSelf()
             } catch (t: Throwable) {
                 broadcast("error", "startup failed: ${t.message}")
                 updateNotification("failed", t.message)
@@ -157,17 +173,29 @@ class BaleVpnService : VpnService() {
 
     private fun makeBaleTransport(): Transport {
         val jwt = AuthStore(this).jwt() ?: throw IllegalStateException("no Bale JWT stored")
-        val creds = BaleCallClient(jwt = jwt, onLog = { broadcast("log", it) })
-            .startCall(peerId = exitPeerId)
+        val creds = BaleCallClient(
+            jwt = jwt,
+            onLog = { broadcast("log", it) },
+            onWsCreated = { inflightWs = it },
+        ).startCall(peerId = exitPeerId, timeoutMs = STARTCALL_TIMEOUT_MS)
+        // Bale call done; release the WS reference so a later cancel only
+        // touches the LiveKit transport.
+        inflightWs = null
         broadcast("log", "joining LiveKit room=${creds.room.ifEmpty { "(unknown)" }}")
-        return LiveKitDataChannelTransport(
+        val tx = LiveKitDataChannelTransport(
             appContext = applicationContext,
             url = creds.url,
             token = creds.token,
             topic = "vpn",
             reliable = true,
             onLog = { broadcast("log", it) },
-        ).connect()
+        )
+        inflightTransport = tx
+        try {
+            return tx.connect(timeoutMs = LIVEKIT_TIMEOUT_MS)
+        } finally {
+            inflightTransport = null
+        }
     }
 
     private fun readerLoop(fd: ParcelFileDescriptor) {
@@ -210,8 +238,16 @@ class BaleVpnService : VpnService() {
     private fun stopTunnel() {
         starting = false
         running = false
+        // Force-close any in-flight startup resources so a blocked
+        // BaleCallClient.startCall / LiveKit.connect unblocks immediately
+        // and the user can actually cancel a stuck "Connecting" state.
+        try { inflightWs?.close() } catch (_: Throwable) {}
+        try { inflightTransport?.close() } catch (_: Throwable) {}
+        inflightWs = null
+        inflightTransport = null
         try { carrier?.stop() } catch (_: Throwable) {}
         try { startupThread?.interrupt() } catch (_: Throwable) {}
+        try { startupHeartbeatThread?.interrupt() } catch (_: Throwable) {}
         try { readerThread?.interrupt() } catch (_: Throwable) {}
         try { writerThread?.interrupt() } catch (_: Throwable) {}
         try { statsThread?.interrupt() } catch (_: Throwable) {}
@@ -220,14 +256,17 @@ class BaleVpnService : VpnService() {
         joinQuietly(readerThread)
         joinQuietly(writerThread)
         joinQuietly(statsThread)
+        joinQuietly(startupHeartbeatThread)
         joinQuietly(startupThread)
         outQueue.clear()
         tunFd = null
         startupThread = null
+        startupHeartbeatThread = null
         readerThread = null
         writerThread = null
         statsThread = null
         carrier = null
+        sharedSnapshotJson = null
         broadcastSnapshot("disconnected")
         broadcast("log", "tun down. out=${pktsOut.get()}")
     }
@@ -373,6 +412,7 @@ class BaleVpnService : VpnService() {
 
     private fun broadcast(kind: String, value: String) {
         Log.i(TAG, "[$kind] $value")
+        if (kind == "status") sharedStatus = value
         val i = Intent(ACTION_STATE).putExtra("kind", kind).putExtra("value", value)
         LocalBroadcastManager.getInstance(this).sendBroadcast(i)
     }
@@ -389,9 +429,12 @@ class BaleVpnService : VpnService() {
             put("queue_depth", outQueue.size)
             put("last_error", lastError.get())
         }
+        val json = payload.toString()
+        sharedStatus = status
+        sharedSnapshotJson = json
         val i = Intent(ACTION_STATE)
             .putExtra("kind", "snapshot")
-            .putExtra("value", payload.toString())
+            .putExtra("value", json)
         LocalBroadcastManager.getInstance(this).sendBroadcast(i)
         broadcast("status", status)
     }
@@ -481,11 +524,19 @@ class BaleVpnService : VpnService() {
         private const val NOTIF_ID = 1
         const val ACTION_DISCONNECT = "com.baleobala.vpn.DISCONNECT"
         const val ACTION_STATE = "com.baleobala.vpn.STATE"
+
+        /** Cached state for fresh Activity instances (rotation, return-from-background). */
+        @Volatile var sharedStatus: String = "disconnected"
+        @Volatile var sharedSnapshotJson: String? = null
         const val EXTRA_CARRIER = "carrier"
         const val CARRIER_LOCAL = "local-nat"
         const val CARRIER_BALE = "bale"
         const val CARRIER_AUTO = "auto"
         const val DEFAULT_TUNNEL_SESS_ID = 0x1111
+        // Tighter than the underlying defaults so a stuck startup surfaces
+        // as a clear error instead of an ~2-minute spinner.
+        private const val STARTCALL_TIMEOUT_MS = 30_000L
+        private const val LIVEKIT_TIMEOUT_MS = 20_000L
         internal val FALLBACK_DNS = listOf("185.51.200.2", "1.1.1.1", "8.8.8.8")
 
         internal fun isIpv4Literal(value: String): Boolean {
