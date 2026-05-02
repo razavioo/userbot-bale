@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 
 /**
@@ -46,6 +47,10 @@ class TcpForwarder(
     )
 
     private val flows = ConcurrentHashMap<FlowKey, Flow>()
+    private val pendingConnects = ConcurrentHashMap.newKeySet<FlowKey>()
+    private val connectExecutor = Executors.newCachedThreadPool { r ->
+        Thread(r, "tcp-connect").apply { isDaemon = true }
+    }
     @Volatile private var running = true
 
     fun submit(packet: ByteArray, length: Int) {
@@ -59,10 +64,23 @@ class TcpForwarder(
 
         val existing = flows[key]
         if (isSyn && existing == null) {
-            openFlow(packet, tcp, key)
+            if (pendingConnects.add(key)) {
+                val synCopy = tcp.copy(
+                    srcAddr = tcp.srcAddr.copyOf(),
+                    dstAddr = tcp.dstAddr.copyOf(),
+                )
+                connectExecutor.execute {
+                    try {
+                        openFlow(synCopy, key)
+                    } finally {
+                        pendingConnects.remove(key)
+                    }
+                }
+            }
             return
         }
         if (existing == null) {
+            if (key in pendingConnects) return
             // Stray ACK / FIN with no flow — RST it.
             sendRst(tcp)
             return
@@ -74,8 +92,9 @@ class TcpForwarder(
         // Forward payload to the socket.
         if (tcp.payloadLength > 0) {
             try {
-                existing.socket.getOutputStream().write(packet, tcp.payloadOffset, tcp.payloadLength)
-                existing.socket.getOutputStream().flush()
+                val out = existing.socket.getOutputStream()
+                out.write(packet, tcp.payloadOffset, tcp.payloadLength)
+                out.flush()
                 // ACK the bytes we accepted.
                 emitAck(existing)
             } catch (e: IOException) {
@@ -93,7 +112,8 @@ class TcpForwarder(
         }
     }
 
-    private fun openFlow(packet: ByteArray, syn: Ipv4Tcp.Parsed, key: FlowKey) {
+    private fun openFlow(syn: Ipv4Tcp.Parsed, key: FlowKey) {
+        if (!running) return
         val clientAddr = InetAddress.getByAddress(syn.srcAddr)
         val dstAddr = InetAddress.getByAddress(syn.dstAddr)
         val sock = Socket()
@@ -107,6 +127,9 @@ class TcpForwarder(
                 sock.close()
                 sendRst(syn); return
             }
+            sock.tcpNoDelay = true
+            sock.receiveBufferSize = 256 * 1024
+            sock.sendBufferSize = 256 * 1024
             sock.connect(InetSocketAddress(dstAddr, syn.dstPort), 5000)
         } catch (e: Throwable) {
             Log.w(TAG, "tcp connect failed ${syn.dstAddr.contentToString()}:${syn.dstPort}: ${e.message}")
@@ -145,19 +168,25 @@ class TcpForwarder(
     private fun readerLoop(flow: Flow) {
         val buf = ByteArray(16 * 1024)
         try {
+            flow.socket.tcpNoDelay = true
             val ins = flow.socket.getInputStream()
             while (running && !flow.socket.isClosed) {
                 val n = ins.read(buf)
                 if (n <= 0) break
-                val seg = Ipv4Tcp.build(
-                    srcAddr = flow.dstAddr, srcPort = flow.dstPort,
-                    dstAddr = flow.clientAddr, dstPort = flow.clientPort,
-                    seq = flow.ourSeq, ack = flow.clientNextSeq,
-                    flags = Ipv4Tcp.Flag.ACK or Ipv4Tcp.Flag.PSH,
-                    payload = buf, payloadOffset = 0, payloadLength = n,
-                )
-                outQueue.offer(seg)
-                flow.ourSeq = (flow.ourSeq + n.toLong()) and 0xFFFFFFFFL
+                var off = 0
+                while (off < n) {
+                    val chunk = minOf(MAX_TUN_TCP_PAYLOAD, n - off)
+                    val seg = Ipv4Tcp.build(
+                        srcAddr = flow.dstAddr, srcPort = flow.dstPort,
+                        dstAddr = flow.clientAddr, dstPort = flow.clientPort,
+                        seq = flow.ourSeq, ack = flow.clientNextSeq,
+                        flags = Ipv4Tcp.Flag.ACK or Ipv4Tcp.Flag.PSH,
+                        payload = buf, payloadOffset = off, payloadLength = chunk,
+                    )
+                    outQueue.offer(seg)
+                    flow.ourSeq = (flow.ourSeq + chunk.toLong()) and 0xFFFFFFFFL
+                    off += chunk
+                }
             }
             // Remote closed. Send FIN-ACK to client.
             val fin = Ipv4Tcp.build(
@@ -214,6 +243,8 @@ class TcpForwarder(
 
     fun shutdown() {
         running = false
+        pendingConnects.clear()
+        connectExecutor.shutdownNow()
         for (f in flows.values) {
             try { f.socket.close() } catch (_: Throwable) {}
         }
@@ -223,5 +254,8 @@ class TcpForwarder(
     private fun addrStr(b: ByteArray): String =
         "${b[0].toInt() and 0xff}.${b[1].toInt() and 0xff}.${b[2].toInt() and 0xff}.${b[3].toInt() and 0xff}"
 
-    companion object { private const val TAG = "TcpForwarder" }
+    companion object {
+        private const val TAG = "TcpForwarder"
+        private const val MAX_TUN_TCP_PAYLOAD = 1360
+    }
 }

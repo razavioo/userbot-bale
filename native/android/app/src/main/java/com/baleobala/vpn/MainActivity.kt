@@ -11,6 +11,7 @@ import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.baleobala.vpn.bale.AuthStore
 import com.baleobala.vpn.databinding.ActivityMainBinding
@@ -23,6 +24,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: AuthStore
     private lateinit var settings: AppSettings
     private val logBuffer = ArrayDeque<String>()
+    private var receiverRegistered: Boolean = false
     private var connected: Boolean = false
     private var currentStatusText: String = "Disconnected"
     private var currentCarrierText: String = "Auto"
@@ -91,7 +93,7 @@ class MainActivity : AppCompatActivity() {
         binding.toggleButton.setOnClickListener {
             if (connected) {
                 val i = Intent(this, BaleVpnService::class.java).apply { action = BaleVpnService.ACTION_DISCONNECT }
-                startService(i)
+                ContextCompat.startForegroundService(this, i)
             } else {
                 startVpnOrLogin()
             }
@@ -102,34 +104,63 @@ class MainActivity : AppCompatActivity() {
             refreshAuthUi()
         }
 
-        if (settings.reconnectOnLaunch && store.jwt() != null) {
+        if (settings.reconnectOnLaunch && canStartWithoutLogin()) {
             binding.toggleButton.post { if (!connected) startVpnOrLogin() }
         }
+        handleDebugAutostart(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDebugAutostart(intent)
     }
 
     override fun onResume() {
         super.onResume()
-        LocalBroadcastManager.getInstance(this).registerReceiver(
-            stateReceiver, IntentFilter(BaleVpnService.ACTION_STATE)
-        )
+        if (!receiverRegistered) {
+            LocalBroadcastManager.getInstance(this).registerReceiver(
+                stateReceiver, IntentFilter(BaleVpnService.ACTION_STATE)
+            )
+            receiverRegistered = true
+        }
         refreshAuthUi()
     }
 
     override fun onPause() {
         super.onPause()
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(stateReceiver)
+        if (receiverRegistered) {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(stateReceiver)
+            receiverRegistered = false
+        }
+    }
+
+    override fun onDestroy() {
+        if (receiverRegistered) {
+            try {
+                LocalBroadcastManager.getInstance(this).unregisterReceiver(stateReceiver)
+            } catch (_: Throwable) {}
+            receiverRegistered = false
+        }
+        super.onDestroy()
     }
 
     private fun refreshAuthUi() {
         val phone = store.phoneNumber()
         if (store.jwt() != null) {
-            binding.authStatus.text = if (phone != null)
+            binding.authStatus.text = if (settings.exitPeerId <= 0L) {
+                getString(R.string.relay_not_set)
+            } else if (phone != null)
                 getString(R.string.login_logged_in, phone.toString())
             else
                 "Signed in"
             binding.signOutButton.visibility = View.VISIBLE
         } else {
-            binding.authStatus.text = "Not signed in — Connect will open Bale sign-in"
+            binding.authStatus.text = if (settings.carrierMode == BaleVpnService.CARRIER_BALE) {
+                getString(R.string.login_not_signed_in_bale)
+            } else {
+                getString(R.string.login_not_signed_in_local)
+            }
             binding.signOutButton.visibility = View.GONE
         }
     }
@@ -138,8 +169,7 @@ class MainActivity : AppCompatActivity() {
         settings = AppSettings(this)
         currentCarrierText = when (settings.carrierMode) {
             BaleVpnService.CARRIER_BALE -> getString(R.string.settings_carrier_bale)
-            BaleVpnService.CARRIER_LOCAL -> getString(R.string.settings_carrier_local)
-            else -> getString(R.string.dashboard_carrier_auto)
+            else -> getString(R.string.settings_carrier_bale)
         }
         detailsVisible = settings.showLogs
         binding.quickActionSecondary.text = if (connected) getString(R.string.dashboard_disconnect_hint) else getString(R.string.dashboard_login_hint)
@@ -152,7 +182,7 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, BaleVpnService::class.java).apply {
             putExtra(BaleVpnService.EXTRA_CARRIER, settings.carrierMode)
         }
-        startService(intent)
+        ContextCompat.startForegroundService(this, intent)
     }
 
     private fun startVpnOrLogin() {
@@ -160,15 +190,40 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, LoginActivity::class.java))
             return
         }
+        if (settings.exitPeerId <= 0L) {
+            appendLog("relay peer ID is missing")
+            settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
+            return
+        }
         val prep = VpnService.prepare(this)
         if (prep != null) vpnPermissionLauncher.launch(prep) else startVpnService()
     }
+
+    private fun canStartWithoutLogin(): Boolean {
+        return store.jwt() != null && settings.exitPeerId > 0L
+    }
+
+    private fun handleDebugAutostart(intent: Intent?) {
+        if (!isDebuggable() || intent?.getBooleanExtra(EXTRA_DEBUG_AUTOSTART, false) != true) return
+        val requestedCarrier = intent.getStringExtra(BaleVpnService.EXTRA_CARRIER)
+        if (requestedCarrier == BaleVpnService.CARRIER_BALE) {
+            settings.carrierMode = BaleVpnService.CARRIER_BALE
+            refreshSettingsUi()
+        }
+        binding.toggleButton.post { if (!connected) startVpnOrLogin() }
+    }
+
+    companion object {
+        private const val EXTRA_DEBUG_AUTOSTART = "debug_autostart"
+    }
+
+    private fun isDebuggable(): Boolean =
+        (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     private fun appendLog(line: String) {
         logBuffer.addLast(line)
         while (logBuffer.size > 200) logBuffer.removeFirst()
         updateStatsUi()
-        if (detailsVisible) binding.logScroll.post { binding.logScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
     private fun syncStateUi() {
