@@ -21,13 +21,29 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
+# --answer-timeout 86400: without an explicit value bale-call --answer
+#   exits with status 2 after 300 s of idleness, which sends systemd
+#   into a 5-minute restart loop and creates a tiny race window during
+#   which incoming Bale calls can be dropped on the floor. 24 h is what
+#   you usually want from a long-running exit node.
+# --transport dc: pin the LiveKit DataChannel transport. The default
+#   "auto" tries dc/qr/audio/rpc/mtproto_rpc in turn, which adds noise
+#   to journalctl and slows down first-frame delivery — dc is the only
+#   transport the Android client speaks today.
 ExecStart=${INSTALL_DIR}/.venv/bin/baleobala tunnel exit-node \\
     --bale-jwt-file /etc/baleobala/jwt.txt \\
     --tun ${TUN_IFACE} \\
     --wan ${WAN_IFACE} \\
-    --answer
+    --transport dc \\
+    --answer \\
+    --answer-timeout 86400
 Restart=on-failure
-RestartSec=10
+# Each accepted call runs exactly once and then exits for a clean
+# restart (see src/baleobala/vpn/cli.py::_wait_for_signal_or_carrier_dead).
+# Keeping RestartSec low keeps the gap between sessions small so a
+# client toggling the VPN off/on doesn't fire a Bale call into a
+# closed window.
+RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
@@ -42,3 +58,10 @@ systemctl start baleobala-exit.service
 echo "OK: baleobala-exit service installed and started"
 echo "  Status : systemctl status baleobala-exit"
 echo "  Logs   : journalctl -u baleobala-exit -f"
+echo
+echo "IMPORTANT: don't run any other long-lived process (bale-proxy"
+echo "client, bale-call --answer, another exit-node) with the SAME"
+echo "Bale JWT as /etc/baleobala/jwt.txt. The Bale server picks one"
+echo "WS session at random when an inbound call arrives, so a second"
+echo "client on the same account silently steals incoming calls and"
+echo "the exit node never gets to NAT them."

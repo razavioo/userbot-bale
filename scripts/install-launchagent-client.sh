@@ -23,6 +23,13 @@
 #   BALEOBALA_PYTHON     — path to Python interpreter (default: auto-detect .venv)
 #   BALEOBALA_LISTEN_PORT — SOCKS5 listen port (default: 1080)
 #   BALEOBALA_SERVICE     — macOS network service name (default: Wi-Fi)
+#   BALEOBALA_PEER_ID     — Bale user_id of the relay/exit to dial. When set,
+#                           the agent runs `bale-proxy system --peer-id ...`
+#                           (outbound). When unset, falls back to `--answer`
+#                           (waits for an inbound call). Outbound is the
+#                           common laptop-as-client setup.
+#   BALEOBALA_CHANNELS    — bonded call channels for outbound mode (default: 1)
+#   BALEOBALA_ANSWER_TIMEOUT — seconds to wait in --answer mode (default: 86400)
 #
 set -euo pipefail
 
@@ -40,8 +47,13 @@ JWT_FILE="${BALEOBALA_JWT_FILE:-}"
 PSK_FILE="${BALEOBALA_PSK_FILE:-}"
 LISTEN_PORT="${BALEOBALA_LISTEN_PORT:-1080}"
 NETWORK_SERVICE="${BALEOBALA_SERVICE:-Wi-Fi}"
-ANSWER_TIMEOUT="${BALEOBALA_ANSWER_TIMEOUT:-300}"
+ANSWER_TIMEOUT="${BALEOBALA_ANSWER_TIMEOUT:-86400}"
 WS_NO_VERIFY="${BALEOBALA_WS_NO_VERIFY:-1}"  # set to 0 to enable WS TLS verification
+# Outbound dial mode: when set, the agent calls this peer instead of
+# waiting for an incoming Bale call. This is the mode operators use
+# when their relay/exit is on a different account/device.
+PEER_ID="${BALEOBALA_PEER_ID:-}"
+CHANNELS="${BALEOBALA_CHANNELS:-1}"
 
 ACTION="${1:---install}"
 
@@ -107,33 +119,23 @@ do_install() {
 
     # Build the argument list
     local args_xml
-    args_xml="$(python3 -c "
-import sys
-args = [
-    '$PYTHON', '-m', 'baleobala.cli',
-    'bale-proxy', 'system',
-    '--transport', 'dc',
-    '--bale-jwt-file', '$JWT_FILE',
-    '--answer',
-    '--answer-timeout', '$ANSWER_TIMEOUT',
-    '--listen-port', '$LISTEN_PORT',
-    '--service', '$NETWORK_SERVICE',
-"
-    if [[ -n "$PSK_FILE" ]]; then
-        args_xml+="    '--proxy-secret-file', '$PSK_FILE',"$'\n'
+    # Build the call-mode args. Outbound (--peer-id) and answer
+    # (--answer + --answer-timeout) are mutually exclusive on the
+    # bale-proxy side, so don't emit both even if both env vars are
+    # set — peer-id takes precedence.
+    local mode_block
+    if [[ -n "$PEER_ID" ]]; then
+        mode_block="        <string>--peer-id</string>
+        <string>$PEER_ID</string>
+        <string>--channels</string>
+        <string>$CHANNELS</string>"
+    else
+        mode_block="        <string>--answer</string>
+        <string>--answer-timeout</string>
+        <string>$ANSWER_TIMEOUT</string>"
     fi
-    if [[ "$WS_NO_VERIFY" == "1" ]]; then
-        args_xml+="    '--ws-ssl-no-verify',"$'\n'
-    fi
-    args_xml+="
-]
-for a in args:
-    print('        <string>' + a + '</string>')
-" 2>/dev/null || true)"
 
-    # Manually build the args block in case python3 isn't available in PATH
-    if [[ -z "$args_xml" ]]; then
-        args_xml="        <string>$PYTHON</string>
+    args_xml="        <string>$PYTHON</string>
         <string>-m</string>
         <string>baleobala.cli</string>
         <string>bale-proxy</string>
@@ -142,19 +144,16 @@ for a in args:
         <string>dc</string>
         <string>--bale-jwt-file</string>
         <string>$JWT_FILE</string>
-        <string>--answer</string>
-        <string>--answer-timeout</string>
-        <string>$ANSWER_TIMEOUT</string>
+${mode_block}
         <string>--listen-port</string>
         <string>$LISTEN_PORT</string>
         <string>--service</string>
         <string>$NETWORK_SERVICE</string>"
-        [[ -n "$PSK_FILE" ]] && args_xml+="
+    [[ -n "$PSK_FILE" ]] && args_xml+="
         <string>--proxy-secret-file</string>
         <string>$PSK_FILE</string>"
-        [[ "$WS_NO_VERIFY" == "1" ]] && args_xml+="
+    [[ "$WS_NO_VERIFY" == "1" ]] && args_xml+="
         <string>--ws-ssl-no-verify</string>"
-    fi
 
     cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -209,6 +208,11 @@ PLIST
     info "PSK      : ${PSK_FILE:-<none>}"
     info "Port     : $LISTEN_PORT"
     info "Service  : $NETWORK_SERVICE"
+    if [[ -n "$PEER_ID" ]]; then
+        info "Mode     : outbound dial (peer-id=$PEER_ID, channels=$CHANNELS)"
+    else
+        info "Mode     : answer (timeout ${ANSWER_TIMEOUT}s)"
+    fi
     info "Stdout   : $STDOUT_LOG"
     info "Stderr   : $STDERR_LOG"
     echo ""
@@ -311,6 +315,12 @@ case "$ACTION" in
         echo "  BALEOBALA_LISTEN_PORT  SOCKS5 port (default: 1080)"
         echo "  BALEOBALA_SERVICE      macOS network service (default: Wi-Fi)"
         echo "  BALEOBALA_WS_NO_VERIFY 1 = skip WS TLS verify (default: 1)"
+        echo "  BALEOBALA_PEER_ID      relay/exit Bale user_id to dial outbound"
+        echo "                         (when set, agent uses --peer-id; default"
+        echo "                         is --answer / wait for an inbound call)"
+        echo "  BALEOBALA_CHANNELS     bonded call channels (default: 1)"
+        echo "  BALEOBALA_ANSWER_TIMEOUT  seconds to wait in --answer mode"
+        echo "                            (default: 86400 = 24h)"
         exit 1
         ;;
 esac
