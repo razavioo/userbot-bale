@@ -42,7 +42,9 @@ class BaleWsClient(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
-                dispatch(bytes.toByteArray())
+                val arr = bytes.toByteArray()
+                onLog("bale ws rx ${arr.size}B hex=${arr.take(64).joinToString("") { "%02x".format(it) }}")
+                dispatch(arr)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {

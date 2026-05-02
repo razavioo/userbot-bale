@@ -13,9 +13,17 @@ class BaleCallClient(
             onLog = onLog,
             onUpdate = { resp ->
                 val creds = BaleProtos.parseCallCredentials(resp.raw)
-                if (creds != null) synchronized(lock) {
-                    pushed = creds
-                    lock.notifyAll()
+                if (creds != null) {
+                    onLog("push: parsed CallCredentials room=${creds.room} url=${creds.url.take(40)}…")
+                    synchronized(lock) {
+                        pushed = creds
+                        lock.notifyAll()
+                    }
+                } else {
+                    onLog(
+                        "push: not creds; seq=${resp.seq} payload=${resp.payload.size}B " +
+                        "raw=${resp.raw.size}B hex=${resp.raw.take(96).joinToString("") { "%02x".format(it) }}"
+                    )
                 }
             },
         )
