@@ -135,7 +135,7 @@ class BaleAuthBrowser:
             "button[data-testid='submit-button'][aria-label='ورود']"
         ).first
         await login_btn.wait_for(state="visible", timeout=_TIMEOUT)
-        await login_btn.click(timeout=_TIMEOUT)
+        await login_btn.click(timeout=_TIMEOUT, force=True)
         await page.wait_for_timeout(1500)
 
         # Fill the phone input. The field's id contains Persian characters
