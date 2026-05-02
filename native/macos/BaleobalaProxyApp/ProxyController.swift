@@ -33,14 +33,42 @@ struct ProxySettingsView: Equatable {
     var availableServices: [String] = []
 }
 
+/// Single source of truth for what the UI should be saying right now.
+/// Computed from (proxy.running, system_proxy_active, pendingAction)
+/// so the connection dial, the action button, and the menu bar item
+/// can never disagree (the previous "Disconnected … Cancel" mismatch
+/// happened because they read independent flags).
+enum ConnectionPhase: Equatable {
+    case disconnected           // not running, no command in flight
+    case connecting             // start command issued, not yet up
+    case connected              // running + macOS proxy verified active
+    case unhealthy              // running but networksetup says off
+    case disconnecting          // stop command issued, still tearing down
+
+    var isBusy: Bool { self == .connecting || self == .disconnecting }
+    var allowsConnect: Bool { self == .disconnected }
+    var allowsCancel: Bool { self == .connecting || self == .connected || self == .unhealthy }
+}
+
 @MainActor
 final class ProxyController: ObservableObject {
     @Published var auth = AuthState()
     @Published var proxy = ProxyState()
     @Published var settings = ProxySettingsView()
     @Published var statusMessage: String = ""
-    @Published var busy: Bool = false
     @Published var transactionHash: String = ""
+    @Published private(set) var phase: ConnectionPhase = .disconnected
+    /// True while *any* helper command is in flight. Used by SignInView
+    /// to disable the OTP buttons during send/verify; proxy lifecycle
+    /// uses `phase` instead so the dial / button can never disagree.
+    @Published var busy: Bool = false
+
+    /// Last user action whose helper response hasn't returned yet.
+    /// Used to colour the phase as connecting vs disconnecting while
+    /// the helper is mid-flight (where proxy.running alone is stale).
+    private var pendingAction: PendingAction? = nil
+
+    private enum PendingAction { case start, stop }
 
     private let helper = ProxyHelperClient()
     private var pollTask: Task<Void, Never>?
@@ -105,10 +133,14 @@ final class ProxyController: ObservableObject {
     }
 
     func startProxy() {
+        pendingAction = .start
+        recomputePhase()
         runCommand("proxyStart")
     }
 
     func stopProxy() {
+        pendingAction = .stop
+        recomputePhase()
         runCommand("proxyStop")
     }
 
@@ -129,7 +161,14 @@ final class ProxyController: ObservableObject {
     private func runCommand(_ command: String, payload: [String: Any] = [:], onSuccess: ((HelperResult) -> Void)? = nil) {
         Task {
             busy = true
-            defer { busy = false }
+            defer {
+                busy = false
+                // Always clear pending intent when the helper returns,
+                // even on error, so the UI doesn't get stuck in
+                // "Connecting…" forever.
+                pendingAction = nil
+                recomputePhase()
+            }
             do {
                 let result = try await helper.send(command: command, payload: payload)
                 apply(result)
@@ -168,5 +207,21 @@ final class ProxyController: ObservableObject {
             settings.service = (settingsDict["network_service"] as? String) ?? settings.service
             settings.relayPeerId = (settingsDict["relay_peer_id"] as? String) ?? settings.relayPeerId
         }
+        recomputePhase()
+    }
+
+    private func recomputePhase() {
+        if let pending = pendingAction {
+            // While a helper command is in flight, the user-issued
+            // intent wins. proxy.running is the LAST polled snapshot
+            // and lags by up to 3 s.
+            phase = (pending == .start) ? .connecting : .disconnecting
+            return
+        }
+        if !proxy.running {
+            phase = .disconnected
+            return
+        }
+        phase = proxy.systemProxyActive ? .connected : .unhealthy
     }
 }
