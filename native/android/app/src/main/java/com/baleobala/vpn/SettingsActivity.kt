@@ -15,6 +15,8 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(binding.root)
         settings = AppSettings(this)
 
+        binding.toolbar.setNavigationOnClickListener { finish() }
+
         binding.reconnectSwitch.isChecked = settings.reconnectOnLaunch
         binding.logsSwitch.isChecked = settings.showLogs
         binding.autoReconnectSwitch.isChecked = settings.autoReconnectAfterDrop
@@ -31,7 +33,5 @@ class SettingsActivity : AppCompatActivity() {
             setResult(RESULT_OK)
             finish()
         }
-
-        binding.closeButton.setOnClickListener { finish() }
     }
 }

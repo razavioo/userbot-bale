@@ -68,9 +68,11 @@
     <string name="action_open_settings">Open</string>
     <string name="action_retry">Retry</string>
     <string name="action_dismiss">Dismiss</string>
+    <string name="action_back">Back</string>
 
     <string name="cd_toggle_idle">Turn VPN on</string>
     <string name="cd_toggle_connected">Turn VPN off</string>
+    <string name="cd_toggle_connecting">Cancel connection attempt</string>
     <string name="cd_toggle_busy">VPN is changing state</string>
 
     <string name="notif_action_disconnect">Disconnect</string>

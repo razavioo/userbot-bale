@@ -31,6 +31,7 @@ class LoginActivity : AppCompatActivity() {
         binding = ActivityLoginBinding.inflate(layoutInflater)
         setContentView(binding.root)
         store = AuthStore(this)
+        binding.toolbar.setNavigationOnClickListener { finish() }
 
         binding.sendCodeButton.setOnClickListener {
             val raw = binding.phoneInput.text?.toString()?.trim().orEmpty()
@@ -98,6 +99,7 @@ class LoginActivity : AppCompatActivity() {
                     val session = withContext(Dispatchers.IO) { auth.validateCode(code) }
                     store.saveJwt(session.jwt, phoneNumber)
                     setStatus("Signed in. JWT length=${session.jwt.length}")
+                    setResult(RESULT_OK)
                     finish()
                 } catch (ns: NeedsSignUpException) {
                     setStatus("This phone has no Bale profile yet. Enter your name and tap Complete sign-up.")
@@ -123,6 +125,7 @@ class LoginActivity : AppCompatActivity() {
                     val session = withContext(Dispatchers.IO) { auth.signUp(name) }
                     store.saveJwt(session.jwt, phoneNumber)
                     setStatus("Signed up. JWT length=${session.jwt.length}")
+                    setResult(RESULT_OK)
                     finish()
                 } catch (e: GrpcWebError) {
                     setStatus("SignUp failed: grpc=${e.grpcStatus} msg=\"${e.grpcMessage}\" http=${e.httpStatus}")
