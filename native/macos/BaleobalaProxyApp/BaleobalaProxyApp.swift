@@ -22,9 +22,18 @@ struct BaleobalaProxyApp: App {
         MenuBarExtra {
             MenuBarView(controller: controller)
         } label: {
-            Image(systemName: controller.proxy.running ? "lock.shield.fill" : "lock.open")
+            Image(systemName: menuBarIconName(for: controller.phase))
         }
         .menuBarExtraStyle(.window)
+    }
+
+    private func menuBarIconName(for phase: ConnectionPhase) -> String {
+        switch phase {
+        case .connected:     return "lock.shield.fill"
+        case .unhealthy:     return "exclamationmark.shield.fill"
+        case .connecting, .disconnecting: return "arrow.triangle.2.circlepath"
+        case .disconnected:  return "lock.open"
+        }
     }
 }
 
@@ -32,7 +41,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var controller: ProxyController?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let controller, controller.proxy.running else { return .terminateNow }
+        // Tear down on quit if there's *any* live state — running, half-up,
+        // or in-flight start/stop. Otherwise the user could quit during
+        // "Connecting…" and leave a zombie subprocess + half-applied
+        // system proxy behind.
+        guard let controller else { return .terminateNow }
+        let needsTeardown: Bool = {
+            switch controller.phase {
+            case .disconnected: return false
+            default:            return true
+            }
+        }()
+        guard needsTeardown else { return .terminateNow }
         Task {
             await controller.stopProxyAndWait()
             await MainActor.run { NSApp.reply(toApplicationShouldTerminate: true) }

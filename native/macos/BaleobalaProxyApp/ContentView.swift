@@ -42,7 +42,7 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
             Spacer()
-            if controller.busy {
+            if controller.phase.isBusy {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
             }
         }
@@ -132,7 +132,7 @@ struct MainView: View {
     var body: some View {
         VStack(spacing: 22) {
             connectionDial
-            if controller.proxy.running && !controller.proxy.systemProxyActive {
+            if controller.phase == .unhealthy {
                 halfUpWarning
             }
             actionButton
@@ -174,56 +174,113 @@ struct MainView: View {
     }
 
     private var connectionDial: some View {
-        ZStack {
+        let dialFraction: CGFloat = {
+            switch controller.phase {
+            case .connected, .unhealthy: return 1.0
+            case .connecting, .disconnecting: return 0.6
+            case .disconnected: return 0.18
+            }
+        }()
+        return ZStack {
             Circle()
                 .stroke(Color.white.opacity(0.08), lineWidth: 14)
                 .frame(width: 180, height: 180)
             Circle()
-                .trim(from: 0, to: controller.proxy.running ? 1.0 : 0.18)
+                .trim(from: 0, to: dialFraction)
                 .stroke(
                     LinearGradient(colors: dialColors, startPoint: .top, endPoint: .bottom),
                     style: StrokeStyle(lineWidth: 14, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
                 .frame(width: 180, height: 180)
-                .animation(.easeInOut(duration: 0.4), value: controller.proxy.running)
+                .animation(.easeInOut(duration: 0.4), value: controller.phase)
             VStack(spacing: 4) {
-                Image(systemName: controller.proxy.running ? "bolt.shield.fill" : "shield.slash")
+                Image(systemName: dialIcon)
                     .font(.system(size: 38, weight: .semibold))
-                    .foregroundStyle(controller.proxy.running ? .green : .white.opacity(0.5))
-                Text(controller.proxy.running ? "Protected" : "Disconnected")
+                    .foregroundStyle(dialIconTint)
+                Text(dialLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.85))
-                if controller.proxy.running, let started = controller.proxy.startedAt {
+                if controller.phase == .connected, let started = controller.proxy.startedAt {
                     Text(elapsed(since: started))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.5))
+                } else if controller.phase.isBusy {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
                 }
             }
         }
         .frame(maxWidth: .infinity)
     }
 
+    private var dialLabel: String {
+        switch controller.phase {
+        case .disconnected:  return "Disconnected"
+        case .connecting:    return "Connecting…"
+        case .connected:     return "Protected"
+        case .unhealthy:     return "Tunnel up, proxy off"
+        case .disconnecting: return "Disconnecting…"
+        }
+    }
+
+    private var dialIcon: String {
+        switch controller.phase {
+        case .connected:     return "bolt.shield.fill"
+        case .unhealthy:     return "exclamationmark.shield.fill"
+        case .connecting, .disconnecting: return "arrow.triangle.2.circlepath"
+        case .disconnected:  return "shield.slash"
+        }
+    }
+
+    private var dialIconTint: Color {
+        switch controller.phase {
+        case .connected:     return .green
+        case .unhealthy:     return .yellow
+        case .connecting, .disconnecting: return .accentColor
+        case .disconnected:  return .white.opacity(0.5)
+        }
+    }
+
     private var dialColors: [Color] {
-        controller.proxy.running ? [.green, .teal] : [.gray.opacity(0.5), .gray.opacity(0.3)]
+        switch controller.phase {
+        case .connected:     return [.green, .teal]
+        case .unhealthy:     return [.yellow, .orange]
+        case .connecting, .disconnecting: return [.blue, .accentColor]
+        case .disconnected:  return [.gray.opacity(0.5), .gray.opacity(0.3)]
+        }
     }
 
     private var actionButton: some View {
-        // Keep Disconnect/Cancel always tappable so a stuck startup
-        // (CallNotApproved, peer offline, networksetup-never-Yes) can
-        // be aborted without quitting the app.
-        let canCancel = controller.proxy.running || controller.busy
-        return Button {
-            canCancel ? controller.stopProxy() : controller.startProxy()
-        } label: {
-            Text(canCancel
-                 ? (controller.busy && !controller.proxy.running ? "Cancel" : "Disconnect")
-                 : "Connect")
+        // Single source of truth: phase decides label, action and tint.
+        // Disconnecting is the only state where the user shouldn't be
+        // able to issue another command (we're already tearing down).
+        let label: String
+        let tint: Color
+        let action: () -> Void
+        let disabled: Bool
+
+        switch controller.phase {
+        case .disconnected:
+            label = "Connect"; tint = .accentColor
+            action = controller.startProxy; disabled = false
+        case .connecting:
+            label = "Cancel"; tint = .red
+            action = controller.stopProxy; disabled = false
+        case .connected, .unhealthy:
+            label = "Disconnect"; tint = .red
+            action = controller.stopProxy; disabled = false
+        case .disconnecting:
+            label = "Disconnecting…"; tint = .gray
+            action = {}; disabled = true
+        }
+
+        return Button(action: action) {
+            Text(label)
                 .font(.headline)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(PrimaryButtonStyle(tint: canCancel ? .red : .accentColor))
-        .disabled(!canCancel && controller.busy)
+        .buttonStyle(PrimaryButtonStyle(tint: tint))
+        .disabled(disabled)
     }
 
     private var infoCards: some View {
@@ -338,28 +395,50 @@ struct SettingsView: View {
 struct MenuBarView: View {
     @ObservedObject var controller: ProxyController
 
+    private var dotColor: Color {
+        switch controller.phase {
+        case .connected:                 return .green
+        case .unhealthy:                 return .yellow
+        case .connecting, .disconnecting: return .blue
+        case .disconnected:              return .gray
+        }
+    }
+
+    private var statusLabel: String {
+        switch controller.phase {
+        case .disconnected:  return "Disconnected"
+        case .connecting:    return "Connecting…"
+        case .connected:     return "Connected"
+        case .unhealthy:     return "Tunnel up, proxy off"
+        case .disconnecting: return "Disconnecting…"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Circle()
-                    .fill(controller.proxy.running ? .green : .gray)
-                    .frame(width: 8, height: 8)
-                Text(controller.proxy.running ? "Connected" : "Disconnected")
-                    .font(.headline)
+                Circle().fill(dotColor).frame(width: 8, height: 8)
+                Text(statusLabel).font(.headline)
             }
-            if controller.proxy.running {
+            if controller.phase == .connected || controller.phase == .unhealthy {
                 Text(controller.proxy.endpoint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Divider()
             if controller.auth.loggedIn {
-                Button(controller.proxy.running ? "Disconnect" : "Connect") {
-                    controller.proxy.running ? controller.stopProxy() : controller.startProxy()
+                switch controller.phase {
+                case .disconnected:
+                    Button("Connect") { controller.startProxy() }
+                case .connecting:
+                    Button("Cancel") { controller.stopProxy() }
+                case .connected, .unhealthy:
+                    Button("Disconnect") { controller.stopProxy() }
+                case .disconnecting:
+                    Text("Disconnecting…").foregroundStyle(.secondary)
                 }
             } else {
-                Text("Sign in to start")
-                    .foregroundStyle(.secondary)
+                Text("Sign in to start").foregroundStyle(.secondary)
             }
             Button("Open Window") {
                 NSApp.activate(ignoringOtherApps: true)
