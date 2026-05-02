@@ -73,9 +73,13 @@ object RpcEnvelope {
         override fun hashCode(): Int = 31 * (31 * (seq ?: 0) + payload.contentHashCode()) + raw.contentHashCode()
     }
 
-    fun decodeResponse(buf: ByteArray): Response = decodeResponseInner(buf, top = true).copy(raw = buf)
+    fun decodeResponse(buf: ByteArray): Response = decodeResponseInner(buf).copy(raw = buf)
 
-    private fun decodeResponseInner(buf: ByteArray, top: Boolean): Response {
+    private fun decodeResponseInner(buf: ByteArray): Response {
+        // Mirrors src/baleobala/bale/rpc_envelope.py::Response.decode:
+        // recursively walk every outer tag-1 wrapper at any depth so the
+        // status payload at the bottom (e.g. "CallNotApproved" wrapped in
+        // {tag 1 status_code, tag 2 status_message}) surfaces correctly.
         var seq: Int? = null
         var payload = ByteArray(0)
         for (f in ProtoCodec.walk(buf)) {
@@ -85,8 +89,8 @@ object RpcEnvelope {
                 }
                 is ProtoCodec.FieldValue.LenDelim -> {
                     when (f.number) {
-                        1 -> if (top) {
-                            val sub = decodeResponseInner(f.value.bytes, top = false)
+                        1 -> {
+                            val sub = decodeResponseInner(f.value.bytes)
                             if (sub.seq != null && seq == null) seq = sub.seq
                             if (sub.payload.isNotEmpty()) payload = sub.payload
                         }
