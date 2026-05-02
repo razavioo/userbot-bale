@@ -43,7 +43,11 @@ class LoginActivity : AppCompatActivity() {
                 setStatus("Phone too short — include country code (e.g. 989121234567)")
                 return@setOnClickListener
             }
-            val phone = digits.toLong()
+            val phone = digits.toLongOrNull()
+            if (phone == null) {
+                setStatus("Phone number is too long")
+                return@setOnClickListener
+            }
             phoneNumber = phone
             setStatus("Sending code to $phone…")
             binding.sendCodeButton.isEnabled = false

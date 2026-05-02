@@ -178,6 +178,10 @@ class WsClient:
         url: str = DEFAULT_WS_URL,
         on_update: Optional[Callable[[Response], None]] = None,
         tls_config: WsTlsConfig | None = None,
+        auto_reconnect: bool = True,
+        reconnect_initial_backoff: float = 1.0,
+        reconnect_max_backoff: float = 30.0,
+        on_reconnect: Optional[Callable[[], None]] = None,
     ) -> None:
         _require_websockets()
         self._jwt = jwt
@@ -193,8 +197,21 @@ class WsClient:
         self._seq_counter = itertools.count(1)
         self._pending: Dict[int, "queue.Queue[Response]"] = {}
         self._lock = threading.Lock()
+        self._auto_reconnect = auto_reconnect
+        self._reconnect_initial_backoff = reconnect_initial_backoff
+        self._reconnect_max_backoff = reconnect_max_backoff
+        self._on_reconnect = on_reconnect
 
     def start(self, timeout: float = 15.0) -> None:
+        # Fail fast on a clearly-expired token. Otherwise the WS upgrade
+        # silently drops with HTTP 401 and the only signal users see is a
+        # connection timeout, which they then chase as a network bug.
+        try:
+            from baleobala.vpn.jwt_util import require_unexpired
+            require_unexpired(self._jwt)
+        except Exception as exc:  # JwtExpiredError or import failure
+            if exc.__class__.__name__ == "JwtExpiredError":
+                raise
         self._thread = threading.Thread(
             target=self._run_thread, name="baleobala-bale-ws", daemon=True,
         )
@@ -238,7 +255,10 @@ class WsClient:
             raise RuntimeError("WsClient not started")
         seq = next(self._seq_counter)
         req = Request(service=service, method=method, payload=payload, seq=seq)
-        q: "queue.Queue[Response]" = queue.Queue(maxsize=1)
+        # Unbounded queue: a bounded maxsize=1 silently dropped responses
+        # if the dispatcher delivered before the caller reached q.get(),
+        # which made the RPC time out for replies that actually arrived.
+        q: "queue.Queue[Response]" = queue.Queue()
         with self._lock:
             self._pending[seq] = q
         frame = req.encode()
@@ -259,6 +279,51 @@ class WsClient:
             self._loop.close()
 
     async def _run(self) -> None:
+        backoff = self._reconnect_initial_backoff
+        first_attempt = True
+        while not self._stopped.is_set():
+            try:
+                await self._run_once(is_first_attempt=first_attempt)
+            except Exception as exc:  # noqa: BLE001
+                if first_attempt:
+                    self._connect_error = exc
+            first_attempt = False
+            if self._stopped.is_set() or not self._auto_reconnect:
+                break
+            if not self._connected.is_set():
+                # connect itself failed; back off then retry
+                pass
+            log.info("Bale WS disconnected; reconnecting in %.1fs", backoff)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._sleep_until_stopped(backoff)),
+                    timeout=backoff + 1.0,
+                )
+            except asyncio.TimeoutError:
+                pass
+            if self._stopped.is_set():
+                break
+            backoff = min(backoff * 2.0, self._reconnect_max_backoff)
+            # Reset connection state for next attempt; rpc()/send_oneway
+            # will see _ws is None and refuse cleanly.
+            self._ws = None
+            self._connected.clear()
+            if self._on_reconnect is not None:
+                try:
+                    self._on_reconnect()
+                except Exception:  # noqa: BLE001
+                    log.exception("on_reconnect callback failed")
+        self._stopped.set()
+
+    async def _sleep_until_stopped(self, seconds: float) -> None:
+        loop = asyncio.get_event_loop()
+        end = loop.time() + seconds
+        while loop.time() < end:
+            if self._stopped.is_set():
+                return
+            await asyncio.sleep(min(0.25, end - loop.time()))
+
+    async def _run_once(self, *, is_first_attempt: bool) -> None:
         # Bale's WS gateway requires Origin to match the web client's
         # origin; without it the server returns HTTP 403 on upgrade.
         # User-Agent is not strictly required today but a realistic one
@@ -316,7 +381,10 @@ class WsClient:
                     else:
                         log.debug("text WS frame ignored: %r", msg[:64])
         except ssl.SSLCertVerificationError as e:
-            self._connect_error = e
+            if is_first_attempt:
+                self._connect_error = e
+            # Don't loop forever on a bad cert — operator must fix it.
+            self._auto_reconnect = False
             log.warning(
                 "Bale WS TLS verification failed: %s",
                 _tls_event(
@@ -330,7 +398,8 @@ class WsClient:
                 ),
             )
         except ssl.SSLError as e:
-            self._connect_error = e
+            if is_first_attempt:
+                self._connect_error = e
             log.warning(
                 "Bale WS TLS handshake failed: %s",
                 _tls_event(
@@ -344,7 +413,8 @@ class WsClient:
                 ),
             )
         except Exception as e:  # noqa: BLE001
-            self._connect_error = e
+            if is_first_attempt:
+                self._connect_error = e
             log.exception(
                 "WS connection error: %s",
                 _tls_event(
@@ -357,8 +427,6 @@ class WsClient:
                     error=e,
                 ),
             )
-        finally:
-            self._stopped.set()
 
     def _dispatch(self, buf: bytes) -> None:
         resp = Response.decode(buf)
@@ -369,7 +437,10 @@ class WsClient:
                 try:
                     q.put_nowait(resp)
                 except queue.Full:
-                    pass
+                    log.error(
+                        "dropping RPC response seq=%s: pending queue full",
+                        resp.seq,
+                    )
                 return
         if self._on_update is not None:
             try:

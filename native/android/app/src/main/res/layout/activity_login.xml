@@ -5,6 +5,7 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_login"
     android:fillViewport="true"
+    android:fitsSystemWindows="true"
     android:padding="20dp">
 
     <LinearLayout

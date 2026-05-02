@@ -6,7 +6,13 @@ import time
 
 import pytest
 
-from baleobala.vpn.jwt_util import inspect, warn_if_near_expiry
+from baleobala.vpn.jwt_util import (
+    JwtExpiredError,
+    inspect,
+    is_expired,
+    require_unexpired,
+    warn_if_near_expiry,
+)
 from baleobala.vpn.router import FailoverRouter, RouterChoice
 
 
@@ -27,6 +33,23 @@ def test_jwt_inspect_handles_garbage():
     info = inspect("not-a-jwt")
     assert info.exp is None
     assert info.seconds_until_expiry is None
+
+
+def test_is_expired_and_require_unexpired():
+    fresh = _mkjwt(exp=int(time.time()) + 3600)
+    stale = _mkjwt(exp=int(time.time()) - 10)
+    no_exp = _mkjwt(sub="x")
+
+    assert is_expired(stale) is True
+    assert is_expired(fresh) is False
+    # Token without exp: treated as non-expired (we can't decide).
+    assert is_expired(no_exp) is False
+
+    require_unexpired(fresh)  # no raise
+    require_unexpired(no_exp)  # no raise
+    with pytest.raises(JwtExpiredError) as ei:
+        require_unexpired(stale)
+    assert ei.value.exp is not None
 
 
 def test_warn_near_expiry_doesnt_raise(caplog):

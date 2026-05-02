@@ -39,9 +39,25 @@ class JsonStore:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
                 fh.write("\n")
+                fh.flush()
+                # fsync the file before the rename so that on crash we
+                # never see an intact-named-but-empty checkpoint.
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    pass
             os.replace(tmp_path, self.path)
             try:
                 os.chmod(self.path, 0o600)
+            except OSError:
+                pass
+            # fsync the parent directory so the rename itself is durable.
+            try:
+                dir_fd = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
             except OSError:
                 pass
         finally:

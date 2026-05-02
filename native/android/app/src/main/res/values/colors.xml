@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_primary">#1249FF</color>
+    <color name="brand_primary_dark">#0A2DA8</color>
+    <color name="brand_on_primary">#FFFFFFFF</color>
+
+    <color name="state_idle">#1F2A44</color>
+    <color name="state_connecting">#F59E0B</color>
+    <color name="state_connected">#16A34A</color>
+    <color name="state_error">#DC2626</color>
+
+    <color name="surface_dark">#0B1020</color>
+    <color name="surface_dark_elevated">#111733</color>
+    <color name="text_primary_on_dark">#F5F7FB</color>
+    <color name="text_secondary_on_dark">#A8B0C8</color>
+</resources>

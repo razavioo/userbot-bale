@@ -70,6 +70,36 @@ def test_parse_call_credentials_returns_none_without_match() -> None:
     assert parse_call_credentials(b"just some random bytes") is None
 
 
+def test_rid_dedup_evicts_after_cap_and_is_thread_safe() -> None:
+    """Regression: RID dedup buffer used to be cap=1024 with no lock.
+    Confirm the cap evicts oldest, lookups remain consistent under
+    concurrent writers, and the lock prevents set/list desync."""
+    import threading
+
+    client = BaleApiClient.__new__(BaleApiClient)
+    client._seen_rids = set()
+    client._seen_rids_order = []
+    client._seen_rids_lock = threading.Lock()
+
+    # Hammer with 5000 unique RIDs from 8 threads.
+    def worker(start: int) -> None:
+        for i in range(start, start + 625):
+            client._remember_rid(i)
+
+    threads = [threading.Thread(target=worker, args=(i * 625,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Cap is 1024; both views must agree on size.
+    assert len(client._seen_rids) == 1024
+    assert len(client._seen_rids_order) == 1024
+    assert set(client._seen_rids_order) == client._seen_rids
+    # The earliest RIDs (0..k) must have been evicted.
+    assert 0 not in client._seen_rids
+
+
 def test_api_client_requires_jwt() -> None:
     client = BaleApiClient(jwt=None)
     try:

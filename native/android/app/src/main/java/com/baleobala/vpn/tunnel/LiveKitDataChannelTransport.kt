@@ -11,8 +11,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class LiveKitDataChannelTransport(
     private val appContext: Context,
@@ -78,11 +80,31 @@ class LiveKitDataChannelTransport(
         val reliability = if (reliable) DataPublishReliability.RELIABLE else DataPublishReliability.LOSSY
         var lastFailure: Throwable? = null
         repeat(3) { attempt ->
-            val result = runBlocking(Dispatchers.IO) {
-                r.localParticipant.publishData(data, reliability = reliability, topic = topic)
+            // Avoid runBlocking: it spins up a fresh event loop on the
+            // calling thread, which can deadlock when the caller is itself
+            // a coroutine dispatcher worker (e.g. Tunnel ARQ retry threads
+            // sharing Dispatchers.IO). Hand the suspend call to our own
+            // scope and block on a latch instead.
+            val latch = CountDownLatch(1)
+            val publishResult = AtomicReference<Result<Unit>?>(null)
+            scope.launch {
+                try {
+                    publishResult.set(
+                        r.localParticipant.publishData(data, reliability = reliability, topic = topic)
+                    )
+                } catch (t: Throwable) {
+                    publishResult.set(Result.failure(t))
+                } finally {
+                    latch.countDown()
+                }
             }
-            if (result.isSuccess) return
-            lastFailure = result.exceptionOrNull()
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                lastFailure = RuntimeException("LiveKit publishData timed out")
+            } else {
+                val res = publishResult.get()
+                if (res != null && res.isSuccess) return
+                lastFailure = res?.exceptionOrNull() ?: RuntimeException("publishData returned null")
+            }
             if (attempt < 2) Thread.sleep(150L * (attempt + 1))
         }
         throw lastFailure ?: RuntimeException("LiveKit publishData failed")

@@ -3,8 +3,10 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from baleobala.bale.mtproto import Frame, MtpRpcClient, PlainSessionCodec, read_frame
-from baleobala.bale.mtproto.framing import write_frame
+from baleobala.bale.mtproto.framing import MAX_FRAME_LEN, write_frame
 
 
 class _ScriptedStream:
@@ -93,6 +95,34 @@ def test_rpc_client_dispatches_response_and_updates() -> None:
     t.join(timeout=1.0)
     client.close()
     assert updates == [b"update-1"]
+
+
+def test_large_payload_roundtrip_under_max_frame_len() -> None:
+    """Frames near MAX_FRAME_LEN must round-trip cleanly. Plan §4 called
+    out that no test exercised payloads >900KiB; this covers it."""
+    body = bytes((i * 31) & 0xFF for i in range(900 * 1024))
+    encoded = Frame(seq=1234, message_type=7, body=body).encode()
+    # Streamed in two chunks to exercise read_frame's loop.
+    stream = _ScriptedStream()
+    conn = _Conn(stream)
+    stream.push(encoded[:512 * 1024])
+    stream.push(encoded[512 * 1024:])
+    frame = read_frame(conn)
+    assert frame.seq == 1234
+    assert frame.body == body
+
+
+def test_oversized_frame_is_rejected() -> None:
+    """A length prefix beyond MAX_FRAME_LEN must be refused before we
+    allocate, preventing trivial DoS via giant length prefixes."""
+    import struct
+    stream = _ScriptedStream()
+    conn = _Conn(stream)
+    # Declare a frame ~2x the cap. read_frame should refuse without
+    # waiting for the (never-arriving) body.
+    stream.push(struct.pack("<I", MAX_FRAME_LEN + 1))
+    with pytest.raises(ValueError, match="oversize"):
+        read_frame(conn)
 
 
 def test_write_frame_writes_encoded_bytes() -> None:

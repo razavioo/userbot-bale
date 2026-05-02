@@ -60,6 +60,7 @@ class _Pending:
 class _RxPacket:
     parts: dict[int, bytes] = field(default_factory=dict)
     got_last: bool = False
+    created_at: float = field(default_factory=time.monotonic)
 
 
 class Tunnel:
@@ -73,6 +74,9 @@ class Tunnel:
         max_retries: int = 8,
         recv_timeout: float = 0.2,
         mtu_override: int | None = None,
+        reassembly_timeout: float | None = None,
+        max_open_packets: int = 256,
+        idle_timeout: float | None = None,
     ) -> None:
         self._tx = transport
         self._tx_lock = threading.Lock()  # protects swaps
@@ -87,6 +91,20 @@ class Tunnel:
         # them down audio's 128 B pipe on failover. The runner computes
         # the min across all candidate transports and passes it here.
         self._mtu_override = mtu_override
+        # Bound reassembly state to prevent OOM from peers that send SPLIT
+        # without LAST. Default ties to ARQ worst-case (ack_timeout * (max_retries+1)).
+        self._reassembly_timeout = (
+            reassembly_timeout
+            if reassembly_timeout is not None
+            else ack_timeout * (max_retries + 1)
+        )
+        self._max_open_packets = max(1, max_open_packets)
+        # If idle_timeout is set, the retry loop emits a single
+        # "tunnel_idle" event after no inbound (data or ACK) frame for
+        # that long. Supervisor can react by tearing down and rebuilding.
+        self._idle_timeout = idle_timeout
+        self._last_rx_at = time.monotonic()
+        self._idle_emitted = False
 
         self._seq_next = 0
         self._pending: dict[int, _Pending] = {}
@@ -108,6 +126,7 @@ class Tunnel:
         self._seen: set[int] = set()
         self._seen_order: list[int] = []
         self._seen_cap = 4096
+        self._seen_lock = threading.Lock()
         self._event_handlers: list[OnEvent] = []
 
     @property
@@ -191,6 +210,8 @@ class Tunnel:
             frame = VpnFrame.decode(buf)
             if frame is None:
                 continue
+            self._last_rx_at = time.monotonic()
+            self._idle_emitted = False
             if frame.sess_id != self._sess_id:
                 log.debug("drop frame from sess_id=%d (expected %d)",
                           frame.sess_id, self._sess_id)
@@ -200,9 +221,10 @@ class Tunnel:
                 continue
             # Data frame — ACK it first (cheap), then process.
             self._send_ack(frame.seq)
-            if frame.seq in self._seen:
-                continue
-            self._remember_seen(frame.seq)
+            with self._seen_lock:
+                if frame.seq in self._seen:
+                    continue
+                self._remember_seen_locked(frame.seq)
             self._deliver(frame)
 
     def _run_retry(self) -> None:
@@ -227,6 +249,29 @@ class Tunnel:
                 self._send_slot.release()
                 log.warning("vpn: dropping seq=%d after max retries", seq)
                 self._emit("frame_dropped", seq=seq, reason="max_retries")
+            stale_starts = [
+                start
+                for start, pkt in list(self._rx_buf.items())
+                if not pkt.got_last
+                and now - pkt.created_at > self._reassembly_timeout
+            ]
+            for start in stale_starts:
+                self._rx_buf.pop(start, None)
+                self._emit(
+                    "reassembly_dropped",
+                    start=start,
+                    reason="ttl",
+                )
+            if (
+                self._idle_timeout is not None
+                and not self._idle_emitted
+                and now - self._last_rx_at > self._idle_timeout
+            ):
+                self._idle_emitted = True
+                self._emit(
+                    "tunnel_idle",
+                    seconds_since_rx=now - self._last_rx_at,
+                )
             for p in to_retry:
                 retry_frame = VpnFrame(
                     sess_id=p.frame.sess_id,
@@ -314,6 +359,14 @@ class Tunnel:
         for start, pkt in self._rx_buf.items():
             if start <= seq and seq - start < 256:  # sanity
                 return start
+        if len(self._rx_buf) >= self._max_open_packets:
+            oldest = min(self._rx_buf, key=lambda s: self._rx_buf[s].created_at)
+            self._rx_buf.pop(oldest, None)
+            self._emit(
+                "reassembly_dropped",
+                start=oldest,
+                reason="max_open_packets",
+            )
         self._rx_buf[seq] = _RxPacket()
         return seq
 
@@ -336,12 +389,17 @@ class Tunnel:
         except Exception:  # pragma: no cover
             log.exception("on_packet raised")
 
-    def _remember_seen(self, seq: int) -> None:
+    def _remember_seen_locked(self, seq: int) -> None:
+        """Caller must hold self._seen_lock."""
         self._seen.add(seq)
         self._seen_order.append(seq)
         while len(self._seen_order) > self._seen_cap:
             old = self._seen_order.pop(0)
             self._seen.discard(old)
+
+    def _remember_seen(self, seq: int) -> None:
+        with self._seen_lock:
+            self._remember_seen_locked(seq)
 
     def _emit(self, event: str, **payload: object) -> None:
         for handler in list(self._event_handlers):

@@ -5,6 +5,7 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_login"
     android:fillViewport="true"
+    android:fitsSystemWindows="true"
     android:padding="20dp">
 
     <LinearLayout
@@ -42,38 +43,6 @@
                     android:textAppearance="?attr/textAppearanceBodyMedium"
                     android:textColor="?attr/colorOnSurfaceVariant" />
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
-                    android:text="@string/settings_carrier_title"
-                    android:textStyle="bold" />
-
-                <RadioGroup
-                    android:id="@+id/carrierChoice"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp">
-
-                    <RadioButton
-                        android:id="@+id/carrierAuto"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/settings_carrier_auto" />
-
-                    <RadioButton
-                        android:id="@+id/carrierBale"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/settings_carrier_bale" />
-
-                    <RadioButton
-                        android:id="@+id/carrierLocal"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/settings_carrier_local" />
-                </RadioGroup>
-
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/reconnectSwitch"
                     android:layout_width="match_parent"
@@ -97,6 +66,21 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="18dp"
+                    android:hint="@string/settings_exit_peer_hint"
+                    app:boxBackgroundMode="outline">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/exitPeerInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
                     android:hint="@string/settings_dns_hint"
                     app:boxBackgroundMode="outline">
 

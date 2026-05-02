@@ -225,8 +225,10 @@ class SupervisedRunner:
     def _persist(self) -> None:
         try:
             self._store.save(self._checkpoint.to_dict())
-        except OSError:
-            pass
+        except OSError as exc:
+            # Don't swallow silently — a checkpoint write failure means
+            # the next restart may resume from stale state.
+            log.warning("supervisor: failed to persist checkpoint: %s", exc)
 
 
 def load_checkpoint(path: Path | None = None) -> SessionCheckpoint | None:

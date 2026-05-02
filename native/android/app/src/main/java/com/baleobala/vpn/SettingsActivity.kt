@@ -15,27 +15,18 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(binding.root)
         settings = AppSettings(this)
 
-        binding.carrierChoice.check(
-            when (settings.carrierMode) {
-                BaleVpnService.CARRIER_BALE -> R.id.carrierBale
-                BaleVpnService.CARRIER_LOCAL -> R.id.carrierLocal
-                else -> R.id.carrierAuto
-            }
-        )
         binding.reconnectSwitch.isChecked = settings.reconnectOnLaunch
         binding.logsSwitch.isChecked = settings.showLogs
         binding.autoReconnectSwitch.isChecked = settings.autoReconnectAfterDrop
+        binding.exitPeerInput.setText(settings.exitPeerId.takeIf { it > 0L }?.toString().orEmpty())
         binding.dnsInput.setText(settings.primaryDns)
 
         binding.saveButton.setOnClickListener {
-            settings.carrierMode = when (binding.carrierChoice.checkedRadioButtonId) {
-                R.id.carrierBale -> BaleVpnService.CARRIER_BALE
-                R.id.carrierLocal -> BaleVpnService.CARRIER_LOCAL
-                else -> BaleVpnService.CARRIER_AUTO
-            }
+            settings.carrierMode = BaleVpnService.CARRIER_BALE
             settings.reconnectOnLaunch = binding.reconnectSwitch.isChecked
             settings.showLogs = binding.logsSwitch.isChecked
             settings.autoReconnectAfterDrop = binding.autoReconnectSwitch.isChecked
+            settings.exitPeerId = binding.exitPeerInput.text?.toString()?.trim()?.toLongOrNull() ?: 0L
             settings.primaryDns = binding.dnsInput.text?.toString()?.trim().orEmpty().ifBlank { "1.1.1.1" }
             setResult(RESULT_OK)
             finish()

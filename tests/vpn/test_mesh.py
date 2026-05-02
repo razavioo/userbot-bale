@@ -49,6 +49,36 @@ def test_allocator_exhaustion():
         a.assign(999)
 
 
+def test_allocator_reaps_expired_leases():
+    a = IpAllocator("10.77.0.0/28", lease_ttl=10.0)
+    a.assign(1)
+    a.assign(2)
+    # Nothing expired yet.
+    assert a.reap_expired(now=__import__("time").monotonic() + 5.0) == []
+    # Both expired.
+    released = a.reap_expired(now=__import__("time").monotonic() + 11.0)
+    assert sorted(released) == [1, 2]
+    # Slots reclaimed.
+    assert a.free_count == a.total
+    # Heartbeat keeps a peer alive.
+    a.assign(7)
+    assert a.heartbeat(7) is True
+    assert a.heartbeat(999) is False  # unknown peer
+    # After heartbeat, advance past original-but-not-renewed deadline.
+    released = a.reap_expired(now=__import__("time").monotonic() + 9.5)
+    assert released == []
+    released = a.reap_expired(now=__import__("time").monotonic() + 11.0)
+    assert released == [7]
+
+
+def test_allocator_without_leases_is_unchanged():
+    a = IpAllocator("10.77.0.0/28")  # no lease_ttl
+    a.assign(1)
+    # No-op when leases are disabled.
+    assert a.reap_expired(now=10**9) == []
+    assert a.free_count == a.total - 1
+
+
 def _ipv4_to_bytes(dst: str, payload: bytes = b"") -> bytes:
     import ipaddress
     dst_bytes = ipaddress.IPv4Address(dst).packed
