@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/icon.png" alt="baleobala" width="160" height="160" />
+</p>
+
 # baleobala
 
 `baleobala` is the communication core for Bale — a SOCKS5 proxy that tunnels network traffic through the DataChannel of a Bale call between two user accounts. No separate relay server is needed; the channel is the most direct path possible.

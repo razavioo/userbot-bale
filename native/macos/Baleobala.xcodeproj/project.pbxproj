@@ -23,6 +23,7 @@
 		96A10000000000000000000E /* BaleAppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96A10000000000000000002C /* BaleAppModels.swift */; };
 		96A100000000000000000080 /* baleobala-app-control in Resources */ = {isa = PBXBuildFile; fileRef = 96A100000000000000000082 /* baleobala-app-control */; };
 		96A100000000000000000081 /* baleobala in Resources */ = {isa = PBXBuildFile; fileRef = 96A100000000000000000083 /* baleobala */; };
+		96A100000000000000000088 /* Baleobala.icns in Resources */ = {isa = PBXBuildFile; fileRef = 96A100000000000000000089 /* Baleobala.icns */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -61,6 +62,7 @@
 		96A10000000000000000002C /* BaleAppModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/BaleAppModels.swift; sourceTree = "<group>"; };
 		96A100000000000000000082 /* baleobala-app-control */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = BaleobalaApp/Resources/baleobala-app-control; sourceTree = "<group>"; };
 		96A100000000000000000083 /* baleobala */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ../../src/baleobala; sourceTree = "<group>"; };
+		96A100000000000000000089 /* Baleobala.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = BaleobalaApp/Resources/Baleobala.icns; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -110,6 +112,7 @@
 			children = (
 				96A100000000000000000082 /* baleobala-app-control */,
 				96A100000000000000000083 /* baleobala */,
+				96A100000000000000000089 /* Baleobala.icns */,
 			);
 			name = Resources;
 			sourceTree = "<group>";
@@ -236,6 +239,7 @@
 			files = (
 				96A100000000000000000080 /* baleobala-app-control in Resources */,
 				96A100000000000000000081 /* baleobala in Resources */,
+				96A100000000000000000088 /* Baleobala.icns in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
