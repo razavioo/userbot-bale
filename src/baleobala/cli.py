@@ -1576,8 +1576,8 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
             identity=args.identity,
         )
 
-    jwt = args.bale_jwt or os.environ.get("BALE_JWT")
-    jwt_file = args.bale_jwt_file or "/tmp/bale_jwt.txt"
+    jwt = _first_arg_value(args.bale_jwt) or os.environ.get("BALE_JWT")
+    jwt_file = _first_arg_value(args.bale_jwt_file) or "/tmp/bale_jwt.txt"
     if not jwt:
         from pathlib import Path
         jwt_path = Path(jwt_file)
@@ -1639,6 +1639,17 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
     """
     creds = _resolve_carrier_credentials(args)
     return creds.url, creds.token
+
+
+def _first_arg_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        for item in value:
+            if item:
+                return str(item)
+        return None
+    return str(value)
 
 
 def cmd_bale_call(args: argparse.Namespace) -> int:
@@ -2259,6 +2270,7 @@ def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
                     transport,
                     secret=_resolve_proxy_secret(args),
                     idle_timeout=getattr(args, "relay_idle_timeout", 60.0),
+                    max_active_connections=getattr(args, "relay_max_active_connections", 64),
                 )
                 _emit_marker("call_established")
                 _emit_marker(f"transport_selected={transport_name}")
@@ -2540,6 +2552,9 @@ def build_parser() -> argparse.ArgumentParser:
     live_target.add_argument("--callee-peer", default=None)
     live_target.add_argument("--callee-peer-name", default=None)
     vpn_live_smoke.add_argument("--topic", default="vpn")
+    vpn_live_smoke.add_argument("--datachannels", type=int, default=1)
+    vpn_live_smoke.add_argument("--rounds", type=int, default=1)
+    vpn_live_smoke.add_argument("--payload-size", type=int, default=48)
     vpn_live_smoke.add_argument("--timeout", type=float, default=90.0)
     vpn_live_smoke.add_argument(
         "--ws-ca-file",
@@ -2828,6 +2843,8 @@ def build_parser() -> argparse.ArgumentParser:
     bp_relay.add_argument("--proxy-secret-file", default=None, help="read shared proxy secret from a file")
     bp_relay.add_argument("--channels", type=int, default=1, help="number of parallel Bale calls to bond for N× speed (default: 1)")
     bp_relay.add_argument("--relay-idle-timeout", type=float, default=60.0, help="seconds before an idle relay call is recycled (default: 60)")
+    bp_relay.add_argument("--relay-max-active-connections", type=int, default=64,
+                          help="maximum concurrent upstream TCP connections on the relay")
     _add_bale_ws_tls_args(bp_relay)
     bp_relay.set_defaults(func=cmd_bale_proxy_relay)
 
@@ -2960,11 +2977,17 @@ def _run_bale_auth_login_browser(args: argparse.Namespace) -> str:
         with BaleAuthBrowser() as auth:
             auth.start_phone_auth(int(phone))
             for attempt in range(1, 4):
+                jwt = auth.current_jwt()
+                if jwt:
+                    return jwt
                 code = input("SMS code: ").strip()
                 try:
                     session = auth.validate_code(code)
                     return session.jwt
                 except Exception as e:  # noqa: BLE001
+                    jwt = auth.current_jwt()
+                    if jwt:
+                        return jwt
                     text = str(e)
                     if "expired" in text.lower():
                         raise SystemExit(

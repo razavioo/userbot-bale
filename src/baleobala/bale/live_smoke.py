@@ -48,6 +48,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="callee contact display name/username to resolve via Bale.",
     )
     ap.add_argument("--topic", default="vpn")
+    ap.add_argument("--datachannels", type=int, default=1,
+                    help="number of topic-separated DataChannels to exercise inside the same LiveKit call")
+    ap.add_argument("--rounds", type=int, default=1,
+                    help="payload roundtrips per DataChannel")
+    ap.add_argument("--payload-size", type=int, default=48,
+                    help="random payload bytes per direction")
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument(
         "--ws-ca-file",
@@ -161,30 +167,60 @@ def run_live_smoke(args: argparse.Namespace) -> int:
     callee_sess.start()
 
     try:
-        ch_a = caller_sess.data_channel(topic=args.topic, reliable=True)
-        ch_b = callee_sess.data_channel(topic=args.topic, reliable=True)
+        if args.datachannels < 1:
+            raise ValueError("--datachannels must be >= 1")
+        if args.rounds < 1:
+            raise ValueError("--rounds must be >= 1")
+        if args.payload_size < 1:
+            raise ValueError("--payload-size must be >= 1")
+
+        channel_pairs = []
+        for idx in range(args.datachannels):
+            topic = args.topic if args.datachannels == 1 else f"{args.topic}-{idx}"
+            channel_pairs.append((
+                topic,
+                caller_sess.data_channel(topic=topic, reliable=True),
+                callee_sess.data_channel(topic=topic, reliable=True),
+            ))
 
         time.sleep(1.0)
 
-        nonce = os.urandom(48)
-        msg_a = b"A->B:" + nonce
-        msg_b = b"B->A:" + hashlib.sha256(nonce).digest()
+        total_bytes = 0
+        t0 = time.monotonic()
+        for round_idx in range(args.rounds):
+            for topic, ch_a, ch_b in channel_pairs:
+                nonce = os.urandom(args.payload_size)
+                msg_a = b"A->B:" + round_idx.to_bytes(4, "big") + topic.encode() + b":" + nonce
+                msg_b = b"B->A:" + round_idx.to_bytes(4, "big") + topic.encode() + b":" + hashlib.sha256(nonce).digest()
 
-        print(f"[smoke] send caller->callee ({len(msg_a)} bytes)", flush=True)
-        ch_a.send_bytes(msg_a)
-        got_b = _wait_recv("callee", ch_b, timeout_s=args.timeout)
-        if got_b != msg_a:
-            print("[smoke] payload mismatch on caller->callee", file=sys.stderr)
-            return 6
+                print(
+                    f"[smoke] topic={topic} round={round_idx + 1}/{args.rounds} "
+                    f"send caller->callee ({len(msg_a)} bytes)",
+                    flush=True,
+                )
+                ch_a.send_bytes(msg_a)
+                got_b = _wait_recv("callee", ch_b, timeout_s=args.timeout)
+                if got_b != msg_a:
+                    print("[smoke] payload mismatch on caller->callee", file=sys.stderr)
+                    return 6
 
-        print(f"[smoke] send callee->caller ({len(msg_b)} bytes)", flush=True)
-        ch_b.send_bytes(msg_b)
-        got_a = _wait_recv("caller", ch_a, timeout_s=args.timeout)
-        if got_a != msg_b:
-            print("[smoke] payload mismatch on callee->caller", file=sys.stderr)
-            return 7
-
-        print("[smoke] PASS: real Bale call + real bidirectional DataChannel bytes")
+                print(
+                    f"[smoke] topic={topic} round={round_idx + 1}/{args.rounds} "
+                    f"send callee->caller ({len(msg_b)} bytes)",
+                    flush=True,
+                )
+                ch_b.send_bytes(msg_b)
+                got_a = _wait_recv("caller", ch_a, timeout_s=args.timeout)
+                if got_a != msg_b:
+                    print("[smoke] payload mismatch on callee->caller", file=sys.stderr)
+                    return 7
+                total_bytes += len(msg_a) + len(msg_b)
+        elapsed = max(time.monotonic() - t0, 1e-9)
+        print(
+            "[smoke] PASS: real Bale call + real bidirectional DataChannel bytes "
+            f"(datachannels={args.datachannels}, rounds={args.rounds}, "
+            f"bytes={total_bytes}, throughput={total_bytes / elapsed:.0f} B/s)"
+        )
         return 0
     finally:
         try:

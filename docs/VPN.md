@@ -158,6 +158,29 @@ baleobala tunnel exit-node-mesh \
   --answer
 ```
 
+Operational constraint: Bale allows only one stable active call per
+client account in practice. Treat this as a product invariant even
+though we have not found a public English spec for it. Server JWTs
+therefore increase the number of simultaneous users; they do not
+increase one user's throughput by bonding several calls from that same
+client account.
+
+The current safe server-pool policy is one active peer per server JWT
+while capacity exists. If server JWTs become scarce, the exit node may
+share one server JWT among a bounded number of peers:
+
+```bash
+baleobala tunnel exit-node-mesh \
+  --bale-jwt-file /etc/baleobala/accounts/server-1.jwt \
+  --bale-jwt-file /etc/baleobala/accounts/server-2.jwt \
+  --bale-jwt-file /etc/baleobala/accounts/server-3.jwt \
+  --max-peers-per-server-jwt 4 \
+  --tun vpn0 --wan eth0 \
+  --pool-cidr 10.77.0.0/16 \
+  --psk-file /etc/baleobala/vpn.psk \
+  --answer
+```
+
 Every client that rings the exit node's Bale account gets allocated
 a slot (deterministic from peer_id so reconnects are sticky). The
 shared TUN device routes outbound replies back to the correct

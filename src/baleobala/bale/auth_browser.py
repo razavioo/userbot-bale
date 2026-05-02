@@ -220,6 +220,9 @@ class BaleAuthBrowser:
             jwt = await self._async_get_jwt()
             if jwt:
                 return jwt
+            jwt = await self._maybe_complete_signup_profile()
+            if jwt:
+                return jwt
             if "login" not in page.url:
                 # Page navigated away — cookie should be there now.
                 await page.wait_for_timeout(1000)
@@ -232,6 +235,10 @@ class BaleAuthBrowser:
             err_txt = await self._check_error_text()
             if err_txt:
                 raise RuntimeError(f"Bale rejected: {err_txt}")
+
+        jwt = await self._maybe_complete_signup_profile()
+        if jwt:
+            return jwt
 
         # Diagnostic dump
         shot = f"/tmp/bale-verify-{int(__import__('time').time())}.png"
@@ -246,6 +253,46 @@ class BaleAuthBrowser:
             f"Browser auth: no access_token cookie after verification. "
             f"Screenshot: {shot}"
         )
+
+    async def _maybe_complete_signup_profile(self) -> str | None:
+        """Complete the web signup profile step for newly registered phones."""
+        import os
+
+        page = self._page
+        try:
+            name_input = page.locator(
+                "input[data-testid='textfield-single-line-input'][aria-label='نام'], "
+                "input[id='نام'], "
+                "input[placeholder*='نام']"
+            ).first
+            if await name_input.count() == 0 or not await name_input.is_visible():
+                return None
+            display_name = os.environ.get("BALE_SIGNUP_NAME", "Baleobala")
+            log.warning("Browser: completing signup profile name=%s", display_name)
+            await name_input.click(timeout=5_000)
+            await name_input.fill(display_name, timeout=5_000)
+            await name_input.dispatch_event("input")
+            await name_input.dispatch_event("change")
+            await page.wait_for_timeout(500)
+            submit = page.locator(
+                "button[aria-label='تایید و ادامه']:not([disabled]), "
+                "button[data-testid='submit-button']:not([disabled])"
+            ).first
+            await submit.wait_for(state="visible", timeout=10_000)
+            await submit.click(timeout=10_000, force=True)
+            for _ in range(25):
+                await page.wait_for_timeout(1000)
+                jwt = await self._async_get_jwt()
+                if jwt:
+                    return jwt
+                if "login" not in page.url:
+                    jwt = await self._async_get_jwt()
+                    if jwt:
+                        return jwt
+            return None
+        except Exception as e:
+            log.warning("Browser: signup profile completion failed: %s", e)
+            return None
 
     async def _check_error_text(self) -> str | None:
         """Return any visible error message on the login page, or None."""
@@ -296,6 +343,9 @@ class BaleAuthBrowser:
         jwt = self._loop.run_until_complete(self._async_validate_code(code))
         log.warning("Browser: JWT obtained, length=%d", len(jwt))
         return AuthSession(jwt=jwt, response_body=b"")
+
+    def current_jwt(self) -> str | None:
+        return self._loop.run_until_complete(self._async_get_jwt())
 
     def close(self) -> None:
         try:

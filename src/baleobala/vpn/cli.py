@@ -75,6 +75,8 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
     mx.add_argument("--identity-prefix", default="baleobala-mesh")
     mx.add_argument("--pool-cidr", default="10.77.0.0/16",
                     help="IP pool for per-client /30 allocations")
+    mx.add_argument("--max-peers-per-server-jwt", type=int, default=4,
+                    help="maximum active peers allowed to share one server JWT")
     mx.add_argument("--psk", default=None)
     mx.add_argument("--psk-file", default=None)
     mx.add_argument("--provision-timeout", type=float, default=10.0)
@@ -96,8 +98,10 @@ add_vpn_subparser = add_tunnel_subparser
 def _add_bale_creds_opts(sp: argparse.ArgumentParser, *, answer_default: bool = False) -> None:
     sp.add_argument("--livekit-url", default=None)
     sp.add_argument("--livekit-token", default=None)
-    sp.add_argument("--bale-jwt", default=None)
-    sp.add_argument("--bale-jwt-file", default=None)
+    sp.add_argument("--bale-jwt", action="append", default=None,
+                    help="Bale access_token JWT; repeat in mesh mode for an account pool")
+    sp.add_argument("--bale-jwt-file", action="append", default=None,
+                    help="file to read a Bale JWT from; repeat in mesh mode for an account pool")
     sp.add_argument("--peer-id", type=int, default=None)
     sp.add_argument("--peer", default=None,
                     help="phone number in E.164")
@@ -145,6 +149,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
 
     from .crypto import EncryptedTransport
     from .keepalive import LiveKitKeepalive
+    from .mesh.capacity import ServerJwtAllocator
     from .mesh.exit_node import MeshExitNode
     from .provisioning import MeshProvisionMessage, ProvisioningError, recv_mesh_message
     from .tun import TunDevice
@@ -164,32 +169,51 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     mesh.start()
     control = ControlService()
 
-    jwt = args.bale_jwt
-    if not jwt and args.bale_jwt_file:
-        jwt = Path(args.bale_jwt_file).read_text().strip()
-    if not jwt:
+    jwts = _resolve_bale_jwts(args)
+    if not jwts:
         raise SystemExit("--bale-jwt(-file) required in mesh mode")
 
     from .jwt_util import warn_if_near_expiry
-    warn_if_near_expiry(jwt)
+    for jwt in jwts:
+        warn_if_near_expiry(jwt)
 
-    bale = BaleApiClient(jwt=jwt)
-    bale.start()
+    bale_clients: list[BaleApiClient] = []
     sessions: list = []  # keep refs so GC doesn't tear them down
+    allocator = ServerJwtAllocator(
+        server_count=len(jwts),
+        max_peers_per_server=args.max_peers_per_server_jwt,
+    )
 
-    def on_incoming_call(event):  # type: ignore[no-untyped-def]
+    def on_incoming_call(event, account_index: int = 0):  # type: ignore[no-untyped-def]
         creds = event.credentials
         peer_id = event.peer_id
         if peer_id is None:
             print("[vpn-mesh] incoming call rejected: missing canonical peer_id",
                   file=sys.stderr)
             return
-        print(f"[vpn-mesh] incoming call → peer_id={peer_id}", file=sys.stderr)
+        print(
+            f"[vpn-mesh] incoming call → peer_id={peer_id} account={account_index}",
+            file=sys.stderr,
+        )
+        slot = allocator.join(peer_id)
+        if slot is None:
+            print(
+                f"[vpn-mesh] incoming call rejected: no server JWT capacity "
+                f"peer_id={peer_id} active={len(allocator.assignment())} "
+                f"capacity={allocator.total_capacity}",
+                file=sys.stderr,
+            )
+            return
+        print(
+            f"[vpn-mesh] server_jwt_assignment={allocator.assignment()} "
+            f"slots={[slot.peer_ids for slot in allocator.slots()]}",
+            file=sys.stderr,
+        )
 
         try:
             session = LiveKitSession(
                 url=creds.url, token=creds.token,
-                identity=f"{args.identity_prefix}-{peer_id}",
+                identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
             )
             session.start()
             LiveKitKeepalive(session, interval=20.0).start()
@@ -245,11 +269,22 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 mesh.drop_client(peer_id)
             except Exception:
                 pass
+            allocator.leave(peer_id)
             log.exception("failed to bring up client tunnel")
 
-    bale.listen_incoming_calls(on_incoming_call)
+    for account_index, jwt in enumerate(jwts):
+        bale = BaleApiClient(jwt=jwt)
+        bale.start()
+        bale.listen_incoming_calls(
+            lambda event, idx=account_index: on_incoming_call(event, idx)
+        )
+        bale_clients.append(bale)
     print(f"[vpn-mesh] up — tun={args.tun} pool={args.pool_cidr}. "
-          f"Waiting for incoming Bale calls. Ctrl-C to stop.",
+          f"accounts={len(bale_clients)} "
+          f"max_peers_per_server_jwt={args.max_peers_per_server_jwt} "
+          f"total_peer_capacity={allocator.total_capacity}. "
+          f"Waiting for incoming Bale calls. "
+          f"Ctrl-C to stop.",
           file=sys.stderr)
 
     from .runner import wait_for_signal
@@ -268,9 +303,47 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             except Exception:
                 pass
         mesh.stop()
-        bale.stop()
+        for bale in bale_clients:
+            bale.stop()
         tun.close()
     return 0
+
+
+def _resolve_bale_jwts(args: argparse.Namespace) -> list[str]:
+    """Resolve one or more Bale JWTs from repeated CLI args.
+
+    A single account can still only own one active Bale call reliably, so
+    server-side capacity should be represented as a pool of account JWTs.
+    """
+    values: list[str] = []
+    for jwt in _as_list(getattr(args, "bale_jwt", None)):
+        jwt = jwt.strip()
+        if jwt:
+            values.append(jwt)
+    for jwt_file in _as_list(getattr(args, "bale_jwt_file", None)):
+        path = Path(jwt_file).expanduser()
+        jwt = path.read_text().strip()
+        if jwt:
+            values.append(jwt)
+    return list(dict.fromkeys(values))
+
+
+def _as_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
+
+
+def _first_bale_jwt_arg(args: argparse.Namespace) -> str | None:
+    values = _as_list(getattr(args, "bale_jwt", None))
+    return values[0] if values else None
+
+
+def _first_bale_jwt_file_arg(args: argparse.Namespace) -> str | None:
+    values = _as_list(getattr(args, "bale_jwt_file", None))
+    return values[0] if values else None
 
 
 def cmd_vpn_loopback(args: argparse.Namespace) -> int:
@@ -361,10 +434,10 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
     # 2. JWT expiry warning (best-effort; no-op if creds were passed
     #    via --livekit-url/--livekit-token instead of a Bale JWT).
     from .jwt_util import warn_if_near_expiry
-    jwt = args.bale_jwt
-    if not jwt and args.bale_jwt_file:
+    jwt = _first_bale_jwt_arg(args)
+    if not jwt and _first_bale_jwt_file_arg(args):
         try:
-            jwt = Path(args.bale_jwt_file).read_text().strip()
+            jwt = Path(_first_bale_jwt_file_arg(args)).read_text().strip()
         except OSError:
             jwt = None
     if jwt:
@@ -639,9 +712,10 @@ def _build_transport_chain(name: str, session, args):  # type: ignore[no-untyped
         from .transports.rpc_transport import RpcTransport
         if args.peer_id is None:
             raise RuntimeError("rpc transport requires --peer-id")
-        jwt = args.bale_jwt
-        if not jwt and args.bale_jwt_file:
-            jwt = Path(args.bale_jwt_file).read_text().strip()
+        jwt = _first_bale_jwt_arg(args)
+        jwt_file = _first_bale_jwt_file_arg(args)
+        if not jwt and jwt_file:
+            jwt = Path(jwt_file).read_text().strip()
         if not jwt:
             raise RuntimeError("rpc transport requires --bale-jwt(-file)")
         client = BaleApiClient(jwt=jwt)
@@ -668,9 +742,10 @@ def _build_transport_chain(name: str, session, args):  # type: ignore[no-untyped
         from .transports.rpc_transport import RpcTransport
         if args.peer_id is None:
             raise RuntimeError("mtproto_rpc transport requires --peer-id")
-        jwt = args.bale_jwt
-        if not jwt and args.bale_jwt_file:
-            jwt = Path(args.bale_jwt_file).read_text().strip()
+        jwt = _first_bale_jwt_arg(args)
+        jwt_file = _first_bale_jwt_file_arg(args)
+        if not jwt and jwt_file:
+            jwt = Path(jwt_file).read_text().strip()
         client = MtprotoMessagingBackend(jwt=jwt)
         client.start()
         t = RpcTransport(client, peer_id=args.peer_id)
