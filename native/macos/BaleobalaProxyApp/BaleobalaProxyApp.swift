@@ -9,7 +9,7 @@ struct BaleobalaProxyApp: App {
     var body: some Scene {
         WindowGroup("Baleobala Proxy") {
             ContentView(controller: controller)
-                .frame(width: 360, height: 520)
+                .frame(width: 360, height: 680)
                 .onAppear {
                     appDelegate.controller = controller
                     controller.refresh()
