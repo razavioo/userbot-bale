@@ -298,6 +298,10 @@ class MainActivity : AppCompatActivity() {
                     loginLauncher.launch(Intent(this, LoginActivity::class.java))
                 }
             }
+            "callnotapproved" in lower -> Triple(
+                getString(R.string.snackbar_relay_rejected),
+                getString(R.string.action_choose),
+            ) { settingsLauncher.launch(Intent(this, SettingsActivity::class.java)) }
             "relay" in lower && "peer" in lower -> Triple(
                 getString(R.string.snackbar_relay_required),
                 getString(R.string.action_choose),
