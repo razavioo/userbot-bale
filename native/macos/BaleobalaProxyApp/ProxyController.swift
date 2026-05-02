@@ -13,7 +13,15 @@ struct ProxyState: Equatable {
     var listenHost: String = "127.0.0.1"
     var listenPort: Int = 1080
     var service: String = "Wi-Fi"
+    var relayPeerId: String = ""
     var startedAt: Date? = nil
+    /// True iff `networksetup -getsocksfirewallproxy <service>` reports
+    /// Enabled: Yes. Distinguishes "subprocess running" from "macOS
+    /// system proxy actually applied" — the UI surfaces a warning when
+    /// the two disagree.
+    var systemProxyActive: Bool = false
+    var systemProxyServer: String = ""
+    var systemProxyPort: String = ""
 
     var endpoint: String { "socks5://\(listenHost):\(listenPort)" }
 }
@@ -21,6 +29,7 @@ struct ProxyState: Equatable {
 struct ProxySettingsView: Equatable {
     var listenPort: Int = 1080
     var service: String = "Wi-Fi"
+    var relayPeerId: String = ""
     var availableServices: [String] = []
 }
 
@@ -103,8 +112,12 @@ final class ProxyController: ObservableObject {
         runCommand("proxyStop")
     }
 
-    func saveSettings(port: Int, service: String) {
-        runCommand("saveSettings", payload: ["listen_port": port, "network_service": service])
+    func saveSettings(port: Int, service: String, relayPeerId: String) {
+        runCommand("saveSettings", payload: [
+            "listen_port": port,
+            "network_service": service,
+            "relay_peer_id": relayPeerId,
+        ])
     }
 
     func stopProxyAndWait() async {
@@ -140,6 +153,10 @@ final class ProxyController: ObservableObject {
             proxy.listenHost = (proxyDict["listen_host"] as? String) ?? proxy.listenHost
             proxy.listenPort = (proxyDict["listen_port"] as? Int) ?? proxy.listenPort
             proxy.service = (proxyDict["service"] as? String) ?? proxy.service
+            proxy.relayPeerId = (proxyDict["relay_peer_id"] as? String) ?? proxy.relayPeerId
+            proxy.systemProxyActive = (proxyDict["system_proxy_active"] as? Bool) ?? false
+            proxy.systemProxyServer = (proxyDict["system_proxy_server"] as? String) ?? ""
+            proxy.systemProxyPort = (proxyDict["system_proxy_port"] as? String) ?? ""
             if let ts = proxyDict["started_at"] as? Double {
                 proxy.startedAt = Date(timeIntervalSince1970: ts)
             } else {
@@ -149,6 +166,7 @@ final class ProxyController: ObservableObject {
         if let settingsDict = result.data["settings"] as? [String: Any] {
             settings.listenPort = (settingsDict["listen_port"] as? Int) ?? settings.listenPort
             settings.service = (settingsDict["network_service"] as? String) ?? settings.service
+            settings.relayPeerId = (settingsDict["relay_peer_id"] as? String) ?? settings.relayPeerId
         }
     }
 }

@@ -99,6 +99,47 @@ def _disable_system_proxies(service: str) -> None:
         _networksetup(kind, service, "off")
 
 
+def _list_network_services() -> list[str]:
+    code, out = _networksetup("-listallnetworkservices")
+    if code != 0:
+        return []
+    services: list[str] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or line.startswith("*") or "An asterisk" in line:
+            continue
+        services.append(line)
+    return services
+
+
+def _disable_all_proxies_everywhere() -> None:
+    """Belt-and-suspenders: clear web/secureweb/SOCKS proxy on every
+    discoverable network service. Used by stopProxy so a stale or
+    misconfigured run can't leave the user with broken networking even
+    if `settings.network_service` no longer matches the active one."""
+    for svc in _list_network_services():
+        _disable_system_proxies(svc)
+
+
+def _socks_proxy_state(service: str) -> dict[str, str]:
+    """Parse `networksetup -getsocksfirewallproxy <service>` output into
+    a {Enabled, Server, Port} dict so the UI can verify the system proxy
+    really is set, not just that the subprocess is alive."""
+    code, out = _networksetup("-getsocksfirewallproxy", service)
+    info: dict[str, str] = {"Enabled": "No", "Server": "", "Port": ""}
+    if code != 0:
+        return info
+    for line in out.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key in info:
+            info[key] = value
+    return info
+
+
 def _read_pid() -> int | None:
     if not _PID_FILE.exists():
         return None
@@ -122,7 +163,13 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _kill_pid(pid: int) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    """Send SIGTERM, give the proxy ~6s to teardown its LiveKit room
+    and restore the system-proxy snapshot, then SIGKILL if it's still
+    around. The previous 2s window was too short — bale-proxy system's
+    teardown_done marker often takes 3-4s when the LiveKit thread has
+    to exit cleanly."""
+    deadlines = [(signal.SIGTERM, 60), (signal.SIGKILL, 20)]
+    for sig, ticks in deadlines:
         try:
             os.killpg(os.getpgid(pid), sig)
         except (ProcessLookupError, PermissionError):
@@ -130,7 +177,7 @@ def _kill_pid(pid: int) -> None:
                 os.kill(pid, sig)
             except ProcessLookupError:
                 return
-        for _ in range(20):
+        for _ in range(ticks):
             if not _pid_alive(pid):
                 return
             time.sleep(0.1)
@@ -215,6 +262,8 @@ def _state_payload() -> dict[str, Any]:
     settings = ProxySettings.load()
     meta = _read_meta()
     running = _proxy_running()
+    socks_state = _socks_proxy_state(settings.network_service) if running else {"Enabled": "No", "Server": "", "Port": ""}
+    system_proxy_active = socks_state.get("Enabled", "No") == "Yes"
     return {
         "auth": _auth_status(),
         "proxy": {
@@ -223,7 +272,15 @@ def _state_payload() -> dict[str, Any]:
             "listen_host": settings.listen_host,
             "listen_port": settings.listen_port,
             "service": settings.network_service,
+            "relay_peer_id": settings.relay_peer_id,
             "started_at": meta.get("started_at") if running else None,
+            # Distinguishes "subprocess alive" from "macOS networksetup
+            # actually points Wi-Fi traffic at our SOCKS listener". The
+            # UI uses this so a half-up state can't masquerade as
+            # "Connected" with no proxy applied.
+            "system_proxy_active": system_proxy_active,
+            "system_proxy_server": socks_state.get("Server", ""),
+            "system_proxy_port": socks_state.get("Port", ""),
         },
         "settings": asdict(settings),
         "log_path": str(_LOG_FILE),
@@ -378,23 +435,55 @@ def _cmd_proxy_start(payload: dict[str, Any]) -> Result:
         "started_at": time.time(),
         "cmd": cmd,
     })
-    # Give it a moment to settle so the UI status looks right.
-    time.sleep(0.5)
-    if not _pid_alive(proc.pid):
-        return Result(False, "Proxy exited immediately. Check log.", data=_state_payload())
-    return Result(True, "Proxy started.", data=_state_payload())
+    # Wait until either the macOS system proxy is verifiably set
+    # (networksetup reports Enabled: Yes) or the subprocess died. The
+    # previous 0.5s sleep + pid-alive check would happily return
+    # success while the underlying call was still being placed, then
+    # CallNotApproved a few seconds later — leaving the UI claiming
+    # "Connected" with no proxy applied.
+    deadline = time.time() + 30.0
+    last_state: dict[str, str] = {"Enabled": "No"}
+    while time.time() < deadline:
+        if not _pid_alive(proc.pid):
+            return Result(
+                False,
+                "Proxy exited before macOS proxy was applied. Check the log "
+                f"({_LOG_FILE}).",
+                data=_state_payload(),
+            )
+        last_state = _socks_proxy_state(settings.network_service)
+        if last_state.get("Enabled") == "Yes":
+            return Result(True, "Proxy started; macOS SOCKS proxy active.", data=_state_payload())
+        time.sleep(0.5)
+    # Timed out waiting for system proxy to flip on. Tear down so the
+    # caller doesn't end up with a zombie subprocess and stale PID.
+    _kill_pid(proc.pid)
+    try:
+        _PID_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    _disable_all_proxies_everywhere()
+    return Result(
+        False,
+        "Proxy started but macOS networksetup never reported Enabled: Yes "
+        "within 30 s. Check the log for CallNotApproved or transport errors.",
+        data=_state_payload(),
+    )
 
 
 def _cmd_proxy_stop(_payload: dict[str, Any]) -> Result:
     pid = _read_pid()
-    settings = ProxySettings.load()
     if pid is not None and _pid_alive(pid):
         _kill_pid(pid)
     try:
         _PID_FILE.unlink()
     except FileNotFoundError:
         pass
-    _disable_system_proxies(settings.network_service)
+    # Always sweep every network service, not just the configured one.
+    # If the user changed network_service in settings between start and
+    # stop, the original service would otherwise be left with our SOCKS
+    # proxy still wired up.
+    _disable_all_proxies_everywhere()
     _write_meta({"stopped_at": time.time()})
     return Result(True, "Proxy stopped.", data=_state_payload())
 

@@ -132,6 +132,9 @@ struct MainView: View {
     var body: some View {
         VStack(spacing: 22) {
             connectionDial
+            if controller.proxy.running && !controller.proxy.systemProxyActive {
+                halfUpWarning
+            }
             actionButton
             infoCards
         }
@@ -148,6 +151,26 @@ struct MainView: View {
             .padding(.trailing, 16)
             .padding(.top, -36)
         }
+    }
+
+    private var halfUpWarning: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tunnel up but macOS proxy is OFF")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("The subprocess is alive but networksetup -getsocksfirewallproxy reports Disabled. Apps will bypass the tunnel. Try Disconnect → Connect.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.yellow.opacity(0.12))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow.opacity(0.4), lineWidth: 1))
+        .cornerRadius(8)
     }
 
     private var connectionDial: some View {
@@ -186,15 +209,21 @@ struct MainView: View {
     }
 
     private var actionButton: some View {
-        Button {
-            controller.proxy.running ? controller.stopProxy() : controller.startProxy()
+        // Keep Disconnect/Cancel always tappable so a stuck startup
+        // (CallNotApproved, peer offline, networksetup-never-Yes) can
+        // be aborted without quitting the app.
+        let canCancel = controller.proxy.running || controller.busy
+        return Button {
+            canCancel ? controller.stopProxy() : controller.startProxy()
         } label: {
-            Text(controller.proxy.running ? "Disconnect" : "Connect")
+            Text(canCancel
+                 ? (controller.busy && !controller.proxy.running ? "Cancel" : "Disconnect")
+                 : "Connect")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(PrimaryButtonStyle(tint: controller.proxy.running ? .red : .accentColor))
-        .disabled(controller.busy)
+        .buttonStyle(PrimaryButtonStyle(tint: canCancel ? .red : .accentColor))
+        .disabled(!canCancel && controller.busy)
     }
 
     private var infoCards: some View {
@@ -206,6 +235,9 @@ struct MainView: View {
                         Button("Sign out") { controller.logout() }
                             .buttonStyle(LinkButtonStyle())
                      ))
+            InfoCard(icon: "antenna.radiowaves.left.and.right",
+                     title: "Relay peer",
+                     value: controller.proxy.relayPeerId.isEmpty ? "(not set — open Settings)" : controller.proxy.relayPeerId)
             InfoCard(icon: "network",
                      title: "Endpoint",
                      value: controller.proxy.endpoint)
@@ -231,6 +263,7 @@ struct SettingsView: View {
     @Binding var showSettings: Bool
     @State private var port: String = ""
     @State private var service: String = ""
+    @State private var relayPeerId: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -249,6 +282,14 @@ struct SettingsView: View {
             Text("Settings")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 6) {
+                FieldLabel("Relay peer ID")
+                StyledField(placeholder: "1519372475", text: $relayPeerId)
+                Text("Bale user_id of the relay/exit node you want to call. Required.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.45))
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 FieldLabel("Listen port")
@@ -272,7 +313,7 @@ struct SettingsView: View {
 
             Button {
                 let p = Int(port) ?? controller.settings.listenPort
-                controller.saveSettings(port: p, service: service)
+                controller.saveSettings(port: p, service: service, relayPeerId: relayPeerId.trimmingCharacters(in: .whitespaces))
                 withAnimation { showSettings = false }
             } label: {
                 Label("Save", systemImage: "tray.and.arrow.down.fill")
@@ -287,6 +328,7 @@ struct SettingsView: View {
         .onAppear {
             port = String(controller.settings.listenPort)
             service = controller.settings.service
+            relayPeerId = controller.settings.relayPeerId
         }
     }
 }
