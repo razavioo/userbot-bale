@@ -18,18 +18,29 @@ class BaleCarrier(
     private val transportFactory: () -> Transport,
     private val sessId: Int,
     private val onLog: (String) -> Unit,
+    /** Invoked once when the underlying tunnel emits `tunnel_dead`
+     *  (N consecutive max-retry drops with no intervening ACK). The
+     *  owner is expected to tear down + reconnect the carrier. */
+    private val onCarrierDead: (String) -> Unit = {},
 ) : Carrier {
     override var onPacketReceived: ((ByteArray) -> Unit)? = null
 
     private var transport: Transport? = null
     private var tunnel: Tunnel? = null
+    private val deadFired = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun start() {
         val tx = transportFactory()
         transport = tx
         val mtu = tx.mtu
         val t = Tunnel(tx, sessId = sessId)
-        t.addEventHandler { event, payload -> onLog("[$event] $payload") }
+        t.addEventHandler { event, payload ->
+            onLog("[$event] $payload")
+            if (event == "tunnel_dead" && deadFired.compareAndSet(false, true)) {
+                try { onCarrierDead("tunnel_dead $payload") }
+                catch (e: Throwable) { Log.e(TAG, "onCarrierDead threw", e) }
+            }
+        }
         t.start { ip ->
             try { onPacketReceived?.invoke(ip) }
             catch (e: Throwable) { Log.e(TAG, "onPacketReceived threw", e) }

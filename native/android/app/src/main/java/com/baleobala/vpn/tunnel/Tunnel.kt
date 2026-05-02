@@ -47,6 +47,16 @@ class Tunnel(
     private val seen = LinkedHashSet<Int>()
     private val seenCap = 4096
 
+    /** Consecutive frames that were dropped after exhausting retries
+     *  without any successful ACK in between. When this crosses
+     *  [deadThreshold] we emit a single `tunnel_dead` event so the
+     *  carrier can tear down + reconnect — the underlying transport
+     *  may still claim to be alive even though no packet is making
+     *  it through (LiveKit DataChannel silent failure mode). */
+    private val consecutiveDrops = java.util.concurrent.atomic.AtomicInteger(0)
+    private val deadEmitted = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val deadThreshold = 8
+
     init {
         require(sessId in 0 until VpnFraming.SESS_MODULO) { "sess_id out of range" }
     }
@@ -162,6 +172,11 @@ class Tunnel(
                 sendSlot.release()
                 emit("frame_dropped", mapOf("seq" to seq, "reason" to "max_retries"))
                 Log.w(TAG, "dropping seq=$seq after max retries")
+                val streak = consecutiveDrops.incrementAndGet()
+                if (streak >= deadThreshold && deadEmitted.compareAndSet(false, true)) {
+                    emit("tunnel_dead", mapOf("consecutive_drops" to streak))
+                    Log.w(TAG, "tunnel appears dead: $streak consecutive drops without an ACK")
+                }
             }
             for (p in toRetry) {
                 val rf = VpnFraming.Frame(
@@ -178,7 +193,13 @@ class Tunnel(
     }
 
     private fun handleAck(seq: Int) {
-        if (pending.remove(seq) != null) sendSlot.release()
+        if (pending.remove(seq) != null) {
+            sendSlot.release()
+            // Any successful ACK resets the carrier-death counter; only
+            // a true silent-stall sequence ever fires `tunnel_dead`.
+            consecutiveDrops.set(0)
+            deadEmitted.set(false)
+        }
     }
 
     private fun sendAck(seq: Int) {

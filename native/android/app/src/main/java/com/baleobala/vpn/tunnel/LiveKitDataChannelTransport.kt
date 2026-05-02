@@ -23,6 +23,15 @@ class LiveKitDataChannelTransport(
     private val topic: String = "vpn",
     private val reliable: Boolean = true,
     private val onLog: (String) -> Unit = {},
+    /**
+     * Called once when the LiveKit room transitions to Disconnected
+     * after a successful connect, OR when FailedToConnect fires post-
+     * connect. Lets the carrier owner trigger an auto-reconnect — the
+     * TUN reader/writer loops never throw on data-channel death by
+     * themselves, so without this signal a half-dead session sits
+     * dropping every ARQ frame in silence.
+     */
+    private val onDisconnected: () -> Unit = {},
 ) : Transport {
     override val mtu: Int = 14 * 1024
     override val rateHint: Int = 200_000
@@ -31,6 +40,11 @@ class LiveKitDataChannelTransport(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var room: Room? = null
     @Volatile private var closed = false
+    private val disconnectFired = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Set true after the first successful connect; gates the
+     *  onDisconnected callback so we only treat *post-connect*
+     *  disconnects as carrier death (not a failed initial dial). */
+    private val connectedOnce = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun connect(timeoutMs: Long = 30_000): LiveKitDataChannelTransport {
         val r = LiveKit.create(appContext)
@@ -47,14 +61,23 @@ class LiveKitDataChannelTransport(
                         is RoomEvent.FailedToConnect -> {
                             error = event.error
                             ready.countDown()
+                            // If we'd already connected once and then
+                            // failed to reconnect, treat it the same as
+                            // a clean Disconnected for carrier-death
+                            // purposes.
+                            if (connectedOnce.get()) fireDisconnected("FailedToConnect: ${event.error.message}")
                         }
-                        is RoomEvent.Disconnected -> onLog("LiveKit disconnected")
+                        is RoomEvent.Disconnected -> {
+                            onLog("LiveKit disconnected")
+                            fireDisconnected("RoomEvent.Disconnected")
+                        }
                         else -> {}
                     }
                 }
             }
             try {
                 r.connect(url, token)
+                connectedOnce.set(true)
                 onLog("LiveKit connected")
                 ready.countDown()
             } catch (t: Throwable) {
@@ -119,5 +142,11 @@ class LiveKitDataChannelTransport(
         try { room?.disconnect() } catch (_: Throwable) {}
         room = null
         scope.cancel()
+    }
+
+    private fun fireDisconnected(reason: String) {
+        if (closed) return
+        if (!disconnectFired.compareAndSet(false, true)) return
+        try { onDisconnected() } catch (t: Throwable) { onLog("onDisconnected handler threw: ${t.message}") }
     }
 }
