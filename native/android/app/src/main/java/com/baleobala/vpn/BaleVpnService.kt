@@ -151,6 +151,7 @@ class BaleVpnService : VpnService() {
             transportFactory = ::makeBaleTransport,
             sessId = DEFAULT_TUNNEL_SESS_ID,
             onLog = { broadcast("log", it) },
+            onCarrierDead = { reason -> handleTunnelDrop("tunnel dead: $reason") },
         )
         broadcast("log", "carrier=bale exitPeer=$exitPeerId")
         carrier?.onPacketReceived = { ip -> outQueue.offer(ip) }
@@ -189,6 +190,13 @@ class BaleVpnService : VpnService() {
             topic = "vpn",
             reliable = true,
             onLog = { broadcast("log", it) },
+            // LiveKit's data channel can go silent without throwing on
+            // any TUN-side I/O. Without this hook the carrier keeps
+            // racking up max-retry drops forever and the user sees a
+            // session that's "connected" but moves no traffic. Bouncing
+            // the tunnel triggers the same reconnect path as a TUN
+            // read/write error.
+            onDisconnected = { handleTunnelDrop("LiveKit DataChannel disconnected") },
         )
         inflightTransport = tx
         try {
