@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -90,7 +91,7 @@ class MainActivity : AppCompatActivity() {
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
         }
 
-        binding.toggleButton.setOnClickListener {
+        val toggleClick = View.OnClickListener {
             if (connected) {
                 val i = Intent(this, BaleVpnService::class.java).apply { action = BaleVpnService.ACTION_DISCONNECT }
                 ContextCompat.startForegroundService(this, i)
@@ -98,6 +99,8 @@ class MainActivity : AppCompatActivity() {
                 startVpnOrLogin()
             }
         }
+        binding.toggleButton.setOnClickListener(toggleClick)
+        binding.toggleCard.setOnClickListener(toggleClick)
 
         binding.signOutButton.setOnClickListener {
             store.clear()
@@ -192,6 +195,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (settings.exitPeerId <= 0L) {
             appendLog("relay peer ID is missing")
+            Toast.makeText(this, getString(R.string.relay_not_set), Toast.LENGTH_LONG).show()
             settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
             return
         }
