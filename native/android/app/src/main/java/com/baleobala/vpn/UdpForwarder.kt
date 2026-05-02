@@ -28,7 +28,7 @@ class UdpForwarder(
         val clientPort: Int,
         val dstAddr: InetAddress,
         val dstPort: Int,
-        val readerThread: Thread,
+        @Volatile var sawReply: Boolean = false,
     )
 
     private val flows = ConcurrentHashMap<FlowKey, Flow>()
@@ -45,8 +45,11 @@ class UdpForwarder(
     ) {
         if (!running) return
         val key = FlowKey(clientPort, dstAddr.hostAddress ?: "", dstPort)
-        val flow = flows.getOrPut(key) {
-            createFlow(clientAddr, clientPort, dstAddr, dstPort, key)
+        val flow = try {
+            flows[key] ?: createAndRegisterFlow(clientAddr, clientPort, dstAddr, dstPort, key) ?: return
+        } catch (e: IOException) {
+            Log.w(TAG, "createFlow failed for $key: ${e.message}")
+            return
         }
         try {
             val pkt = DatagramPacket(payload, offset, length, InetSocketAddress(dstAddr, dstPort))
@@ -57,59 +60,65 @@ class UdpForwarder(
         }
     }
 
-    private fun createFlow(
+    @Synchronized
+    private fun createAndRegisterFlow(
         clientAddr: InetAddress,
         clientPort: Int,
         dstAddr: InetAddress,
         dstPort: Int,
         key: FlowKey,
-    ): Flow {
+    ): Flow? {
+        flows[key]?.let { return it }
         val sock = DatagramSocket()
-        if (!protector(sock)) {
-            Log.w(TAG, "protect() failed; closing socket")
-            sock.close()
-            throw IOException("protect failed")
+        try {
+            if (!protector(sock)) {
+                Log.w(TAG, "protect() failed; closing socket")
+                throw IOException("protect failed")
+            }
+            sock.soTimeout = 8000
+            val flow = Flow(sock, clientAddr, clientPort, dstAddr, dstPort)
+            flows[key] = flow
+            Thread({ readerLoop(flow, key) }, "udpfwd-$key").apply { isDaemon = true }.start()
+            onLog("udp open $clientPort → ${dstAddr.hostAddress}:$dstPort")
+            return flow
+        } catch (t: Throwable) {
+            try { sock.close() } catch (_: Throwable) {}
+            if (t is IOException) throw t
+            throw IOException(t)
         }
-        sock.soTimeout = 8000
-        val readerThread = Thread({ readerLoop(sock, clientAddr, clientPort, dstAddr, dstPort, key) }, "udpfwd-$key").apply {
-            isDaemon = true
-            start()
-        }
-        onLog("udp open $clientPort → ${dstAddr.hostAddress}:$dstPort")
-        return Flow(sock, clientAddr, clientPort, dstAddr, dstPort, readerThread)
     }
 
     private fun readerLoop(
-        sock: DatagramSocket,
-        clientAddr: InetAddress,
-        clientPort: Int,
-        dstAddr: InetAddress,
-        dstPort: Int,
+        flow: Flow,
         key: FlowKey,
     ) {
+        val sock = flow.socket
         val buf = ByteArray(64 * 1024)
-        Log.i(TAG, "reader loop start ${dstAddr.hostAddress}:$dstPort local=${sock.localPort}")
+        Log.i(TAG, "reader loop start ${flow.dstAddr.hostAddress}:${flow.dstPort} local=${sock.localPort}")
         try {
             while (running && !sock.isClosed) {
                 val pkt = DatagramPacket(buf, buf.size)
                 try {
                     sock.receive(pkt)
                 } catch (st: java.net.SocketTimeoutException) {
-                    Log.w(TAG, "no reply within 8s for ${dstAddr.hostAddress}:$dstPort (local=${sock.localPort})")
+                    if (!flow.sawReply) {
+                        Log.w(TAG, "no reply within 8s for ${flow.dstAddr.hostAddress}:${flow.dstPort} (local=${sock.localPort})")
+                    }
                     break
                 }
+                flow.sawReply = true
                 val payload = ByteArray(pkt.length)
                 System.arraycopy(buf, 0, payload, 0, pkt.length)
                 val ipPkt = Ipv4Packet.buildUdp(
-                    srcAddr = dstAddr,
-                    srcPort = dstPort,
-                    dstAddr = clientAddr,
-                    dstPort = clientPort,
+                    srcAddr = flow.dstAddr,
+                    srcPort = flow.dstPort,
+                    dstAddr = flow.clientAddr,
+                    dstPort = flow.clientPort,
                     payload = payload,
                     payloadLen = pkt.length,
                 )
                 outQueue.offer(ipPkt)
-                Log.d(TAG, "udp reply ${dstAddr.hostAddress}:$dstPort → :$clientPort len=${pkt.length}")
+                Log.d(TAG, "udp reply ${flow.dstAddr.hostAddress}:${flow.dstPort} → :${flow.clientPort} len=${pkt.length}")
             }
         } catch (e: IOException) {
             Log.w(TAG, "reader io: ${e.message}")

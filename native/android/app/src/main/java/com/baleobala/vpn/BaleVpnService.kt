@@ -17,13 +17,13 @@ import com.baleobala.vpn.bale.AuthStore
 import com.baleobala.vpn.bale.BaleCallClient
 import com.baleobala.vpn.carrier.BaleCarrier
 import com.baleobala.vpn.carrier.Carrier
-import com.baleobala.vpn.carrier.LocalNatCarrier
 import com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
 import com.baleobala.vpn.tunnel.Transport
 import org.json.JSONObject
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -31,10 +31,9 @@ import java.util.concurrent.atomic.AtomicReference
  * Top-level VpnService. Brings up the TUN, hands packets to the configured
  * [Carrier], and writes carrier replies back to the TUN.
  *
- * Carrier choice:
- *   - If a JWT is stored, [BaleCarrier] dials the configured Bale exit peer,
- *     joins the returned LiveKit room, and moves tunnel frames over topic `vpn`.
- *   - Otherwise [LocalNatCarrier] (verified in v0).
+ * The Android app only exposes the real Bale carrier: it dials the configured
+ * exit peer, joins the returned LiveKit room, and moves tunnel frames over
+ * topic `vpn`. Local NAT remains test/dev code and is not a user-visible VPN.
  */
 class BaleVpnService : VpnService() {
 
@@ -47,6 +46,7 @@ class BaleVpnService : VpnService() {
     private var writerThread: Thread? = null
     private var statsThread: Thread? = null
     private var carrier: Carrier? = null
+    private var exitPeerId: Long = 0L
     private val outQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(1024)
 
     private val pktsOut = AtomicLong(0)
@@ -71,7 +71,7 @@ class BaleVpnService : VpnService() {
     }
 
     private fun detectCarrier(): String {
-        return if (AuthStore(this).jwt() != null) CARRIER_BALE else CARRIER_LOCAL
+        return CARRIER_BALE
     }
 
     private fun startTunnelAsync(carrierKind: String) {
@@ -94,15 +94,33 @@ class BaleVpnService : VpnService() {
 
     private fun startTunnel(carrierKind: String) {
         if (running) return
+        resetStats()
+        outQueue.clear()
+        if (carrierKind != CARRIER_BALE) {
+            broadcast("error", "Local NAT is disabled. Baleobala must use a real Bale tunnel.")
+            updateNotification("Not connected")
+            stopSelf()
+            return
+        }
+        if (AuthStore(this).jwt() == null) {
+            broadcast("error", "Sign in to Bale before connecting the system VPN.")
+            updateNotification("Sign in required")
+            stopSelf()
+            return
+        }
+        exitPeerId = AppSettings(this).exitPeerId
+        if (exitPeerId <= 0L) {
+            broadcast("error", "Set a Bale relay peer ID before connecting.")
+            updateNotification("Relay required")
+            stopSelf()
+            return
+        }
         val builder = Builder()
             .setSession("Baleobala VPN")
             .setMtu(1400)
             .addAddress("10.77.0.2", 24)
             .addRoute("0.0.0.0", 0)
-            .addDnsServer("185.51.200.2")    // 403.online — verified working
-            .addDnsServer("192.168.100.1")   // local router fallback
-            .addDnsServer("178.22.122.100")  // Shecan (may be blocked)
-            .addDnsServer("185.143.232.120") // ArvanCloud (may be blocked)
+        dnsServers().forEach { builder.addDnsServer(it) }
         try { builder.addDisallowedApplication(packageName) } catch (_: Throwable) {}
 
         val fd = builder.establish()
@@ -113,27 +131,12 @@ class BaleVpnService : VpnService() {
         tunFd = fd
         running = true
 
-        val protector = object : Carrier.Protector {
-            override fun protect(socket: DatagramSocket): Boolean = this@BaleVpnService.protect(socket)
-            override fun protect(socket: java.net.Socket): Boolean = this@BaleVpnService.protect(socket)
-            override fun bindToUnderlying(socket: DatagramSocket): Boolean = bindToUnderlyingNetwork(socket)
-            override fun bindToUnderlying(socket: java.net.Socket): Boolean = bindToUnderlyingNetwork(socket)
-        }
-
-        carrier = when (carrierKind) {
-            CARRIER_BALE -> {
-                broadcast("log", "carrier=bale exitPeer=$DEFAULT_EXIT_PEER_ID")
-                BaleCarrier(
-                    transportFactory = ::makeBaleTransport,
-                    sessId = DEFAULT_TUNNEL_SESS_ID,
-                    onLog = { broadcast("log", it) },
-                )
-            }
-            else -> {
-                broadcast("log", "carrier=local-nat")
-                LocalNatCarrier(protector = protector, onLog = { broadcast("log", it) })
-            }
-        }
+        carrier = BaleCarrier(
+            transportFactory = ::makeBaleTransport,
+            sessId = DEFAULT_TUNNEL_SESS_ID,
+            onLog = { broadcast("log", it) },
+        )
+        broadcast("log", "carrier=bale exitPeer=$exitPeerId")
         carrier?.onPacketReceived = { ip -> outQueue.offer(ip) }
 
         try { carrier?.start() } catch (e: Throwable) {
@@ -155,7 +158,7 @@ class BaleVpnService : VpnService() {
     private fun makeBaleTransport(): Transport {
         val jwt = AuthStore(this).jwt() ?: throw IllegalStateException("no Bale JWT stored")
         val creds = BaleCallClient(jwt = jwt, onLog = { broadcast("log", it) })
-            .startCall(peerId = DEFAULT_EXIT_PEER_ID)
+            .startCall(peerId = exitPeerId)
         broadcast("log", "joining LiveKit room=${creds.room.ifEmpty { "(unknown)" }}")
         return LiveKitDataChannelTransport(
             appContext = applicationContext,
@@ -168,35 +171,38 @@ class BaleVpnService : VpnService() {
     }
 
     private fun readerLoop(fd: ParcelFileDescriptor) {
-        val input = FileInputStream(fd.fileDescriptor)
-        val buf = ByteArray(32767)
-        while (running) {
-            try {
-                val n = input.read(buf)
-                if (n <= 0) { Thread.sleep(5); continue }
-                pktsIn.incrementAndGet()
-                bytesIn.addAndGet(n.toLong())
-                carrier?.submitPacket(buf, n)
-            } catch (t: Throwable) {
-                if (running) Log.w(TAG, "reader: ${t.message}")
-                break
+        FileInputStream(fd.fileDescriptor).use { input ->
+            val buf = ByteArray(32767)
+            while (running) {
+                try {
+                    val n = input.read(buf)
+                    if (n <= 0) { Thread.sleep(5); continue }
+                    pktsIn.incrementAndGet()
+                    bytesIn.addAndGet(n.toLong())
+                    carrier?.submitPacket(buf, n)
+                } catch (t: Throwable) {
+                    if (running) Log.w(TAG, "reader: ${t.message}")
+                    if (running) handleTunnelDrop("reader stopped: ${t.message}")
+                    break
+                }
             }
         }
     }
 
     private fun writerLoop(fd: ParcelFileDescriptor) {
-        val output = FileOutputStream(fd.fileDescriptor)
-        while (running) {
-            try {
-                val pkt = outQueue.take()
-                output.write(pkt)
-                output.flush()
-                pktsOut.incrementAndGet()
-                bytesOut.addAndGet(pkt.size.toLong())
-            } catch (_: InterruptedException) { break }
-            catch (t: Throwable) {
-                if (running) Log.w(TAG, "writer: ${t.message}")
-                break
+        FileOutputStream(fd.fileDescriptor).use { output ->
+            while (running) {
+                try {
+                    val pkt = outQueue.take()
+                    output.write(pkt)
+                    pktsOut.incrementAndGet()
+                    bytesOut.addAndGet(pkt.size.toLong())
+                } catch (_: InterruptedException) { break }
+                catch (t: Throwable) {
+                    if (running) Log.w(TAG, "writer: ${t.message}")
+                    if (running) handleTunnelDrop("writer stopped: ${t.message}")
+                    break
+                }
             }
         }
     }
@@ -209,13 +215,78 @@ class BaleVpnService : VpnService() {
         try { readerThread?.interrupt() } catch (_: Throwable) {}
         try { writerThread?.interrupt() } catch (_: Throwable) {}
         try { statsThread?.interrupt() } catch (_: Throwable) {}
+        // Close tunFd before joining so blocking reads/writes unblock.
         try { tunFd?.close() } catch (_: Throwable) {}
+        joinQuietly(readerThread)
+        joinQuietly(writerThread)
+        joinQuietly(statsThread)
+        joinQuietly(startupThread)
+        outQueue.clear()
         tunFd = null
         startupThread = null
+        readerThread = null
+        writerThread = null
+        statsThread = null
         carrier = null
         broadcastSnapshot("disconnected")
         broadcast("log", "tun down. out=${pktsOut.get()}")
     }
+
+    private fun handleTunnelDrop(reason: String) {
+        lastError.set(reason)
+        broadcast("error", reason)
+        if (!AppSettings(this).autoReconnectAfterDrop) {
+            stopTunnel()
+            stopSelf()
+            return
+        }
+        val mode = carrierKind
+        Thread({
+            stopTunnel()
+            Thread.sleep(1500)
+            startTunnelAsync(mode)
+        }, "vpn-reconnect").apply { isDaemon = true; start() }
+    }
+
+    private fun resetStats() {
+        pktsOut.set(0)
+        pktsIn.set(0)
+        bytesOut.set(0)
+        bytesIn.set(0)
+        startedAt.set(0)
+        lastError.set("")
+    }
+
+    private fun dnsServers(): List<String> {
+        val primary = AppSettings(this).primaryDns.trim()
+        val candidates = buildList {
+            addAll(underlyingDnsServers())
+            if (isIpv4Literal(primary)) add(primary)
+            addAll(FALLBACK_DNS)
+        }
+        return candidates.distinct()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun underlyingDnsServers(): List<String> {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        return cm.allNetworks
+            .asSequence()
+            .filter { network ->
+                val caps = cm.getNetworkCapabilities(network) ?: return@filter false
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            }
+            .flatMap { network ->
+                cm.getLinkProperties(network)?.dnsServers.orEmpty().asSequence()
+            }
+            .filterIsInstance<Inet4Address>()
+            .mapNotNull { it.hostAddress }
+            .filter { it.isNotBlank() }
+            .toList()
+    }
+
+    private fun isIpv4Literal(value: String): Boolean = Companion.isIpv4Literal(value)
 
     private fun statsLoop() {
         while (running) {
@@ -230,11 +301,17 @@ class BaleVpnService : VpnService() {
         }
     }
 
+    private fun joinQuietly(t: Thread?, timeoutMs: Long = 500) {
+        if (t == null || t === Thread.currentThread() || !t.isAlive) return
+        try { t.join(timeoutMs) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+    }
+
     override fun onDestroy() {
         stopTunnel()
         super.onDestroy()
     }
 
+    @Suppress("DEPRECATION")
     private fun underlyingNetwork(): android.net.Network? {
         val cm = getSystemService(ConnectivityManager::class.java)
         return cm.allNetworks.firstOrNull { n ->
@@ -268,7 +345,7 @@ class BaleVpnService : VpnService() {
             bindToUnderlyingNetwork(sock)
             broadcast("log", "selftest: protect=$protected_ localPort=${sock.localPort}")
             sock.soTimeout = 4000
-            for (server in listOf("192.168.100.1", "1.1.1.1", "8.8.8.8")) {
+            for (server in dnsServers()) {
                 try {
                     val target = java.net.InetAddress.getByName(server)
                     sock.send(java.net.DatagramPacket(query, query.size, target, 53))
@@ -352,7 +429,15 @@ class BaleVpnService : VpnService() {
         const val CARRIER_LOCAL = "local-nat"
         const val CARRIER_BALE = "bale"
         const val CARRIER_AUTO = "auto"
-        const val DEFAULT_EXIT_PEER_ID = 423217348L
         const val DEFAULT_TUNNEL_SESS_ID = 0x1111
+        internal val FALLBACK_DNS = listOf("185.51.200.2", "1.1.1.1", "8.8.8.8")
+
+        internal fun isIpv4Literal(value: String): Boolean {
+            val parts = value.split(".")
+            return parts.size == 4 && parts.all { part ->
+                val n = part.toIntOrNull()
+                part.isNotEmpty() && part.length <= 3 && part.all(Char::isDigit) && n != null && n in 0..255
+            }
+        }
     }
 }
