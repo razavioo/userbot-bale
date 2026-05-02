@@ -136,7 +136,34 @@ class AuthStore:
             secret_name=self._secret_name,
         )
         self.save(record)
+        self._export_to_accounts(jwt)
         return record
+
+    def _export_to_accounts(self, jwt: str) -> None:
+        import re
+        from pathlib import Path
+        
+        accounts_dir = Path.home() / ".baleobala" / "accounts"
+        accounts_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Check if this exact JWT is already saved to avoid duplicates
+        for f in accounts_dir.glob("account-*.jwt"):
+            try:
+                if f.read_text(encoding="utf-8").strip() == jwt.strip():
+                    return
+            except OSError:
+                pass
+
+        max_num = 0
+        for f in accounts_dir.glob("account-*.jwt"):
+            m = re.search(r'account-(\d+)\.jwt', f.name)
+            if m:
+                num = int(m.group(1))
+                if num > max_num:
+                    max_num = num
+                    
+        target_file = accounts_dir / f"account-{max_num + 1}.jwt"
+        target_file.write_text(jwt.strip() + "\n", encoding="utf-8")
 
     def clear(self) -> None:
         self._secret_backend.delete(self._secret_name)
