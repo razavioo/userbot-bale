@@ -282,17 +282,21 @@ def test_bale_proxy_system_surfaces_prelisten_server_error(monkeypatch) -> None:
     assert events[-2:] == ["server.stop", "transport.close"]
 
 
-def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch) -> None:
+def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch, tmp_path) -> None:
     import baleobala.bale as bale_pkg
     import baleobala.cli as cli
     import baleobala.bale.api as bale_api
     import baleobala.vpn.keepalive as keepalive_mod
 
     topics: list[str] = []
+    jwts: list[str | None] = []
+    jwt_file = tmp_path / "client_jwt.txt"
+    jwt_file.write_text("jwt-from-home\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
 
     class FakeClient:
         def __init__(self, **kwargs):  # noqa: ANN001
-            pass
+            jwts.append(kwargs.get("jwt"))
 
         def start(self) -> None:
             pass
@@ -349,8 +353,8 @@ def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch) -> N
     monkeypatch.setattr(cli, "LIVEKIT_SETTLE_DELAY", 0.0, raising=False)
 
     args = argparse.Namespace(
-        bale_jwt="jwt",
-        bale_jwt_file=None,
+        bale_jwt=None,
+        bale_jwt_file="~/client_jwt.txt",
         peer_id=123,
         answer=False,
         creds_timeout=1.0,
@@ -363,6 +367,7 @@ def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch) -> N
     _name, transport = cli._open_bonded_proxy_transport(args, object(), 4)
     try:
         assert topics == ["vpn"]
+        assert jwts == ["jwt-from-home"]
     finally:
         transport.close()
 
