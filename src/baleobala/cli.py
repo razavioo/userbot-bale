@@ -276,7 +276,13 @@ def _read_required_bale_jwt(args: argparse.Namespace, *, default_file: str = "/t
     if jwt:
         return jwt.strip()
 
-    jwt_file = getattr(args, "bale_jwt_file", None) or default_file
+    # `bale-jwt-file` is declared with action="append" in some
+    # subcommands (vpn/cli.py) and as a plain string in others, so the
+    # value can arrive as either a list or a str. Normalize.
+    raw = getattr(args, "bale_jwt_file", None)
+    if isinstance(raw, list):
+        raw = next((v for v in raw if v), None)
+    jwt_file = raw or default_file
     jwt_path = Path(jwt_file).expanduser()
     if not jwt_path.exists():
         raise RuntimeError(f"Bale JWT file not found: {jwt_path}")
