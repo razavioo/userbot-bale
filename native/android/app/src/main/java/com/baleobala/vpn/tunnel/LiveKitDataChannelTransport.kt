@@ -33,6 +33,12 @@ class LiveKitDataChannelTransport(
      */
     private val onDisconnected: () -> Unit = {},
 ) : Transport {
+    // MUST match the python LiveKit transport's MTU constant
+    // (src/baleobala/bale/livekit_backend.py::MTU). When the two ends
+    // disagree, the side with the larger MTU silently emits frames the
+    // other can't receive and the only symptom is the tunnel-dead
+    // counter ticking up in one direction. 14 KiB is the conservative
+    // value that's been live-tested through Bale's SFU.
     override val mtu: Int = 14 * 1024
     override val rateHint: Int = 200_000
 

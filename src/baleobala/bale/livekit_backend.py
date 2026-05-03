@@ -776,9 +776,18 @@ class LiveKitDataChannel:
     historically been around 15 KiB. We expose a conservative 14 KiB
     MTU here; the tunnel core splits larger IP packets into frames that
     fit.
+
+    NOTE: this MUST match the Android client's
+    LiveKitDataChannelTransport.mtu (native/android/.../tunnel/
+    LiveKitDataChannelTransport.kt). When the two ends disagree, the
+    side with the larger MTU silently emits frames the other can't
+    receive — the symptom is "tunnel up + traffic in one direction +
+    tunnel_dead in 8 frames in the other". A previous bump from 14 K
+    to 32 K here (without touching the Android constant) was exactly
+    that footgun, so keep them locked together.
     """
 
-    MTU = 32 * 1024
+    MTU = 14 * 1024
     RATE_HINT = 200_000.0  # bytes/s; realistic over Bale's SFU
 
     def __init__(
