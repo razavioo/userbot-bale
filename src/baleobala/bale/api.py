@@ -100,10 +100,11 @@ class BaleApiClient:
         self._seen_rids: set[int] = set()
         self._seen_rids_order: list[int] = []
         self._seen_rids_lock = threading.Lock()
-        # Tracks the callId of the last UpdateCallReceived we auto-
-        # accepted so we don't fire AcceptCall twice for the same call
-        # (the server often re-sends the same update several times).
-        self._accepted_call_id: int | None = None
+        # Tracks callIds we've already tried to auto-accept. Bale often
+        # re-sends the same update several times, and GetDiff may also
+        # replay stale call updates on a fresh WS. Keep a set instead of
+        # one "last" id so one stale timeout cannot hide the next live call.
+        self._accepted_call_ids: set[int] = set()
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -468,12 +469,17 @@ class BaleApiClient:
             log.info("received call credentials: room=%s", creds.room)
             self._deliver_creds(creds)
         else:
-            call_id = parse_update_call_received(resp.raw)
+            # Prefer the compact live offer that contains room/url context.
+            # Broad UpdateCallReceived scans over GetDiff history can surface
+            # stale callIds; accepting those times out and makes the Android
+            # caller join a room alone until tunnel_dead fires.
+            call_id = parse_incoming_call_offer(resp.raw)
+            call_source = "compact-offer" if call_id is not None else "update"
             if call_id is None:
-                call_id = parse_incoming_call_offer(resp.raw)
-            if call_id is not None and call_id != self._accepted_call_id:
-                log.info("incoming call received: callId=%d; auto-accepting", call_id)
-                self._accepted_call_id = call_id
+                call_id = parse_update_call_received(resp.raw)
+            if call_id is not None and call_id not in self._accepted_call_ids:
+                log.info("incoming call received: callId=%d source=%s; auto-accepting", call_id, call_source)
+                self._accepted_call_ids.add(call_id)
                 # Cannot block the WS recv loop on an RPC. Spawn a short
                 # thread that issues AcceptCall and feeds the resulting
                 # credentials back into the same delivery path.
