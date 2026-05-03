@@ -62,7 +62,19 @@ class LiveKitDataChannelTransport(
                 r.events.collect { event ->
                     when (event) {
                         is RoomEvent.DataReceived -> {
-                            if (event.topic == topic || event.topic == null) inbox.offer(event.data)
+                            // Bale/LiveKit sits between two different SDKs
+                            // (python livekit-rtc on the exit node, Android
+                            // SDK on the handset). In live testing the room is
+                            // dedicated to one VPN session, while the reported
+                            // DataReceived topic is not a contract we can trust
+                            // across SDK versions. If we filter too tightly here
+                            // both sides can publish successfully but neither
+                            // tunnel ever sees a frame, producing symmetric
+                            // seq=0..N max-retry drops and tunnel_dead loops.
+                            if (event.topic != null && event.topic != topic) {
+                                onLog("LiveKit data topic=${event.topic}; accepting in VPN room")
+                            }
+                            inbox.offer(event.data)
                         }
                         is RoomEvent.FailedToConnect -> {
                             error = event.error

@@ -336,6 +336,15 @@ class LiveKitSession:
             topic = packet.topic or ""
             with self._data_lock:
                 q = self._data_queues.get(topic)
+                if q is None and len(self._data_queues) == 1:
+                    # This LiveKit room is dedicated to one VPN tunnel, but
+                    # topic propagation differs across SDK versions/SFU paths.
+                    # Android and python can both successfully publish while
+                    # the receiver reports an empty/different topic; strict
+                    # filtering then drops every frame before the tunnel can
+                    # ACK it, causing symmetric seq=0 max-retry loops. If a
+                    # single data channel is registered, route the packet there.
+                    _, q = next(iter(self._data_queues.items()))
             if q is not None:
                 q.put(bytes(packet.data))
             else:
