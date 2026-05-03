@@ -157,7 +157,7 @@ class LinuxTunSession:
                     # works — once configure() installs split-default routes
                     # and rewrites DNS to 1.1.1.1/9.9.9.9 over vpn0, any
                     # subsequent hostname resolution would be black-holed.
-                    self._resolver.add_bypass_host("next-ws.bale.ai")
+                    self._add_bypass_host_best_effort("next-ws.bale.ai")
                     # Bypass the configured tunnel DNS servers and the
                     # system resolver's current upstreams so name resolution
                     # keeps working after the tunnel captures default
@@ -165,10 +165,10 @@ class LinuxTunSession:
                     # (resolved by the runtime thread *after* configure())
                     # cannot be looked up.
                     for dns_ip in self.plan.dns_servers:
-                        self._resolver.add_bypass_host(dns_ip)
+                        self._add_bypass_host_best_effort(dns_ip)
                     for dns_ip in self._current_system_dns():
                         try:
-                            self._resolver.add_bypass_host(dns_ip)
+                            self._add_bypass_host_best_effort(dns_ip)
                         except Exception:
                             pass
                     self._resolver.configure(
@@ -222,6 +222,16 @@ class LinuxTunSession:
         if last_error is not None:
             raise last_error
         raise RuntimeError("no usable Linux TUN interface name was available")
+
+    def _add_bypass_host_best_effort(self, host: str) -> None:
+        try:
+            self._resolver.add_bypass_host(host)
+        except Exception:
+            # The carrier bypass is important for production, but it must not
+            # block startup in test or offline environments where DNS
+            # resolution is unavailable yet the tunnel itself is otherwise
+            # usable.
+            pass
 
     def stop(self) -> None:
         if not self._snapshot.active:

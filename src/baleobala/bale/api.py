@@ -513,7 +513,7 @@ class BaleApiClient:
         try:
             log.info("sending AcceptCall callId=%d", call_id)
             payload = encode_accept_call(call_id, invite_enable=True)
-            resp = self._ws.rpc(MEET_SERVICE, ACCEPT_CALL_METHOD, payload, timeout=15.0)
+            resp = self._ws.rpc(MEET_SERVICE, ACCEPT_CALL_METHOD, payload, timeout=45.0)
             log.info("AcceptCall ack: seq=%s payload=%dB", resp.seq, len(resp.payload))
             creds = parse_call_credentials(resp.raw)
             if creds is None:

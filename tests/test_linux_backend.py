@@ -97,6 +97,26 @@ def test_linux_tun_session_creates_and_teardown(tmp_path: Path) -> None:
     assert any(c[:4] == ["ip", "tuntap", "del", "dev"] for c in runner.calls)
 
 
+def test_linux_tun_session_ignores_best_effort_bypass_resolution_failures(tmp_path: Path) -> None:
+    runner = FakeRunner(has_resolvectl=True)
+
+    class FailingResolver(NullResolver):
+        def add_bypass_host(self, hostname: str) -> None:  # noqa: ARG002
+            raise RuntimeError("dns lookup failed")
+
+    session = LinuxTunSession(
+        plan=TunPlan(name="vpntest", address="10.77.0.2/24", routes=("0.0.0.0/1",), dns_servers=("1.1.1.1",)),
+        state_path=tmp_path / "s.json",
+        runner=runner,
+        resolver=FailingResolver(),
+        tun_opener=lambda name: object(),
+    )
+    session.start()
+    assert session.active
+    session.stop()
+    assert not session.active
+
+
 def test_linux_tun_session_raises_without_device_or_privs(tmp_path: Path) -> None:
     class DenyingRunner(FakeRunner):
         def __call__(self, cmd, check=False, capture_output=True, text=True):  # noqa: ARG002
