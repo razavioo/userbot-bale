@@ -105,6 +105,14 @@ class Tunnel:
         self._idle_timeout = idle_timeout
         self._last_rx_at = time.monotonic()
         self._idle_emitted = False
+        # Carrier-death detection: count consecutive max-retry drops with
+        # no successful ACK in between. After `dead_threshold` we emit a
+        # one-shot `tunnel_dead` event so the supervisor can tear the
+        # session down + restart, instead of looping forever in a half-
+        # dead LiveKit DataChannel that's silently failing every send.
+        self._consecutive_drops = 0
+        self._dead_emitted = False
+        self._dead_threshold = 8
 
         self._seq_next = 0
         self._pending: dict[int, _Pending] = {}
@@ -249,6 +257,21 @@ class Tunnel:
                 self._send_slot.release()
                 log.warning("vpn: dropping seq=%d after max retries", seq)
                 self._emit("frame_dropped", seq=seq, reason="max_retries")
+                self._consecutive_drops += 1
+                if (
+                    self._consecutive_drops >= self._dead_threshold
+                    and not self._dead_emitted
+                ):
+                    self._dead_emitted = True
+                    log.warning(
+                        "vpn: tunnel appears dead — %d consecutive drops "
+                        "without an ACK; supervisor should rebuild the carrier",
+                        self._consecutive_drops,
+                    )
+                    self._emit(
+                        "tunnel_dead",
+                        consecutive_drops=self._consecutive_drops,
+                    )
             stale_starts = [
                 start
                 for start, pkt in list(self._rx_buf.items())
@@ -296,6 +319,10 @@ class Tunnel:
             if self._pending.pop(seq, None) is None:
                 return
         self._send_slot.release()
+        # Any successful ACK resets the carrier-death counter so only
+        # a true silent-stall sequence ever fires `tunnel_dead`.
+        self._consecutive_drops = 0
+        self._dead_emitted = False
 
     def _send_ack(self, seq: int) -> None:
         ack = VpnFrame(

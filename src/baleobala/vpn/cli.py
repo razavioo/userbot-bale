@@ -484,6 +484,26 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
         )
         runner = VpnRunner(tun, transport, cfg)
         runner.start()
+
+        # When the tunnel emits `tunnel_dead` (8 consecutive max-retry
+        # drops with no ACK), tear the whole session down and exit the
+        # process so systemd brings up a fresh listener with a fresh WS
+        # session — staying alive on a dead carrier is what produced the
+        # "VPS thinks tunnel_up but Android sees no traffic" symptom.
+        import threading as _threading
+        carrier_dead = _threading.Event()
+
+        def _on_runner_event(event: str, payload: dict) -> None:  # type: ignore[no-untyped-def]
+            if event == "tunnel_dead" and not carrier_dead.is_set():
+                carrier_dead.set()
+                print(
+                    f"[tunnel] carrier dead (consecutive_drops="
+                    f"{payload.get('consecutive_drops', '?')}); exiting for restart",
+                    file=sys.stderr, flush=True,
+                )
+
+        runner.add_event_handler(_on_runner_event)
+
         controller = FailoverController(
             runner,
             chain,
@@ -503,7 +523,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
               f"Ctrl-C to stop; transport failover is automatic.",
               file=sys.stderr)
         try:
-            _wait_for_signal_or_carrier_dead(session)
+            _wait_for_signal_or_carrier_dead(session, extra_event=carrier_dead)
         finally:
             controller.stop()
             runner.stop()
@@ -519,17 +539,28 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
     return 0
 
 
-def _wait_for_signal_or_carrier_dead(session) -> None:  # type: ignore[no-untyped-def]
-    """Block until SIGINT/SIGTERM, the LiveKit session terminates, or the
-    call goes silent. The dead-carrier exit lets systemd restart the
-    process so a stale call doesn't hold the Bale account hostage and
-    block subsequent inbound calls.
+def _wait_for_signal_or_carrier_dead(session, *, extra_event=None) -> None:  # type: ignore[no-untyped-def]
+    """Block until SIGINT/SIGTERM, the LiveKit session terminates, the
+    call goes silent, or `extra_event` is set. The dead-carrier exit
+    lets systemd restart the process so a stale call doesn't hold the
+    Bale account hostage and block subsequent inbound calls.
+
+    `extra_event` is a `threading.Event` set by the caller when its own
+    death-detection logic fires (e.g. the tunnel-level `tunnel_dead`
+    emitter). LiveKit's session.is_terminal() lags badly on silent
+    DataChannel failures, so this gives us a faster path out.
     """
     import signal
     import threading
     import time
 
     ev = threading.Event()
+    if extra_event is not None:
+        # Bridge the tunnel's event into our wait Event.
+        def _watch_extra() -> None:
+            extra_event.wait()
+            ev.set()
+        threading.Thread(target=_watch_extra, daemon=True, name="tunnel-dead-watch").start()
 
     def _signal_handler(signum, frame):  # type: ignore[no-untyped-def]
         ev.set()
