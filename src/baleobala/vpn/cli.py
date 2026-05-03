@@ -217,7 +217,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             )
             session.start()
             LiveKitKeepalive(session, interval=20.0).start()
-            dc = DataChannelTransport(session, topic="vpn", reliable=True)
+            dc = DataChannelTransport(session, topic="vpn", reliable=False)
             transport = EncryptedTransport(dc, psk_key) if psk_key else dc
             sess_id = (0x1111 + peer_id) & 0xFFFF
             record = control.issue_mesh_assignment(
@@ -725,7 +725,7 @@ def _build_transport_chain(name: str, session, args):  # type: ignore[no-untyped
 
     def dc():
         from .transports.datachannel_transport import DataChannelTransport
-        return maybe_encrypt(DataChannelTransport(session, topic="vpn", reliable=True))
+        return maybe_encrypt(DataChannelTransport(session, topic="vpn", reliable=False))
     dc._mtu_hint = 14 * 1024 - (OVERHEAD if psk_key else 0)  # type: ignore[attr-defined]
 
     def audio():

@@ -194,7 +194,11 @@ class BaleVpnService : VpnService() {
             url = creds.url,
             token = creds.token,
             topic = "vpn",
-            reliable = true,
+            // Let the tunnel's own ARQ provide reliability. Bale's LiveKit
+            // SFU has repeatedly accepted reliable publishData calls while
+            // delivering no DataReceived events to the peer, which leaves
+            // both ends in seq=0..N max-retry/tunnel_dead loops.
+            reliable = false,
             onLog = { broadcast("log", it) },
             // LiveKit's data channel can go silent without throwing on
             // any TUN-side I/O. Without this hook the carrier keeps
