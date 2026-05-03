@@ -37,11 +37,15 @@ ExecStart=${INSTALL_DIR}/.venv/bin/baleobala tunnel exit-node \\
     --transport dc \\
     --answer \\
     --answer-timeout 86400
-Restart=on-failure
+# Restart=always (NOT on-failure): the python tunnel exits with status
+# 0 on every clean carrier-dead detection (see _wait_for_signal_or_
+# carrier_dead). on-failure would treat that as a healthy stop and
+# wedge the service in `inactive`, leaving the next inbound Bale call
+# to dead silence. We always want the listener back.
+Restart=always
 # Each accepted call runs exactly once and then exits for a clean
-# restart (see src/baleobala/vpn/cli.py::_wait_for_signal_or_carrier_dead).
-# Keeping RestartSec low keeps the gap between sessions small so a
-# client toggling the VPN off/on doesn't fire a Bale call into a
+# restart. Keeping RestartSec low keeps the gap between sessions small
+# so a client toggling the VPN off/on doesn't fire a Bale call into a
 # closed window.
 RestartSec=3
 StandardOutput=journal
