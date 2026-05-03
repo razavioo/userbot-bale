@@ -1909,6 +1909,14 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
     session.start()
     keepalive = LiveKitKeepalive(session, interval=10.0)
     keepalive.start()
+    peer_timeout = float(getattr(args, "peer_ready_timeout", 30.0))
+    try:
+        session.wait_for_remote_participant(timeout=peer_timeout)
+        _emit_marker("livekit_peer_ready")
+    except Exception:
+        keepalive.stop()
+        session.stop()
+        raise
     if not hasattr(args, "psk"):
         args.psk = None
     if not hasattr(args, "psk_file"):
@@ -1997,11 +2005,16 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     session.start()
     keepalive = LiveKitKeepalive(session, interval=10.0)
     keepalive.start()
+    peer_timeout = float(getattr(args, "peer_ready_timeout", 30.0))
+    try:
+        session.wait_for_remote_participant(timeout=peer_timeout)
+        _emit_marker("livekit_peer_ready")
+    except Exception:
+        keepalive.stop()
+        session.stop()
+        raise
 
-    # Allow tracks to settle.
-    time.sleep(1.0)
-
-    bonded = BondedTransport.from_sessions([session], topic="vpn", reliable=True)
+    bonded = BondedTransport.from_sessions([session], topic="vpn", reliable=False)
     _emit_marker(
         f"bonded_transport_ready channels={n_channels} effective_channels=1 "
         f"rate_hint={bonded.rate_hint:.0f}"

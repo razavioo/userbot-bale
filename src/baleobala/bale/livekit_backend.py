@@ -114,6 +114,7 @@ class LiveKitSession:
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._stopped = threading.Event()
+        self._peer_ready = threading.Event()
         self._state_lock = threading.Lock()
         self._state = LiveKitSessionState.NEW
         self._terminal_error: BaseException | None = None
@@ -176,6 +177,27 @@ class LiveKitSession:
 
     def add_terminal_observer(self, observer: Callable[[BaseException | None], None]) -> None:
         self._terminal_observers.append(observer)
+
+    def wait_for_remote_participant(self, timeout: float = 30.0) -> None:
+        """Block until at least one remote participant is present.
+
+        Bale returns caller-side LiveKit credentials before the callee has
+        always completed AcceptCall + room join. Starting a TUN/proxy before
+        the peer joins means the first burst of packets has no receiver and
+        trips tunnel liveness. This mirrors the Android guard that waits for
+        RoomEvent.ParticipantConnected before bringing the VPN up.
+        """
+        if self._room is not None:
+            try:
+                participants = getattr(self._room, "remote_participants", None)
+                if participants:
+                    self._peer_ready.set()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._peer_ready.wait(timeout=timeout):
+            return
+        self._raise_if_not_operational("remote participant did not join")
+        raise TimeoutError(f"remote participant did not join within {timeout:.1f}s")
 
     def start(self) -> None:
         _require_livekit()
@@ -336,19 +358,23 @@ class LiveKitSession:
             topic = packet.topic or ""
             with self._data_lock:
                 q = self._data_queues.get(topic)
-                if q is None and len(self._data_queues) == 1:
+                if q is None and topic == "" and len(self._data_queues) == 1:
                     # This LiveKit room is dedicated to one VPN tunnel, but
-                    # topic propagation differs across SDK versions/SFU paths.
-                    # Android and python can both successfully publish while
-                    # the receiver reports an empty/different topic; strict
-                    # filtering then drops every frame before the tunnel can
-                    # ACK it, causing symmetric seq=0 max-retry loops. If a
-                    # single data channel is registered, route the packet there.
+                    # some SDK/SFU paths report an empty topic. Route only
+                    # empty-topic data to the sole registered channel; explicit
+                    # non-VPN topics such as keepalive/failover-control must
+                    # not be fed into the VPN frame decoder.
                     _, q = next(iter(self._data_queues.items()))
             if q is not None:
                 q.put(bytes(packet.data))
             else:
                 log.debug("data on unhandled topic=%r (%d bytes)", topic, len(packet.data))
+
+        @room.on("participant_connected")  # type: ignore[misc]
+        def on_participant_connected(participant):  # type: ignore[no-untyped-def]
+            identity = getattr(participant, "identity", "?")
+            log.info("LiveKit remote participant connected: identity=%s", identity)
+            self._peer_ready.set()
 
         @room.on("disconnected")  # type: ignore[misc]
         def on_disconnected(reason=None):  # type: ignore[no-untyped-def]
@@ -378,6 +404,11 @@ class LiveKitSession:
         await room.connect(self.url, self.token)
         log.info("LiveKit room connected: %s identity=%s",
                  room.name, self.identity)
+        try:
+            if getattr(room, "remote_participants", None):
+                self._peer_ready.set()
+        except Exception:  # noqa: BLE001
+            pass
 
         source = rtc.AudioSource(LIVEKIT_SAMPLE_RATE, 1)
         self._audio_source = source

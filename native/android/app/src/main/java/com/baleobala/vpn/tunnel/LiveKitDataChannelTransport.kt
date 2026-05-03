@@ -81,7 +81,8 @@ class LiveKitDataChannelTransport(
                             // tunnel ever sees a frame, producing symmetric
                             // seq=0..N max-retry drops and tunnel_dead loops.
                             if (event.topic != null && event.topic != topic) {
-                                onLog("LiveKit data topic=${event.topic}; accepting in VPN room")
+                                onLog("LiveKit data topic=${event.topic}; ignoring non-VPN payload")
+                                return@collect
                             }
                             inbox.offer(event.data)
                         }
