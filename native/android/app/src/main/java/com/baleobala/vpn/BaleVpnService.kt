@@ -24,6 +24,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramSocket
 import java.net.Inet4Address
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -58,9 +60,13 @@ class BaleVpnService : VpnService() {
     private val bytesIn = AtomicLong(0)
     private val startedAt = AtomicLong(0)
     private val lastError = AtomicReference("")
+    private val reconnecting = AtomicBoolean(false)
+    private val reconnectAttempt = AtomicInteger(0)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_DISCONNECT) {
+            reconnectAttempt.set(0)
+            reconnecting.set(false)
             stopTunnel()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -287,10 +293,17 @@ class BaleVpnService : VpnService() {
             stopSelf()
             return
         }
+        if (!reconnecting.compareAndSet(false, true)) return
         val mode = carrierKind
+        val uptimeMs = System.currentTimeMillis() - startedAt.get()
+        if (uptimeMs > RECONNECT_STABLE_RESET_MS) reconnectAttempt.set(0)
+        val attempt = reconnectAttempt.incrementAndGet()
+        val delayMs = minOf(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * (1L shl minOf(attempt - 1, 4)))
         Thread({
             stopTunnel()
-            Thread.sleep(1500)
+            try { Thread.sleep(delayMs) } catch (_: InterruptedException) {}
+            reconnecting.set(false)
+            broadcast("log", "reconnect attempt=$attempt delay=${delayMs}ms")
             startTunnelAsync(mode)
         }, "vpn-reconnect").apply { isDaemon = true; start() }
     }
@@ -545,6 +558,9 @@ class BaleVpnService : VpnService() {
         // as a clear error instead of an ~2-minute spinner.
         private const val STARTCALL_TIMEOUT_MS = 30_000L
         private const val LIVEKIT_TIMEOUT_MS = 20_000L
+        private const val RECONNECT_BASE_DELAY_MS = 3_000L
+        private const val RECONNECT_MAX_DELAY_MS = 30_000L
+        private const val RECONNECT_STABLE_RESET_MS = 60_000L
         internal val FALLBACK_DNS = listOf("185.51.200.2", "1.1.1.1", "8.8.8.8")
 
         internal fun isIpv4Literal(value: String): Boolean {
