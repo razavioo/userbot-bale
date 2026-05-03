@@ -358,6 +358,15 @@ class LiveKitSession:
             )
             self._stopped.set()
 
+        @room.on("participant_disconnected")  # type: ignore[misc]
+        def on_participant_disconnected(participant):  # type: ignore[no-untyped-def]
+            identity = getattr(participant, "identity", "?")
+            log.warning("LiveKit remote participant disconnected: identity=%s", identity)
+            self._set_terminal_failure(
+                RuntimeError(f"LiveKit remote participant disconnected: {identity}")
+            )
+            self._stopped.set()
+
         @room.on("reconnecting")  # type: ignore[misc]
         def on_reconnecting():  # type: ignore[no-untyped-def]
             log.warning("LiveKit room reconnecting...")
