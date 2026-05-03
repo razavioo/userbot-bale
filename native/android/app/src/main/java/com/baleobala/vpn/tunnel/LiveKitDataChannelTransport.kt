@@ -56,11 +56,20 @@ class LiveKitDataChannelTransport(
         val r = LiveKit.create(appContext)
         room = r
         val ready = java.util.concurrent.CountDownLatch(1)
+        val peerReady = java.util.concurrent.CountDownLatch(1)
         var error: Throwable? = null
         scope.launch {
             launch {
                 r.events.collect { event ->
                     when (event) {
+                        is RoomEvent.ParticipantConnected -> {
+                            onLog("LiveKit remote participant connected: ${event.participant.identity}")
+                            peerReady.countDown()
+                        }
+                        is RoomEvent.ParticipantDisconnected -> {
+                            onLog("LiveKit remote participant disconnected: ${event.participant.identity}")
+                            if (connectedOnce.get()) fireDisconnected("ParticipantDisconnected: ${event.participant.identity}")
+                        }
                         is RoomEvent.DataReceived -> {
                             // Bale/LiveKit sits between two different SDKs
                             // (python livekit-rtc on the exit node, Android
@@ -86,7 +95,7 @@ class LiveKitDataChannelTransport(
                             if (connectedOnce.get()) fireDisconnected("FailedToConnect: ${event.error.message}")
                         }
                         is RoomEvent.Disconnected -> {
-                            onLog("LiveKit disconnected")
+                            onLog("LiveKit disconnected reason=${event.reason} error=${event.error?.message}")
                             fireDisconnected("RoomEvent.Disconnected")
                         }
                         else -> {}
@@ -96,7 +105,8 @@ class LiveKitDataChannelTransport(
             try {
                 r.connect(url, token)
                 connectedOnce.set(true)
-                onLog("LiveKit connected")
+                if (r.remoteParticipants.isNotEmpty()) peerReady.countDown()
+                onLog("LiveKit connected; remoteParticipants=${r.remoteParticipants.size}")
                 ready.countDown()
             } catch (t: Throwable) {
                 error = t
@@ -111,6 +121,11 @@ class LiveKitDataChannelTransport(
             close()
             throw RuntimeException("LiveKit connect failed: ${it.message}", it)
         }
+        if (!peerReady.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+            close()
+            throw RuntimeException("LiveKit peer did not join within ${timeoutMs}ms")
+        }
+        onLog("LiveKit peer ready")
         return this
     }
 
