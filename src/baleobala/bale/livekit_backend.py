@@ -610,7 +610,7 @@ class LiveKitSession:
             ),
         )
         try:
-            fut.result(timeout=5)
+            fut.result(timeout=15)
         except Exception:  # noqa: BLE001
             log.exception("publish_data failed (topic=%s, %d bytes)", topic, len(payload))
 
