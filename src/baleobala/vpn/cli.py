@@ -454,6 +454,8 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
 
     session = LiveKitSession(url=url, token=token, identity=args.identity)
     session.start()
+    peer_timeout = float(getattr(args, "peer_ready_timeout", 30.0))
+    session.wait_for_remote_participant(timeout=peer_timeout)
 
     keepalive = LiveKitKeepalive(session, interval=20.0)
     keepalive.start()
