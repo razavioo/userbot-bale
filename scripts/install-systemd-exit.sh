@@ -17,6 +17,9 @@ cat > /etc/systemd/system/baleobala-exit.service << EOF
 Description=baleobala VPN Exit Node
 After=network-online.target
 Wants=network-online.target
+# Exit-node exits after each call; defaults (5 restarts / 10s) mark the unit
+# failed during rapid client toggles. 0 disables start-rate limiting.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
