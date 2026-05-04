@@ -105,6 +105,10 @@ class BaleApiClient:
         # replay stale call updates on a fresh WS. Keep a set instead of
         # one "last" id so one stale timeout cannot hide the next live call.
         self._accepted_call_ids: set[int] = set()
+        # When True, _dispatch_update will NOT auto-accept incoming calls.
+        # Used when the Bale WS is kept alive purely for signalling
+        # stability (e.g. the proxy client after credentials are obtained).
+        self.suppress_auto_accept: bool = False
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -477,7 +481,7 @@ class BaleApiClient:
             call_source = "compact-offer" if call_id is not None else "update"
             if call_id is None:
                 call_id = parse_update_call_received(resp.raw)
-            if call_id is not None and call_id not in self._accepted_call_ids:
+            if call_id is not None and call_id not in self._accepted_call_ids and not self.suppress_auto_accept:
                 log.info("incoming call received: callId=%d source=%s; auto-accepting", call_id, call_source)
                 self._accepted_call_ids.add(call_id)
                 # Cannot block the WS recv loop on an RPC. Spawn a short

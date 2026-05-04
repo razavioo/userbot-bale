@@ -60,6 +60,11 @@ class BaleVPNApp:
             "peer_id": os.environ.get("BALE_PROXY_PEER_ID", "423217348"),
             "port": int(os.environ.get("BALE_PROXY_PORT", "1080")),
             "transport": os.environ.get("BALE_PROXY_TRANSPORT", "dc"),
+            "mode": os.environ.get("BALE_GUI_MODE", "proxy"),
+            "profile_id": os.environ.get("BALE_VPN_PROFILE_ID", ""),
+            "tun_name": os.environ.get("BALE_TUN_NAME", "vpn0"),
+            "tun_addr": os.environ.get("BALE_TUN_ADDR", "10.77.0.2/24"),
+            "tun_mtu": int(os.environ.get("BALE_TUN_MTU", "1400")),
             "jwt_path": os.environ.get(
                 "BALE_PROXY_JWT_PATH",
                 str(fallback_secret),
@@ -100,6 +105,40 @@ class BaleVPNApp:
 
         self.main_container = tk.Frame(self.root, bg=BG_COLOR)
         self.main_container.pack(fill="both", expand=True, padx=24)
+
+        mode_row = tk.Frame(self.main_container, bg=BG_COLOR)
+        mode_row.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            mode_row,
+            text="Mode",
+            bg=BG_COLOR,
+            fg=TEXT_MUTED,
+            font=("SF Pro Text", 10, "bold"),
+        ).pack(side="left")
+        self.mode_var = tk.StringVar(value=str(self.settings.get("mode", "proxy")))
+        self.mode_menu = tk.OptionMenu(
+            mode_row,
+            self.mode_var,
+            "proxy",
+            "tunnel",
+            command=self._on_mode_changed,
+        )
+        self.mode_menu.config(
+            bg=BUTTON_DIM,
+            fg=TEXT_COLOR,
+            activebackground=BUTTON_DIM,
+            activeforeground=TEXT_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            font=("SF Pro Text", 10),
+        )
+        self.mode_menu["menu"].config(
+            bg=BUTTON_DIM,
+            fg=TEXT_COLOR,
+            activebackground=ACCENT_COLOR,
+            activeforeground=TEXT_COLOR,
+        )
+        self.mode_menu.pack(side="right")
 
         self.status_icon = tk.Label(
             self.main_container,
@@ -176,9 +215,27 @@ class BaleVPNApp:
         return val_label
     
     def _refresh_cards(self):
-        self.card_peer.config(text=str(self.settings.get("peer_id") or "-"))
-        self.card_endpoint.config(text=f"{self.settings.get('listen_host', '127.0.0.1')}:{self.settings.get('port', 1080)}")
-        self.card_transport.config(text=str(self.settings.get("transport") or "dc"))
+        mode = str(self.settings.get("mode", "proxy"))
+        if mode == "proxy":
+            self.card_peer.config(text=str(self.settings.get("peer_id") or "-"))
+            self.card_endpoint.config(text=f"{self.settings.get('listen_host', '127.0.0.1')}:{self.settings.get('port', 1080)}")
+            self.card_transport.config(text=f"proxy/{self.settings.get('transport') or 'dc'}")
+        else:
+            self.card_peer.config(text=str(self.settings.get("profile_id") or "active-profile"))
+            self.card_endpoint.config(text="vpn0 (linux-tun)")
+            self.card_transport.config(text="tunnel/linux-tun")
+    
+    def _on_mode_changed(self, selected):
+        if self.phase in {"connecting", "connected"}:
+            self.status_bar.config(text="Disconnect current session before switching mode.")
+            self.mode_var.set(str(self.settings.get("mode", "proxy")))
+            return
+        self.settings["mode"] = str(selected)
+        self._refresh_cards()
+        if selected == "proxy":
+            self.status_bar.config(text="Proxy mode selected.")
+        else:
+            self.status_bar.config(text="Tunnel mode selected.")
 
     def _update_loop(self):
         if self.phase == "connected" and self.started_at:
@@ -261,7 +318,7 @@ class BaleVPNApp:
         else:
             self.stop_proxy()
 
-    def _build_command(self):
+    def _build_proxy_command(self):
         cli_bin = os.environ.get("BALEOBALA_BIN")
         if cli_bin:
             prefix = shlex.split(cli_bin)
@@ -293,6 +350,43 @@ class BaleVPNApp:
         if psk:
             cmd.extend(["--proxy-secret", psk])
         return cmd
+    
+    def _build_tunnel_command(self):
+        cli_bin = os.environ.get("BALEOBALA_BIN")
+        if cli_bin:
+            prefix = shlex.split(cli_bin)
+        else:
+            venv_cli = Path(__file__).resolve().parent / ".venv" / "bin" / "baleobala"
+            system_cli = shutil.which("baleobala")
+            if venv_cli.exists():
+                prefix = [str(venv_cli)]
+            elif system_cli:
+                prefix = [system_cli]
+            else:
+                prefix = [os.environ.get("PYTHON", "python3"), "-m", "baleobala.cli"]
+        cmd = [
+            *prefix,
+            "tunnel",
+            "up",
+            "--bale-jwt-file",
+            str(self.settings["jwt_path"]),
+            "--peer-id",
+            str(self.settings["peer_id"]),
+            "--tun",
+            str(self.settings.get("tun_name", "vpn0")),
+            "--tun-addr",
+            str(self.settings.get("tun_addr", "10.77.0.2/24")),
+            "--tun-mtu",
+            str(self.settings.get("tun_mtu", 1400)),
+            "--transport",
+            str(self.settings["transport"]),
+            "--identity",
+            "baleobala-vpn-gui",
+        ]
+        psk = str(self.settings.get("psk") or "").strip()
+        if psk:
+            cmd.extend(["--psk", psk])
+        return cmd
 
     def _command_env(self):
         env = os.environ.copy()
@@ -303,23 +397,38 @@ class BaleVPNApp:
         return env
 
     def start_proxy(self):
-        peer_id = str(self.settings.get("peer_id", "")).strip()
-        jwt_path = Path(str(self.settings.get("jwt_path", ""))).expanduser()
-        if not peer_id:
-            self.status_bar.config(text="peer_id is empty. Set BALE_PROXY_PEER_ID or config file.")
-            self.phase = "unhealthy"
-            return
-        if not jwt_path.exists():
-            self.status_bar.config(text=f"JWT file not found: {jwt_path}")
-            self.phase = "unhealthy"
-            return
-        self.settings["jwt_path"] = str(jwt_path)
-        cmd = self._build_command()
+        mode = str(self.settings.get("mode", "proxy"))
+        if mode == "proxy":
+            peer_id = str(self.settings.get("peer_id", "")).strip()
+            jwt_path = Path(str(self.settings.get("jwt_path", ""))).expanduser()
+            if not peer_id:
+                self.status_bar.config(text="peer_id is empty. Set BALE_PROXY_PEER_ID or config file.")
+                self.phase = "unhealthy"
+                return
+            if not jwt_path.exists():
+                self.status_bar.config(text=f"JWT file not found: {jwt_path}")
+                self.phase = "unhealthy"
+                return
+            self.settings["jwt_path"] = str(jwt_path)
+            cmd = self._build_proxy_command()
+        else:
+            peer_id = str(self.settings.get("peer_id", "")).strip()
+            jwt_path = Path(str(self.settings.get("jwt_path", ""))).expanduser()
+            if not peer_id:
+                self.status_bar.config(text="peer_id is empty. Tunnel mode requires peer_id.")
+                self.phase = "unhealthy"
+                return
+            if not jwt_path.exists():
+                self.status_bar.config(text=f"JWT file not found: {jwt_path}")
+                self.phase = "unhealthy"
+                return
+            self.settings["jwt_path"] = str(jwt_path)
+            cmd = self._build_tunnel_command()
         self.phase = "connecting"
         self.connecting_started_at = time.time()
         self.connected_marker_seen = False
         self.last_runtime_line = ""
-        self.status_bar.config(text="Dialing relay...")
+        self.status_bar.config(text="Dialing relay..." if mode == "proxy" else "Bringing linux-tun up...")
         self.card_health.config(text="Waiting for relay")
         def run_proc():
             try:
@@ -337,6 +446,10 @@ class BaleVPNApp:
                         continue
                     self.last_runtime_line = line
                     if "proxy_listening" in line:
+                        self.root.after(0, self.on_connected)
+                    if "linux-tun backend active" in line:
+                        self.root.after(0, self.on_connected)
+                    if "tunnel_up=" in line:
                         self.root.after(0, self.on_connected)
                     if "call_established" in line:
                         self.connected_marker_seen = True
@@ -367,8 +480,11 @@ class BaleVPNApp:
         self.phase = "connected"
         self.connecting_started_at = None
         self.started_at = time.time()
-        self.set_system_proxy(True)
-        self.status_bar.config(text="SOCKS proxy enabled for this desktop session.")
+        if str(self.settings.get("mode", "proxy")) == "proxy":
+            self.set_system_proxy(True)
+            self.status_bar.config(text="SOCKS proxy enabled for this desktop session.")
+        else:
+            self.status_bar.config(text="linux-tun connected (system tunnel active).")
 
     def on_disconnected(self, code):
         with self._lock:
@@ -376,7 +492,8 @@ class BaleVPNApp:
         self.phase = "disconnected"
         self.connecting_started_at = None
         self.started_at = None
-        self.set_system_proxy(False)
+        if str(self.settings.get("mode", "proxy")) == "proxy":
+            self.set_system_proxy(False)
         if previous_phase == "connecting" and code != 0:
             self.phase = "unhealthy"
             detail = self.last_runtime_line or "no runtime details"
