@@ -1659,6 +1659,88 @@ def _resolve_livekit_credentials(args: argparse.Namespace) -> tuple[str, str]:
     return creds.url, creds.token
 
 
+def _resolve_livekit_credentials_keep_alive(
+    args: argparse.Namespace,
+    out_client_holder: list,
+) -> tuple[str, str]:
+    """Like _resolve_livekit_credentials, but keeps the Bale WebSocket
+    alive so the signalling layer doesn't tear down the call.
+
+    When Bale credentials are used (not explicit ``--livekit-url``), the
+    ``BaleApiClient`` is appended to *out_client_holder* instead of being
+    stopped.  The caller is responsible for stopping it later.
+    """
+    from baleobala.carrier.bale import CarrierCredentials
+
+    if getattr(args, "livekit_url", None) and getattr(args, "livekit_token", None):
+        return args.livekit_url, args.livekit_token
+
+    try:
+        jwt = _read_required_bale_jwt(args)
+    except RuntimeError as exc:
+        raise SystemExit(
+            "Need either --livekit-url/--livekit-token OR a readable Bale JWT "
+            f"(--bale-jwt, BALE_JWT, or --bale-jwt-file): {exc}"
+        ) from exc
+
+    from baleobala.bale.api import BaleApiClient
+    from baleobala.bale.ws_client import WsTlsConfig
+
+    ws_tls_config = WsTlsConfig.from_sources(
+        ca_file=getattr(args, "ws_ca_file", None),
+        ca_path=getattr(args, "ws_ca_path", None),
+        insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
+        allow_insecure_debug=True,
+    )
+    client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+    
+    is_answer = getattr(args, "answer", False)
+    
+    # Suppress auto-accept for the caller. Without this, Bale pushes the 
+    # callee's acceptance back to the caller, the caller auto-accepts it too, 
+    # and the resulting duplicate LiveKit session kicks the server out with 
+    # DuplicateIdentity.
+    # We must NOT suppress it for the callee (is_answer=True) because the 
+    # callee needs to auto-accept the incoming call to get credentials!
+    if not is_answer:
+        client.suppress_auto_accept = True
+    
+    client.start()
+    try:
+        peer_id = getattr(args, "peer_id", None)
+        if peer_id is not None:
+            creds_timeout = float(getattr(args, "creds_timeout", 45.0))
+            creds = client.fetch_livekit_credentials(peer_id, creds_timeout=creds_timeout)
+        elif is_answer:
+            import threading as _thr
+            print(
+                "[bale-call] listening for incoming call. Ask the caller to ring you now. (Ctrl-C to abort.)",
+                file=sys.stderr,
+            )
+            answer_timeout = float(getattr(args, "answer_timeout", 120.0))
+            got = _thr.Event()
+            holder: list = []
+
+            def _on_creds(event, _h=holder, _g=got):  # noqa: ANN001
+                if not _h:
+                    _h.append(event.credentials)
+                    _g.set()
+
+            client.listen_incoming_calls(_on_creds)
+            if not got.wait(timeout=answer_timeout):
+                raise TimeoutError(f"no incoming call within {answer_timeout}s")
+            creds = holder[0]
+        else:
+            raise SystemExit("Need --peer-id or --answer for proxy transport.")
+    except Exception:
+        client.stop()
+        raise
+
+    # Hand the live client back to the caller so the Bale WS stays up.
+    out_client_holder.append(client)
+    return creds.url, creds.token
+
+
 def _first_arg_value(value: object) -> str | None:
     if value is None:
         return None
@@ -1904,9 +1986,23 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
     from baleobala.vpn.cli import _build_transport_chain
     from baleobala.vpn.keepalive import LiveKitKeepalive
 
-    url, token = _resolve_livekit_credentials(args)
-    session = LiveKitSession(url=url, token=token, identity=args.identity)
-    session.start()
+    # Resolve LiveKit credentials while keeping the Bale WS connection
+    # alive.  Bale tears down the LiveKit room when the signalling WS
+    # disconnects, so we must hold the BaleApiClient open for the
+    # entire duration of the proxy session.
+    bale_client = None  # will hold the BaleApiClient if we created one
+    url, token = _resolve_livekit_credentials_keep_alive(args, out_client_holder := [])
+    if out_client_holder:
+        bale_client = out_client_holder[0]
+
+    identity = f"{args.identity}-{role.value}" if args.identity == "baleobala" else args.identity
+    session = LiveKitSession(url=url, token=token, identity=identity)
+    try:
+        session.start()
+    except Exception:
+        if bale_client is not None:
+            bale_client.stop()
+        raise
     keepalive = LiveKitKeepalive(session, interval=10.0)
     keepalive.start()
     peer_timeout = float(getattr(args, "peer_ready_timeout", 30.0))
@@ -1916,6 +2012,8 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
     except Exception:
         keepalive.stop()
         session.stop()
+        if bale_client is not None:
+            bale_client.stop()
         raise
     if not hasattr(args, "psk"):
         args.psk = None
@@ -1929,6 +2027,8 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
     except Exception:
         keepalive.stop()
         session.stop()
+        if bale_client is not None:
+            bale_client.stop()
         raise
 
     def cleanup() -> None:
@@ -1937,6 +2037,8 @@ def _open_single_proxy_transport(args: argparse.Namespace, role):  # noqa: ANN00
         finally:
             keepalive.stop()
             session.stop()
+            if bale_client is not None:
+                bale_client.stop()
 
     return transport_name, _ProxyTransportAdapter(transport, cleanup=cleanup)
 
@@ -2001,7 +2103,8 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     else:  # pragma: no cover - loop either breaks or raises
         raise RuntimeError("bonded transport credential resolution failed")
 
-    session = LiveKitSession(url=creds.url, token=creds.token, identity=args.identity)
+    identity = f"{args.identity}-client" if args.identity == "baleobala" else args.identity
+    session = LiveKitSession(url=creds.url, token=creds.token, identity=identity)
     session.start()
     keepalive = LiveKitKeepalive(session, interval=10.0)
     keepalive.start()
