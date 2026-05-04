@@ -316,7 +316,11 @@ class _CoordinationChannel:
     def send(self, payload: dict[str, str]) -> None:
         if self._transport is None:
             return
-        self._transport.send_bytes(json.dumps(payload, sort_keys=True).encode("utf-8"))
+        try:
+            self._transport.send_bytes(json.dumps(payload, sort_keys=True).encode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            # Peer disconnect races with failover coordination; avoid traceback spam.
+            log.debug("coordination send skipped: %s", exc)
 
     def _run(self) -> None:
         while not self._stop.is_set():
