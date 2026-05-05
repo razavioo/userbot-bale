@@ -51,13 +51,31 @@ class BaleAuth(
             ?: throw RuntimeException("no transaction_hash — call startPhoneAuth() first")
         val req = BaleProtos.encodeSignUp(transactionHash = tx, name = name)
         val resp = client.unary(BaleProtos.AUTH_SERVICE, "SignUp", req)
-        val jwt = GrpcWebClient.extractAccessToken(resp.setCookies)
-            ?: BaleProtos.parseJwt(resp.body)
-            ?: throw RuntimeException(
-                "SignUp succeeded but no JWT in response (body=${resp.body.size}B). " +
-                "Hex (first 160B): " + resp.body.take(160).joinToString("") { String.format("%02x", it) }
-            )
-        Log.i(TAG, "SignUp OK; JWT length=${jwt.length}")
+        var jwt = GrpcWebClient.extractAccessToken(resp.setCookies)
+        var path = "cookie"
+        if (jwt == null) {
+            jwt = BaleProtos.parseJwt(resp.body)
+            if (jwt != null) path = "body-regex"
+        }
+        // Bale's SignUp may not include a JWT directly — fall back to GetJWTToken
+        // (same pattern as ValidateCode, confirmed from web.bale.ai source).
+        if (jwt == null) {
+            val userId = BaleProtos.parseUserIdFromAuth(resp.body)
+            Log.w(TAG, "No JWT in SignUp response; calling GetJWTToken (user_id=$userId)")
+            try {
+                if (userId != null) client.setUserId(userId)
+                val jwtResp = client.unary(BaleProtos.AUTH_SERVICE, "GetJWTToken", BaleProtos.encodeGetJWTToken())
+                jwt = BaleProtos.parseJwt(jwtResp.body)
+                if (jwt != null) path = "GetJWTToken"
+            } catch (e: Throwable) {
+                Log.w(TAG, "GetJWTToken after SignUp failed: ${e.message}")
+            }
+        }
+        if (jwt == null) throw RuntimeException(
+            "SignUp succeeded but no JWT in response (body=${resp.body.size}B). " +
+            "Hex: " + resp.body.take(128).joinToString("") { String.format("%02x", it) }
+        )
+        Log.i(TAG, "SignUp OK via $path; JWT length=${jwt.length}")
         return AuthSession(jwt = jwt, responseBody = resp.body)
     }
 
