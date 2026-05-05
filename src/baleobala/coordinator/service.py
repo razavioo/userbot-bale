@@ -44,7 +44,7 @@ from baleobala.coordinator.transport import CoordinatorTransport, IncomingCall
 log = logging.getLogger(__name__)
 
 
-DEFAULT_HELLO_TIMEOUT = 5.0
+DEFAULT_HELLO_TIMEOUT = 15.0
 DEFAULT_EXPECT_TIMEOUT = 5.0
 DEFAULT_SESSION_EXPIRES_SECS = 30
 

@@ -160,17 +160,44 @@ class CoordinatorReporter:
             )
             return
 
+        import time as _time
         session = LiveKitSession(
             url=creds.url,
             token=creds.token,
             identity=f"{self._identity}-{msg.kind.lower()}",
         )
         try:
-            session.start()
-            session.wait_for_remote_participant(timeout=REMOTE_JOIN_TIMEOUT)
+            try:
+                session.start()
+            except RuntimeError as exc:
+                # "LiveKit remote participant disconnected" during startup means
+                # the coordinator joined the room, received our message (or sent
+                # before we could), and hung up before our session finished
+                # starting. This is expected for the fast coordinator path.
+                # Treat it as best-effort success and log at INFO level.
+                log.info(
+                    "coord-reporter: session startup race for kind=%s relay=%s: %s "
+                    "(coordinator may have received the message already)",
+                    msg.kind, self._relay_id, exc,
+                )
+                return
+
+            # Wait briefly for coordinator to join the room before sending.
+            # We use wait_for_remote_participant with a generous timeout; if it
+            # times out (coordinator left already), treat as best-effort.
+            try:
+                session.wait_for_remote_participant(timeout=REMOTE_JOIN_TIMEOUT)
+            except (TimeoutError, RuntimeError):
+                log.info(
+                    "coord-reporter: coordinator not present in room for kind=%s relay=%s; "
+                    "will retry on next heartbeat", msg.kind, self._relay_id,
+                )
+                return
+
             ch = session.data_channel(topic=CONTROL_TOPIC, reliable=True)
             ch.send_bytes(encode(msg))
-            # No reply expected for event messages
+            # Give LiveKit a moment to flush the data frame before we stop.
+            _time.sleep(0.5)
             log.info("coord-reporter: sent kind=%s for relay=%s", msg.kind, self._relay_id)
         except Exception:  # noqa: BLE001
             log.exception(

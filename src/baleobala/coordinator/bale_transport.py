@@ -214,7 +214,17 @@ class BaleCoordinatorTransport(CoordinatorTransport):
         try:
             session = LiveKitSession(url=creds.url, token=creds.token, identity=identity)
             session.start()
-            session.wait_for_remote_participant(timeout=REMOTE_JOIN_TIMEOUT)
+            # For relay event messages, the relay (caller) may join and leave
+            # quickly. Don't fail if we can't wait for the remote; instead
+            # proceed and try to read whatever data arrived. If the relay
+            # already sent and disconnected, recv will return None (timeout).
+            try:
+                session.wait_for_remote_participant(timeout=REMOTE_JOIN_TIMEOUT)
+            except (TimeoutError, RuntimeError) as exc:
+                log.info(
+                    "coordinator: remote did not stay in room for peer=%d: %s — "
+                    "proceeding to read any data already in channel", peer_id, exc,
+                )
         except Exception:  # noqa: BLE001
             log.exception("coordinator: failed to bring up inbound session for peer=%d", peer_id)
             return
