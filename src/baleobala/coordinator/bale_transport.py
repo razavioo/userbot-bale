@@ -214,6 +214,10 @@ class BaleCoordinatorTransport(CoordinatorTransport):
         try:
             session = LiveKitSession(url=creds.url, token=creds.token, identity=identity)
             session.start()
+            # Register the "control" data channel queue BEFORE waiting for the
+            # remote participant. The caller (client or relay) may send a message
+            # the instant they join; registering early ensures we don't drop it.
+            call = BaleIncomingCall(peer_id=peer_id, session=session, topic=CONTROL_TOPIC)
             # For relay event messages, the relay (caller) may join and leave
             # quickly. Don't fail if we can't wait for the remote; instead
             # proceed and try to read whatever data arrived. If the relay
@@ -227,15 +231,6 @@ class BaleCoordinatorTransport(CoordinatorTransport):
                 )
         except Exception:  # noqa: BLE001
             log.exception("coordinator: failed to bring up inbound session for peer=%d", peer_id)
-            return
-        try:
-            call = BaleIncomingCall(peer_id=peer_id, session=session, topic=CONTROL_TOPIC)
-        except Exception:  # noqa: BLE001
-            log.exception("coordinator: failed to create incoming call wrapper")
-            try:
-                session.stop()
-            except Exception:
-                pass
             return
         if self._on_call is None:
             log.warning("coordinator: received call but no listener; hanging up")
