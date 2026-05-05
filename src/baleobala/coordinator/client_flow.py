@@ -107,7 +107,7 @@ def resolve_via_coordinator(
     relay_client = _BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
     controller = _BaleCarrierController(client=relay_client)
     try:
-        creds = controller.dial(relay_peer_id, creds_timeout=30.0)
+        creds = controller.dial(peer_id=relay_peer_id, creds_timeout=30.0)
     finally:
         relay_client.stop()
 
