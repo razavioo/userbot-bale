@@ -63,8 +63,8 @@ class LoginActivity : AppCompatActivity() {
                     if (r.waitTimeSec != null) sb.append("  wait=${r.waitTimeSec}s")
                     sb.append("\n")
                     if (r.ussdInstruction != null) {
-                        sb.append("⚠ Server wants you to dial USSD: ${r.ussdInstruction}\n")
-                        sb.append("Open your phone dialer, dial the code above, copy the OTP it returns, paste below.")
+                        sb.append("\n📞 Open your phone dialer and dial: ${r.ussdInstruction}\n")
+                        sb.append("A number will appear on screen — that is your code. Enter it below.")
                     } else when (r.sendCodeTypeChosen) {
                         9, 12 -> sb.append("Server is sending via Telegram. Open your Telegram app for the code.")
                         3, 2 -> sb.append("Server says SMS dispatched. If nothing arrives, the account may not exist with this number.")
@@ -77,9 +77,9 @@ class LoginActivity : AppCompatActivity() {
                     binding.codeLayout.visibility = View.VISIBLE
                     binding.validateButton.visibility = View.VISIBLE
                 } catch (e: GrpcWebError) {
-                    setStatus("StartPhoneAuth failed: grpc=${e.grpcStatus} msg=\"${e.grpcMessage}\" http=${e.httpStatus}")
+                    setStatus(friendlyGrpcError("Sending code failed", e))
                 } catch (e: Throwable) {
-                    setStatus("StartPhoneAuth failed: ${e.javaClass.simpleName}: ${e.message}")
+                    setStatus("Sending code failed: ${e.message}")
                 } finally {
                     binding.sendCodeButton.isEnabled = true
                 }
@@ -102,13 +102,13 @@ class LoginActivity : AppCompatActivity() {
                     setResult(RESULT_OK)
                     finish()
                 } catch (ns: NeedsSignUpException) {
-                    setStatus("This phone has no Bale profile yet. Enter your name and tap Complete sign-up.")
+                    setStatus("Code accepted. This number has no Bale account yet — enter your name below to create one.")
                     binding.nameLayout.visibility = View.VISIBLE
                     binding.signUpButton.visibility = View.VISIBLE
                 } catch (e: GrpcWebError) {
-                    setStatus("ValidateCode failed: grpc=${e.grpcStatus} msg=\"${e.grpcMessage}\" http=${e.httpStatus}")
+                    setStatus(friendlyGrpcError("Code verification failed", e))
                 } catch (e: Throwable) {
-                    setStatus("ValidateCode failed: ${e.javaClass.simpleName}: ${e.message}")
+                    setStatus("Code verification failed: ${e.message}")
                 } finally {
                     binding.validateButton.isEnabled = true
                 }
@@ -128,9 +128,9 @@ class LoginActivity : AppCompatActivity() {
                     setResult(RESULT_OK)
                     finish()
                 } catch (e: GrpcWebError) {
-                    setStatus("SignUp failed: grpc=${e.grpcStatus} msg=\"${e.grpcMessage}\" http=${e.httpStatus}")
+                    setStatus(friendlyGrpcError("Sign-up failed", e))
                 } catch (e: Throwable) {
-                    setStatus("SignUp failed: ${e.javaClass.simpleName}: ${e.message}")
+                    setStatus("Sign-up failed: ${e.message}")
                 } finally {
                     binding.signUpButton.isEnabled = true
                 }
@@ -139,4 +139,13 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun setStatus(s: String) { binding.loginStatus.text = s }
+
+    private fun friendlyGrpcError(prefix: String, e: GrpcWebError): String = when (e.grpcMessage) {
+        "PHONE_CODE_INVALID"   -> "$prefix: wrong code — check and try again"
+        "PHONE_CODE_EXPIRED"   -> "$prefix: code expired — tap Send code again"
+        "PHONE_CODE_EMPTY"     -> "$prefix: no code entered"
+        "FLOOD_WAIT"           -> "$prefix: too many attempts, wait a few minutes"
+        "AUTH_RESTART"         -> "$prefix: session expired — tap Send code again"
+        else                   -> "$prefix: ${e.grpcMessage.ifEmpty { "http ${e.httpStatus}" }}"
+    }
 }
