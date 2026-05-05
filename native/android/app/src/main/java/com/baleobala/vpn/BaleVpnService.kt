@@ -49,7 +49,7 @@ class BaleVpnService : VpnService() {
     private var statsThread: Thread? = null
     private var startupHeartbeatThread: Thread? = null
     private var carrier: Carrier? = null
-    private var exitPeerId: Long = 0L
+    private var coordinatorPeerId: Long = 0L
     @Volatile private var inflightWs: com.baleobala.vpn.bale.BaleWsClient? = null
     @Volatile private var inflightTransport: LiveKitDataChannelTransport? = null
     private val outQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(1024)
@@ -130,10 +130,10 @@ class BaleVpnService : VpnService() {
             stopSelf()
             return
         }
-        exitPeerId = AppSettings(this).exitPeerId
-        if (exitPeerId <= 0L) {
-            broadcast("error", "Set a Bale relay peer ID before connecting.")
-            updateNotification("failed", "Relay peer required")
+        coordinatorPeerId = AppSettings(this).coordinatorPeerId
+        if (coordinatorPeerId <= 0L) {
+            broadcast("error", "Coordinator peer ID not configured. Install the correct app build.")
+            updateNotification("failed", "Coordinator not configured")
             stopSelf()
             return
         }
@@ -159,7 +159,7 @@ class BaleVpnService : VpnService() {
             onLog = { broadcast("log", it) },
             onCarrierDead = { reason -> handleTunnelDrop("tunnel dead: $reason") },
         )
-        broadcast("log", "carrier=bale exitPeer=$exitPeerId")
+        broadcast("log", "carrier=bale coordinator=$coordinatorPeerId")
         carrier?.onPacketReceived = { ip -> outQueue.offer(ip) }
 
         try { carrier?.start() } catch (e: Throwable) {
@@ -184,7 +184,12 @@ class BaleVpnService : VpnService() {
             jwt = jwt,
             onLog = { broadcast("log", it) },
             onWsCreated = { inflightWs = it },
-        ).startCall(peerId = exitPeerId, timeoutMs = STARTCALL_TIMEOUT_MS)
+        ).requestRelayAssignment(
+            coordinatorPeerId = coordinatorPeerId,
+            clientId = "android-vpn",
+            appContext = applicationContext,
+            timeoutMs = STARTCALL_TIMEOUT_MS,
+        )
         // Bale call done; release the WS reference so a later cancel only
         // touches the LiveKit transport.
         inflightWs = null
@@ -519,7 +524,7 @@ class BaleVpnService : VpnService() {
         val uptimeSec = if (startedAt.get() > 0) (System.currentTimeMillis() - startedAt.get()) / 1000 else 0L
         return getString(
             R.string.notif_text_connected_fmt,
-            exitPeerId,
+            coordinatorPeerId,
             formatDuration(uptimeSec),
             humanBytes(bytesIn.get()),
             humanBytes(bytesOut.get()),

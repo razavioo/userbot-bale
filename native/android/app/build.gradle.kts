@@ -14,6 +14,13 @@ android {
         versionCode = 2
         versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Override via local.properties: coordinatorPeerId=<long>
+        // or via COORDINATOR_PEER_ID env var in CI/release builds.
+        val coordId = (project.findProperty("coordinatorPeerId")
+            ?: System.getenv("COORDINATOR_PEER_ID")
+            ?: "0").toString()
+        buildConfigField("long", "COORDINATOR_PEER_ID", "${coordId}L")
     }
 
     buildTypes {
@@ -27,7 +34,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { viewBinding = true }
+    buildFeatures { viewBinding = true; buildConfig = true }
     packaging {
         resources {
             excludes += setOf(

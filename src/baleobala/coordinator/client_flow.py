@@ -94,18 +94,20 @@ def resolve_via_coordinator(
             pass
         coord_client.stop()
 
-    expires_in = int(assign_msg.get("expires_in_secs", 30))
-    relay_peer_id = assign_msg.get("relay_peer_id")
+    relay_peer_id = int(assign_msg.get("relay_peer_id", 0))
+    if relay_peer_id <= 0:
+        raise SystemExit("coordinator returned invalid relay_peer_id")
     print(
-        f"[bale-call] assigned relay={relay_peer_id} — waiting for relay call "
-        f"(timeout={expires_in + 10}s)",
+        f"[bale-call] assigned relay={relay_peer_id} — calling relay directly",
         file=sys.stderr,
     )
 
+    # Call the relay directly; it will accept because the coordinator
+    # pre-registered our peer_id in its expected-clients set.
     relay_client = _BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
     controller = _BaleCarrierController(client=relay_client)
     try:
-        creds = controller.answer(timeout=float(expires_in + 10))
+        creds = controller.dial(relay_peer_id, creds_timeout=30.0)
     finally:
         relay_client.stop()
 
