@@ -175,7 +175,7 @@ class MainActivity : AppCompatActivity() {
             ) { loginLauncher.launch(Intent(this, LoginActivity::class.java)) }
             return
         }
-        if (settings.exitPeerId <= 0L) {
+        if (settings.coordinatorPeerId <= 0L) {
             showSnackbar(
                 getString(R.string.snackbar_relay_required),
                 actionLabel = getString(R.string.action_choose),
@@ -200,7 +200,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun canStart(): Boolean = store.jwt() != null && settings.exitPeerId > 0L
+    private fun canStart(): Boolean = store.jwt() != null && settings.coordinatorPeerId > 0L
 
     // --- State ---
 
@@ -242,7 +242,7 @@ class MainActivity : AppCompatActivity() {
         val snap = lastSnapshot
         val text: String? = when (uiState) {
             UiState.Connected -> {
-                val peer = settings.exitPeerId
+                val peer = settings.coordinatorPeerId
                 val uptime = snap?.optLong("uptime_sec", 0L) ?: 0L
                 val bIn = snap?.optLong("bytes_in", 0L) ?: 0L
                 val bOut = snap?.optLong("bytes_out", 0L) ?: 0L
@@ -268,7 +268,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshAuthUi() {
         val phone = store.phoneNumber()
         if (store.jwt() != null) {
-            binding.authStatus.text = if (settings.exitPeerId <= 0L) {
+            binding.authStatus.text = if (settings.coordinatorPeerId <= 0L) {
                 getString(R.string.relay_not_set)
             } else if (phone != null) {
                 getString(R.string.login_logged_in, phone.toString())

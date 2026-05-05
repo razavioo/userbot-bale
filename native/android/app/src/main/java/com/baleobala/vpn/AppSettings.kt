@@ -1,6 +1,7 @@
 package com.baleobala.vpn
 
 import android.content.Context
+import com.baleobala.vpn.BuildConfig
 
 class AppSettings(ctx: Context) {
     private val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -28,9 +29,16 @@ class AppSettings(ctx: Context) {
         get() = prefs.getString(KEY_DNS, "1.1.1.1") ?: "1.1.1.1"
         set(value) { prefs.edit().putString(KEY_DNS, value).apply() }
 
-    var exitPeerId: Long
-        get() = prefs.getLong(KEY_EXIT_PEER_ID, 0L)
-        set(value) { prefs.edit().putLong(KEY_EXIT_PEER_ID, value).commit() }
+    /**
+     * The coordinator peer_id this client should call to get a relay assignment.
+     * Read-only in production: value comes from [BuildConfig.COORDINATOR_PEER_ID].
+     * In debug builds it can be overridden via SharedPreferences (dev/staging).
+     */
+    val coordinatorPeerId: Long
+        get() {
+            val override = prefs.getLong(KEY_COORDINATOR_PEER_ID, 0L)
+            return if (override > 0L) override else BuildConfig.COORDINATOR_PEER_ID
+        }
 
     companion object {
         private const val PREFS = "baleobala_settings"
@@ -39,6 +47,6 @@ class AppSettings(ctx: Context) {
         private const val KEY_LOGS = "show_logs"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_DNS = "primary_dns"
-        private const val KEY_EXIT_PEER_ID = "exit_peer_id"
+        private const val KEY_COORDINATOR_PEER_ID = "coordinator_peer_id"
     }
 }

@@ -84,10 +84,10 @@ class FakeBaleApiClient:
 class FakeBaleCarrierController:
     def __init__(self, *, client):
         self.client = client
-        self.answered_timeout: float | None = None
+        self.dialed_peer_id: int | None = None
 
-    def answer(self, timeout=60.0):
-        self.answered_timeout = timeout
+    def dial(self, peer_id: int, *, creds_timeout: float = 30.0):
+        self.dialed_peer_id = peer_id
         from baleobala.carrier.bale import CarrierCredentials
         return CarrierCredentials(url="wss://lk/relay", token="tok-relay",
                                   room="room-relay", identity="client")
@@ -130,7 +130,7 @@ def test_assign_flow_ends_in_answer_mode(MockLK, MockCtrl, MockAPI):
         answer_timeout=30.0,
     )
 
-    assert ctrl_instance.answered_timeout == 40.0  # expires_in + 10
+    assert ctrl_instance.dialed_peer_id == 200  # relay_peer_id from ASSIGN
     assert creds.url == "wss://lk/relay"
 
 
