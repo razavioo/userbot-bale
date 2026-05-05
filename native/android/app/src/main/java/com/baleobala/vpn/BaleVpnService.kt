@@ -524,7 +524,6 @@ class BaleVpnService : VpnService() {
         val uptimeSec = if (startedAt.get() > 0) (System.currentTimeMillis() - startedAt.get()) / 1000 else 0L
         return getString(
             R.string.notif_text_connected_fmt,
-            coordinatorPeerId,
             formatDuration(uptimeSec),
             humanBytes(bytesIn.get()),
             humanBytes(bytesOut.get()),

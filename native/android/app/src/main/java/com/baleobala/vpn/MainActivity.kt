@@ -175,13 +175,6 @@ class MainActivity : AppCompatActivity() {
             ) { loginLauncher.launch(Intent(this, LoginActivity::class.java)) }
             return
         }
-        if (settings.coordinatorPeerId <= 0L) {
-            showSnackbar(
-                getString(R.string.snackbar_relay_required),
-                actionLabel = getString(R.string.action_choose),
-            ) { settingsLauncher.launch(Intent(this, SettingsActivity::class.java)) }
-            return
-        }
         setState(UiState.Connecting)
         val prep = VpnService.prepare(this)
         if (prep != null) vpnPermissionLauncher.launch(prep) else startVpnService()
@@ -200,7 +193,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun canStart(): Boolean = store.jwt() != null && settings.coordinatorPeerId > 0L
+    private fun canStart(): Boolean = store.jwt() != null
 
     // --- State ---
 
@@ -242,17 +235,12 @@ class MainActivity : AppCompatActivity() {
         val snap = lastSnapshot
         val text: String? = when (uiState) {
             UiState.Connected -> {
-                val peer = settings.coordinatorPeerId
                 val uptime = snap?.optLong("uptime_sec", 0L) ?: 0L
                 val bIn = snap?.optLong("bytes_in", 0L) ?: 0L
                 val bOut = snap?.optLong("bytes_out", 0L) ?: 0L
-                getString(
-                    R.string.notif_text_connected_fmt,
-                    peer,
-                    formatDuration(uptime),
-                    humanBytes(bIn),
-                    humanBytes(bOut),
-                )
+                if (uptime > 0 || bIn > 0 || bOut > 0)
+                    "↑ ${humanBytes(bOut)}  ↓ ${humanBytes(bIn)}  ${formatDuration(uptime)}"
+                else null
             }
             UiState.Failed -> snap?.optString("last_error", "")?.takeIf { it.isNotBlank() }
             else -> null
@@ -268,13 +256,10 @@ class MainActivity : AppCompatActivity() {
     private fun refreshAuthUi() {
         val phone = store.phoneNumber()
         if (store.jwt() != null) {
-            binding.authStatus.text = if (settings.coordinatorPeerId <= 0L) {
-                getString(R.string.relay_not_set)
-            } else if (phone != null) {
+            binding.authStatus.text = if (phone != null)
                 getString(R.string.login_logged_in, phone.toString())
-            } else {
+            else
                 getString(R.string.login_logged_in, "")
-            }
             binding.signOutButton.visibility = View.VISIBLE
         } else {
             binding.authStatus.text = getString(R.string.login_not_signed_in_bale)
@@ -299,13 +284,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "callnotapproved" in lower -> Triple(
-                getString(R.string.snackbar_relay_rejected),
-                getString(R.string.action_choose),
-            ) { settingsLauncher.launch(Intent(this, SettingsActivity::class.java)) }
-            "relay" in lower && "peer" in lower -> Triple(
-                getString(R.string.snackbar_relay_required),
-                getString(R.string.action_choose),
-            ) { settingsLauncher.launch(Intent(this, SettingsActivity::class.java)) }
+                getString(R.string.snackbar_generic_error, "Server busy, please retry"),
+                getString(R.string.action_retry),
+            ) { onTogglePressed() }
             "all dns targets timed out" in lower || "offline" in lower -> Triple(
                 getString(R.string.snackbar_offline),
                 getString(R.string.action_retry),
