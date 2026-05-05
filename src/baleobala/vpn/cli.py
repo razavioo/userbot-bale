@@ -80,6 +80,17 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
     mx.add_argument("--psk", default=None)
     mx.add_argument("--psk-file", default=None)
     mx.add_argument("--provision-timeout", type=float, default=10.0)
+    mx.add_argument("--coordinator-peer-id", type=int, default=None,
+                    help="Bale user_id of the coordinator account. When set, the relay "
+                         "registers itself and only accepts calls from approved clients.")
+    mx.add_argument("--relay-peer-id", action="append", type=int, default=None,
+                    dest="relay_peer_ids",
+                    help="Bale user_id for each --bale-jwt-file in order "
+                         "(required when --coordinator-peer-id is set). Repeat once per JWT.")
+    mx.add_argument("--heartbeat-interval", type=float, default=60.0,
+                    help="seconds between HEARTBEAT messages to coordinator (default: 60)")
+    mx.add_argument("--standalone", action="store_true",
+                    help="skip coordinator registration; accept any inbound call (legacy mode)")
     mx.set_defaults(func=cmd_vpn_exit_node_mesh)
 
     co = vpn_sub.add_parser(
@@ -162,10 +173,9 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     mapped to its own /30 slot inside --pool-cidr. Requires a reachable
     TUN device (see scripts/vpn-setup-tun.sh) and NAT setup (vpn-exit-node.sh).
 
-    IP negotiation: clients must self-assign a matching /30 address on
-    their side. A future control-channel will push the assignment down
-    automatically; today it's manual (CIDR is deterministic per peer_id,
-    so a client can compute its own address from the pool formula)."""
+    With --coordinator-peer-id the relay registers itself and only accepts
+    calls from clients pre-approved by the coordinator (reverse-call flow).
+    Use --standalone to skip coordinator and accept any inbound call."""
     import threading
     from baleobala.bale import BaleApiClient, LiveKitSession
     from baleobala.control.service import ControlService
@@ -177,6 +187,10 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     from .provisioning import MeshProvisionMessage, ProvisioningError, recv_mesh_message
     from .tun import TunDevice
     from .transports.datachannel_transport import DataChannelTransport
+
+    coordinator_peer_id: int | None = args.coordinator_peer_id
+    relay_peer_ids: list[int] = list(args.relay_peer_ids or [])
+    use_coordinator = coordinator_peer_id is not None and not args.standalone
 
     if not args.skip_nat_setup:
         _run_nat_setup(args.tun, args.wan)
@@ -196,6 +210,12 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     if not jwts:
         raise SystemExit("--bale-jwt(-file) required in mesh mode")
 
+    if use_coordinator and relay_peer_ids and len(relay_peer_ids) != len(jwts):
+        raise SystemExit(
+            f"--relay-peer-id count ({len(relay_peer_ids)}) must match "
+            f"--bale-jwt-file count ({len(jwts)})"
+        )
+
     from .jwt_util import warn_if_near_expiry
     for jwt in jwts:
         warn_if_near_expiry(jwt)
@@ -207,13 +227,56 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         max_peers_per_server=args.max_peers_per_server_jwt,
     )
 
+    # Coordinator integration state (populated below if use_coordinator)
+    reporters: list = []
+    from baleobala.coordinator.relay_client import ExpectedClientSet, handle_coordinator_instruction
+    expected_clients = ExpectedClientSet()
+    # Maps session_id → peer_id for RELEASED reporting
+    session_map: dict[str, int] = {}
+    session_map_lock = threading.Lock()
+
     def on_incoming_call(event, account_index: int = 0):  # type: ignore[no-untyped-def]
-        creds = event.credentials
         peer_id = event.peer_id
         if peer_id is None:
             print("[vpn-mesh] incoming call rejected: missing canonical peer_id",
                   file=sys.stderr)
             return
+
+        # ── Coordinator mode: distinguish instruction vs client call ────────
+        if use_coordinator and peer_id == coordinator_peer_id:
+            print(
+                f"[vpn-mesh] coordinator instruction from peer={peer_id}; handling EXPECT_CLIENT",
+                file=sys.stderr,
+            )
+            reporter = reporters[account_index] if reporters else None
+            threading.Thread(
+                target=handle_coordinator_instruction,
+                kwargs=dict(
+                    event=event,
+                    expected=expected_clients,
+                    reporter=reporter,
+                    identity=f"{args.identity_prefix}-ctrl-{account_index}",
+                ),
+                daemon=True,
+                name=f"coord-instr-{account_index}",
+            ).start()
+            return
+
+        if use_coordinator:
+            session_id = expected_clients.consume(peer_id)
+            if session_id is None:
+                print(
+                    f"[vpn-mesh] incoming call rejected: peer={peer_id} not in expected set",
+                    file=sys.stderr,
+                )
+                return
+            # Track for RELEASED reporting
+            with session_map_lock:
+                session_map[str(peer_id)] = peer_id  # key by peer_id; session_id stored below
+            with session_map_lock:
+                session_map[f"sess:{peer_id}"] = session_id  # type: ignore[assignment]
+        # ───────────────────────────────────────────────────────────────────
+
         print(
             f"[vpn-mesh] incoming call → peer_id={peer_id} account={account_index}",
             file=sys.stderr,
@@ -233,9 +296,17 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+        def _on_drop(dropped_peer_id: int) -> None:
+            if not use_coordinator or not reporters:
+                return
+            with session_map_lock:
+                sid = session_map.pop(f"sess:{dropped_peer_id}", None)
+            if sid is not None:
+                reporters[account_index].report_released(str(sid))
+
         try:
             session = LiveKitSession(
-                url=creds.url, token=creds.token,
+                url=event.credentials.url, token=event.credentials.token,
                 identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
             )
             session.start()
@@ -254,6 +325,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 peer_id,
                 transport,
                 assignment=assignment,
+                on_drop=_on_drop,
             )
             print(
                 f"[vpn-mesh] peer={peer_id} status=assigned "
@@ -288,6 +360,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             sessions.append((peer_id, session, transport))
         except Exception:  # noqa: BLE001
             control.release_mesh_assignment(peer_id, error="provisioning failed")
+            _on_drop(peer_id)
             try:
                 mesh.drop_client(peer_id)
             except Exception:
@@ -302,13 +375,39 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             lambda event, idx=account_index: on_incoming_call(event, idx)
         )
         bale_clients.append(bale)
-    print(f"[vpn-mesh] up — tun={args.tun} pool={args.pool_cidr}. "
-          f"accounts={len(bale_clients)} "
-          f"max_peers_per_server_jwt={args.max_peers_per_server_jwt} "
-          f"total_peer_capacity={allocator.total_capacity}. "
-          f"Waiting for incoming Bale calls. "
-          f"Ctrl-C to stop.",
-          file=sys.stderr)
+
+        if use_coordinator and relay_peer_ids:
+            from baleobala.coordinator.relay_client import CoordinatorReporter
+            import socket as _socket
+            hostname = _socket.gethostname()
+            relay_id = f"{hostname}-{account_index}"
+            reporter = CoordinatorReporter(
+                coordinator_peer_id=coordinator_peer_id,
+                relay_id=relay_id,
+                relay_peer_id=relay_peer_ids[account_index],
+                bale_client=bale,
+                identity_prefix=f"{args.identity_prefix}-reporter",
+            )
+            reporter.start()
+            reporter.report_online(capacity=args.max_peers_per_server_jwt)
+            reporter.start_heartbeat(
+                interval=args.heartbeat_interval,
+                get_in_use=lambda idx=account_index: [
+                    p for s in allocator.slots() if s.index == idx
+                    for p in s.peer_ids
+                ],
+            )
+            reporters.append(reporter)
+
+    mode_tag = "coordinator" if use_coordinator else "standalone"
+    print(
+        f"[vpn-mesh] up — mode={mode_tag} tun={args.tun} pool={args.pool_cidr} "
+        f"accounts={len(bale_clients)} "
+        f"max_peers_per_server_jwt={args.max_peers_per_server_jwt} "
+        f"total_peer_capacity={allocator.total_capacity}. "
+        f"Waiting for incoming Bale calls. Ctrl-C to stop.",
+        file=sys.stderr,
+    )
 
     from .runner import wait_for_signal
     try:
@@ -316,6 +415,12 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     finally:
         print(f"[vpn-mesh] shutting down ({len(sessions)} active clients)",
               file=sys.stderr)
+        for reporter in reporters:
+            try:
+                reporter.report_offline()
+                reporter.stop()
+            except Exception:  # noqa: BLE001
+                pass
         for peer_id, sess, _tx in sessions:
             try:
                 mesh.drop_client(peer_id)
