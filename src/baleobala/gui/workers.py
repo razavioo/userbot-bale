@@ -80,6 +80,150 @@ class ValidateCodeWorker(QObject):
         self.ok.emit(session.jwt)
 
 
+class DirectProxyWorker(QObject):
+    """Connect to proxy-relay via data channel (the fast path used by bale-proxy client).
+
+    Supports coordinator flow: if coordinator_peer_id is given, the worker
+    calls coordinator first to get a relay assignment, then calls that relay.
+    Otherwise it dials peer_id directly.
+    """
+
+    connecting = Signal(str)
+    connected = Signal(str)   # e.g. "SOCKS5 on 127.0.0.1:10800"
+    stopped = Signal()
+    failed = Signal(str)
+    log_line = Signal(str)
+
+    def __init__(
+        self,
+        *,
+        jwt: str,
+        peer_id: Optional[int] = None,
+        coordinator_peer_id: Optional[int] = None,
+        proxy_secret: Optional[str] = None,
+        listen_host: str = "127.0.0.1",
+        listen_port: int = 10800,
+        ws_ssl_no_verify: bool = True,
+    ) -> None:
+        super().__init__()
+        self._jwt = jwt
+        self._peer_id = peer_id
+        self._coordinator_peer_id = coordinator_peer_id
+        self._proxy_secret = proxy_secret
+        self._listen_host = listen_host
+        self._listen_port = listen_port
+        self._ws_ssl_no_verify = ws_ssl_no_verify
+        self._stop_event = threading.Event()
+        self._server = None
+        self._session = None
+        self._bale_client = None
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._server is not None:
+            try:
+                self._server.stop()
+            except Exception:
+                pass
+
+    def run(self) -> None:
+        try:
+            self._run_inner()
+        except Exception as exc:
+            log.exception("direct proxy worker crashed")
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            for obj, name in [
+                (self._server, "server"),
+                (self._session, "session"),
+                (self._bale_client, "bale client"),
+            ]:
+                if obj is not None:
+                    try:
+                        obj.stop()
+                    except Exception:
+                        try:
+                            obj.close()
+                        except Exception:
+                            pass
+            self.stopped.emit()
+
+    def _run_inner(self) -> None:
+        from baleobala.bale.api import BaleApiClient
+        from baleobala.bale.livekit_backend import LiveKitSession
+        from baleobala.bale.ws_client import WsTlsConfig
+        from baleobala.runtime import Socks5ProxyServer
+        from baleobala.vpn.transports.datachannel_transport import DataChannelTransport
+
+        ws_tls = WsTlsConfig.from_sources(
+            insecure=self._ws_ssl_no_verify,
+            allow_insecure_debug=True,
+        )
+
+        # Phase 1: resolve LiveKit credentials
+        if self._coordinator_peer_id is not None:
+            self.connecting.emit("Contacting coordinator…")
+            self.log_line.emit(f"coordinator peer_id={self._coordinator_peer_id}")
+            from baleobala.coordinator.client_flow import resolve_via_coordinator
+            creds = resolve_via_coordinator(
+                jwt=self._jwt,
+                coordinator_peer_id=self._coordinator_peer_id,
+                ws_tls_config=ws_tls,
+                identity="gui-proxy-client",
+                answer_timeout=30.0,
+            )
+            # resolve_via_coordinator returns CarrierCredentials; unpack to url/token
+            lk_url, lk_token = creds.url, creds.token
+            # Keep a bale client alive to hold the relay call open.
+            # The relay call is already established inside resolve_via_coordinator;
+            # we need to NOT stop its relay_client. Re-open a hold-alive client.
+            bale_hold = BaleApiClient(jwt=self._jwt, ws_tls_config=ws_tls)
+            bale_hold.start()
+            self._bale_client = bale_hold
+            self.log_line.emit(f"relay assigned, room={creds.room[:24]}…")
+        elif self._peer_id is not None:
+            self.connecting.emit(f"Calling relay peer {self._peer_id}…")
+            self.log_line.emit(f"dialing peer_id={self._peer_id}")
+            bale = BaleApiClient(jwt=self._jwt, ws_tls_config=ws_tls)
+            bale.start()
+            self._bale_client = bale
+            raw_creds = bale.fetch_livekit_credentials(
+                self._peer_id, creds_timeout=30.0,
+                cancel_event=self._stop_event,
+            )
+            lk_url, lk_token = raw_creds.url, raw_creds.token
+            self.log_line.emit(f"room={raw_creds.room[:24]}…")
+        else:
+            raise RuntimeError("peer_id or coordinator_peer_id required")
+
+        if self._stop_event.is_set():
+            return
+
+        # Phase 2: join LiveKit room and open data channel transport
+        self.connecting.emit("Joining LiveKit room…")
+        session = LiveKitSession(url=lk_url, token=lk_token, identity="gui-proxy-client")
+        session.start()
+        session.wait_for_remote_participant(timeout=30.0)
+        self._session = session
+        self.log_line.emit("LiveKit peer ready")
+
+        transport = DataChannelTransport(session, topic="vpn", reliable=False)
+
+        # Phase 3: start SOCKS5 proxy server
+        secret = self._proxy_secret.encode() if self._proxy_secret else None
+        server = Socks5ProxyServer(
+            transport,
+            listen_host=self._listen_host,
+            listen_port=self._listen_port,
+            secret=secret,
+        )
+        self._server = server
+        addr = f"{self._listen_host}:{self._listen_port}"
+        self.connected.emit(f"SOCKS5 on {addr}")
+        self.log_line.emit(f"proxy listening on {addr}")
+        server.serve_forever()
+
+
 class ProxyWorker(QObject):
     """Runs `bale-proxy client` or `bale-proxy relay` on a background thread.
 
