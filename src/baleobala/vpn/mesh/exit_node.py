@@ -51,6 +51,7 @@ class ClientSlot:
     peer_name: str | None = None
     active: bool = False
     closed: bool = False
+    on_drop: Callable[[int], None] | None = None  # fired with peer_id before cleanup
 
 
 class MeshExitNode:
@@ -117,6 +118,7 @@ class MeshExitNode:
         *,
         assignment: Assignment,
         peer_name: str | None = None,
+        on_drop: Callable[[int], None] | None = None,
     ) -> Assignment:
         self._alloc.reserve(assignment.slot, peer_id)
         slot = ClientSlot(
@@ -124,6 +126,7 @@ class MeshExitNode:
             tunnel=None,
             transport=transport,
             peer_name=peer_name,
+            on_drop=on_drop,
         )
         with self._lock:
             prior = self._clients.pop(peer_id, None)
@@ -178,6 +181,11 @@ class MeshExitNode:
             slot = self._clients.pop(peer_id, None)
         if slot is None:
             return
+        if slot.on_drop is not None:
+            try:
+                slot.on_drop(peer_id)
+            except Exception:  # noqa: BLE001
+                log.exception("mesh: on_drop callback failed for peer=%d", peer_id)
         if slot.active:
             self._router.detach(slot.assignment.client)
         self._close_slot_locked(slot)

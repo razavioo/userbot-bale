@@ -1616,6 +1616,27 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
         insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
         allow_insecure_debug=True,
     )
+
+    # ── Coordinator mode ─────────────────────────────────────────────────
+    # If --coordinator-peer-id is given (or found in config / env), call the
+    # coordinator for an ASSIGN, then wait for the relay to call us back.
+    coordinator_peer_id = getattr(args, "coordinator_peer_id", None)
+    no_coordinator = getattr(args, "no_coordinator", False)
+    if coordinator_peer_id is None and not no_coordinator:
+        from baleobala.control.coordinator_config import load_coordinator_peer_id
+        coordinator_peer_id = load_coordinator_peer_id()
+
+    if coordinator_peer_id is not None and not no_coordinator:
+        from baleobala.coordinator.client_flow import resolve_via_coordinator
+        return resolve_via_coordinator(
+            coordinator_peer_id=coordinator_peer_id,
+            jwt=jwt,
+            ws_tls_config=ws_tls_config,
+            identity=getattr(args, "identity", "baleobala-client"),
+            answer_timeout=float(getattr(args, "answer_timeout", 60.0)),
+        )
+    # ─────────────────────────────────────────────────────────────────────
+
     controller = BaleCarrierController(client=BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config))
     try:
         peer_id = args.peer_id
@@ -2843,6 +2864,10 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--peer-name", default=None)
     bt.add_argument("--answer", action="store_true")
     bt.add_argument("--answer-timeout", type=float, default=120.0)
+    bt.add_argument("--coordinator-peer-id", type=int, default=None,
+                    help="Bale user_id of the coordinator (overrides config file)")
+    bt.add_argument("--no-coordinator", action="store_true",
+                    help="skip coordinator and dial --peer-id directly (legacy/dev)")
     bt.add_argument("--identity", default="baleobala")
     bt.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bt.add_argument("--volume", type=int, default=50)
@@ -2868,6 +2893,8 @@ def build_parser() -> argparse.ArgumentParser:
     bp_client.add_argument("--peer-name", default=None)
     bp_client.add_argument("--answer", action="store_true")
     bp_client.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_client.add_argument("--coordinator-peer-id", type=int, default=None)
+    bp_client.add_argument("--no-coordinator", action="store_true")
     bp_client.add_argument("--identity", default="baleobala")
     bp_client.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_client.add_argument("--volume", type=int, default=50)
@@ -2900,6 +2927,8 @@ def build_parser() -> argparse.ArgumentParser:
     bp_browser.add_argument("--peer-name", default=None)
     bp_browser.add_argument("--answer", action="store_true")
     bp_browser.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_browser.add_argument("--coordinator-peer-id", type=int, default=None)
+    bp_browser.add_argument("--no-coordinator", action="store_true")
     bp_browser.add_argument("--identity", default="baleobala")
     bp_browser.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_browser.add_argument("--volume", type=int, default=50)
