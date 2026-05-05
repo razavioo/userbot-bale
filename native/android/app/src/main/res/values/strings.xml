@@ -79,6 +79,6 @@
     <string name="notif_action_disconnect">Disconnect</string>
     <string name="notif_text_idle">Tap to open Baleobala</string>
     <string name="notif_text_connecting">Bringing up secure tunnel…</string>
-    <string name="notif_text_connected_fmt">Relay %1$d · Up %2$s · ↓%3$s ↑%4$s</string>
+    <string name="notif_text_connected_fmt">Up %1$s · ↓%2$s ↑%3$s</string>
     <string name="notif_text_failed">Tap to retry</string>
 </resources>
