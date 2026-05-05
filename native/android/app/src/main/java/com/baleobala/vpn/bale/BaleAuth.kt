@@ -71,7 +71,21 @@ class BaleAuth(
         val tx = transactionHash ?: lastTx
             ?: throw RuntimeException("no transaction_hash — call startPhoneAuth() first")
         val req = BaleProtos.encodeValidateCode(transactionHash = tx, code = code, isJwt = true)
-        val resp = client.unary(BaleProtos.AUTH_SERVICE, "ValidateCode", req)
+        val resp = try {
+            client.unary(BaleProtos.AUTH_SERVICE, "ValidateCode", req)
+        } catch (e: GrpcWebError) {
+            // Bale returns PHONE_NUMBER_UNOCCUPIED when the code was accepted but
+            // no account exists for this number yet — same as getting a valid tx
+            // with no JWT: the caller must proceed to SignUp with a name.
+            if (e.grpcMessage == "PHONE_NUMBER_UNOCCUPIED") {
+                needsSignUp = true
+                throw NeedsSignUpException(
+                    transactionHash = tx,
+                    detail = "PHONE_NUMBER_UNOCCUPIED — new account, sign-up required"
+                )
+            }
+            throw e
+        }
         var jwt = GrpcWebClient.extractAccessToken(resp.setCookies)
         var path = "cookie"
         if (jwt == null) {
