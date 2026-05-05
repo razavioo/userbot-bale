@@ -1,0 +1,260 @@
+"""CoordinatorService: orchestrates the broker handoff.
+
+The service is wire-agnostic — it consumes a CoordinatorTransport and dispatches
+control messages. The same logic runs in production with a real Bale-backed
+transport and in tests with an in-memory fake.
+
+Lifecycle of a client connection:
+
+    1. Client (peer C) places a Bale call to coordinator JWT.
+    2. on_incoming_call → expects HELLO. Picks a relay slot R via policy.
+    3. Sends ASSIGN{relay_peer_id=R.peer_id, session_id=S}, hangs up. Or DENY.
+    4. Service places outbound call to R, sends EXPECT_CLIENT{client_peer_id=C,
+       session_id=S}, expects EXPECT_ACK, hangs up.
+    5. Client enters answer-mode; relay calls client. Coordinator is out.
+    6. When the call ends, relay places a short call to coordinator with
+       RELEASED{session_id=S}, which frees the slot.
+
+Relay-originated events: ONLINE/HEARTBEAT/RELEASED/OFFLINE all arrive on the
+listen path the same as client HELLOs and are dispatched by `kind`.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import uuid
+from dataclasses import dataclass
+from typing import Callable
+
+from baleobala.coordinator.policy import pick_relay
+from baleobala.coordinator.protocol import (
+    ControlError,
+    ControlMessage,
+    DenyReason,
+    Kind,
+    make_assign,
+    make_deny,
+    make_expect_client,
+)
+from baleobala.coordinator.registry import RelayRegistry, RelaySlot
+from baleobala.coordinator.transport import CoordinatorTransport, IncomingCall
+
+
+log = logging.getLogger(__name__)
+
+
+DEFAULT_HELLO_TIMEOUT = 5.0
+DEFAULT_EXPECT_TIMEOUT = 5.0
+DEFAULT_SESSION_EXPIRES_SECS = 30
+
+
+@dataclass
+class ServiceConfig:
+    hello_timeout: float = DEFAULT_HELLO_TIMEOUT
+    expect_timeout: float = DEFAULT_EXPECT_TIMEOUT
+    session_expires_secs: int = DEFAULT_SESSION_EXPIRES_SECS
+    stale_relay_timeout_secs: float = 90.0
+
+
+class CoordinatorService:
+    def __init__(
+        self,
+        *,
+        transport: CoordinatorTransport,
+        registry: RelayRegistry,
+        config: ServiceConfig | None = None,
+        new_session_id: Callable[[], str] = lambda: uuid.uuid4().hex,
+    ) -> None:
+        self._transport = transport
+        self._registry = registry
+        self._config = config or ServiceConfig()
+        self._new_session_id = new_session_id
+        self._lock = threading.Lock()
+        self._stopped = False
+
+    def start(self) -> None:
+        self._transport.listen(self._handle_incoming_call)
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+        self._transport.stop()
+
+    # ---- main dispatch ---------------------------------------------------
+
+    def _handle_incoming_call(self, call: IncomingCall) -> None:
+        try:
+            msg = call.recv(timeout=self._config.hello_timeout)
+        except ControlError:
+            log.warning("coordinator: malformed control payload from peer=%d", call.peer_id)
+            self._safe_hangup(call)
+            return
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: error reading first control message")
+            self._safe_hangup(call)
+            return
+
+        if msg is None:
+            log.warning("coordinator: peer=%d sent no control message before timeout", call.peer_id)
+            self._safe_hangup(call)
+            return
+
+        try:
+            if msg.kind == Kind.HELLO:
+                self._handle_hello(call, msg)
+            elif msg.kind == Kind.ONLINE:
+                self._handle_online(call, msg)
+            elif msg.kind == Kind.HEARTBEAT:
+                self._handle_heartbeat(call, msg)
+            elif msg.kind == Kind.RELEASED:
+                self._handle_released(call, msg)
+            elif msg.kind == Kind.OFFLINE:
+                self._handle_offline(call, msg)
+            else:
+                log.warning("coordinator: unexpected kind=%s from peer=%d", msg.kind, call.peer_id)
+                self._safe_send(call, make_deny(reason=DenyReason.INTERNAL, detail=f"unexpected kind {msg.kind}"))
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: handler crashed for kind=%s", msg.kind)
+        finally:
+            self._safe_hangup(call)
+
+    # ---- client-side flow ------------------------------------------------
+
+    def _handle_hello(self, call: IncomingCall, msg: ControlMessage) -> None:
+        client_peer_id = call.peer_id
+        slot = pick_relay(self._registry, client_peer_id=client_peer_id)
+        if slot is None:
+            log.info(
+                "coordinator: deny client=%d capacity=%d/%d",
+                client_peer_id,
+                self._registry.total_in_use(),
+                self._registry.total_capacity(),
+            )
+            self._safe_send(call, make_deny(reason=DenyReason.NO_CAPACITY))
+            return
+
+        session_id = self._new_session_id()
+        try:
+            self._registry.reserve_session(
+                session_id=session_id,
+                client_peer_id=client_peer_id,
+                relay_id=slot.relay_id,
+                expires_in_secs=self._config.session_expires_secs,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: reserve_session failed")
+            self._safe_send(call, make_deny(reason=DenyReason.INTERNAL))
+            return
+
+        self._safe_send(
+            call,
+            make_assign(
+                relay_peer_id=slot.peer_id,
+                session_id=session_id,
+                expires_in_secs=self._config.session_expires_secs,
+            ),
+        )
+        # Hang up before instructing relay so client is freed up to
+        # listen for the inbound call.
+        self._safe_hangup(call)
+
+        self._instruct_relay(slot=slot, client_peer_id=client_peer_id, session_id=session_id)
+
+    def _instruct_relay(self, *, slot: RelaySlot, client_peer_id: int, session_id: str) -> None:
+        msg = make_expect_client(
+            client_peer_id=client_peer_id,
+            session_id=session_id,
+            expires_in_secs=self._config.session_expires_secs,
+        )
+        try:
+            ack = self._transport.quick_exchange(
+                peer_id=slot.peer_id,
+                send=msg,
+                timeout=self._config.expect_timeout,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: quick_exchange to relay=%s failed", slot.relay_id)
+            self._registry.release_session(session_id)
+            return
+
+        if ack is None or ack.kind != Kind.EXPECT_ACK:
+            log.warning(
+                "coordinator: relay=%s did not ack EXPECT_CLIENT (got %r); rolling back session=%s",
+                slot.relay_id,
+                ack.kind if ack else None,
+                session_id,
+            )
+            self._registry.release_session(session_id)
+
+    # ---- relay-side events -----------------------------------------------
+
+    def _handle_online(self, call: IncomingCall, msg: ControlMessage) -> None:
+        relay_id = str(msg.get("relay_id", ""))
+        peer_id = int(msg.get("peer_id", call.peer_id))
+        capacity = int(msg.get("capacity", 1))
+        if not relay_id:
+            log.warning("coordinator: ONLINE missing relay_id from peer=%d", call.peer_id)
+            return
+        slot = RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=[])
+        self._registry.register(slot)
+        log.info("coordinator: relay=%s online peer=%d capacity=%d", relay_id, peer_id, capacity)
+
+    def _handle_heartbeat(self, call: IncomingCall, msg: ControlMessage) -> None:
+        relay_id = str(msg.get("relay_id", ""))
+        in_use = [int(p) for p in msg.get("in_use", [])]
+        if not relay_id:
+            return
+        if self._registry.heartbeat(relay_id, in_use=in_use) is None:
+            log.info("coordinator: heartbeat from unknown relay=%s — re-registering", relay_id)
+            self._registry.register(RelaySlot(relay_id=relay_id, peer_id=call.peer_id, in_use=in_use))
+
+    def _handle_released(self, call: IncomingCall, msg: ControlMessage) -> None:
+        session_id = str(msg.get("session_id", ""))
+        if not session_id:
+            return
+        released = self._registry.release_session(session_id)
+        if released is None:
+            log.info("coordinator: RELEASED for unknown session=%s", session_id)
+        else:
+            log.info(
+                "coordinator: released session=%s relay=%s client=%d",
+                session_id,
+                released.relay_id,
+                released.client_peer_id,
+            )
+
+    def _handle_offline(self, call: IncomingCall, msg: ControlMessage) -> None:
+        relay_id = str(msg.get("relay_id", ""))
+        if not relay_id:
+            return
+        log.info("coordinator: relay=%s offline reason=%s", relay_id, msg.get("reason", ""))
+        self._registry.mark_offline(relay_id)
+
+    # ---- maintenance -----------------------------------------------------
+
+    def prune_stale(self) -> None:
+        removed = self._registry.prune_stale(timeout_secs=self._config.stale_relay_timeout_secs)
+        for relay_id in removed:
+            log.info("coordinator: pruned stale relay=%s", relay_id)
+        expired = self._registry.expire_pending()
+        for session in expired:
+            log.info("coordinator: expired pending session=%s", session.session_id)
+
+    # ---- helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _safe_send(call: IncomingCall, msg: ControlMessage) -> None:
+        try:
+            call.send(msg)
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: send failed for kind=%s", msg.kind)
+
+    @staticmethod
+    def _safe_hangup(call: IncomingCall) -> None:
+        try:
+            call.hangup()
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: hangup failed")

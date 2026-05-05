@@ -82,6 +82,29 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
     mx.add_argument("--provision-timeout", type=float, default=10.0)
     mx.set_defaults(func=cmd_vpn_exit_node_mesh)
 
+    co = vpn_sub.add_parser(
+        "coordinator",
+        help="central rendezvous: route incoming clients to free relay slots",
+    )
+    co.add_argument("--listen-jwt", default=None,
+                    help="Bale JWT clients call (the public coordinator number)")
+    co.add_argument("--listen-jwt-file", default=None,
+                    help="file containing the listen JWT")
+    co.add_argument("--dispatch-jwt", default=None,
+                    help="Bale JWT used for outbound calls to relays "
+                         "(default: same as listen-jwt; warns about race)")
+    co.add_argument("--dispatch-jwt-file", default=None,
+                    help="file containing the dispatch JWT")
+    co.add_argument("--snapshot-path", default=None,
+                    help="path to JSON state snapshot (default: "
+                         "<config_dir>/coordinator-state.json)")
+    co.add_argument("--identity-prefix", default="coordinator")
+    co.add_argument("--prune-interval", type=float, default=30.0,
+                    help="seconds between stale-relay pruning passes")
+    co.add_argument("--stale-timeout", type=float, default=90.0,
+                    help="seconds since last heartbeat before a relay is dropped")
+    co.set_defaults(func=cmd_vpn_coordinator)
+
     lb = vpn_sub.add_parser("loopback",
                             help="in-process tunnel self-test (no TUN, no call)")
     lb.add_argument("--packets", type=int, default=20)
@@ -344,6 +367,89 @@ def _first_bale_jwt_arg(args: argparse.Namespace) -> str | None:
 def _first_bale_jwt_file_arg(args: argparse.Namespace) -> str | None:
     values = _as_list(getattr(args, "bale_jwt_file", None))
     return values[0] if values else None
+
+
+def cmd_vpn_coordinator(args: argparse.Namespace) -> int:
+    """Run the central rendezvous service.
+
+    The coordinator listens on `--listen-jwt` for incoming Bale calls from
+    clients, picks a free relay slot, hands the assignment back to the client,
+    then instructs the chosen relay (via `--dispatch-jwt`) to expect the call.
+    """
+    import threading
+    import time as _time
+
+    from baleobala.coordinator import CoordinatorService, RelayRegistry, ServiceConfig
+    from baleobala.coordinator.bale_transport import BaleCoordinatorTransport
+    from baleobala.coordinator.registry import default_snapshot_path
+    from baleobala.bale.ws_client import WsTlsConfig
+
+    listen_jwt = _read_jwt_arg(args.listen_jwt, args.listen_jwt_file)
+    if not listen_jwt:
+        raise SystemExit("--listen-jwt or --listen-jwt-file required")
+    dispatch_jwt = _read_jwt_arg(args.dispatch_jwt, args.dispatch_jwt_file) or listen_jwt
+
+    snapshot_path = (
+        Path(args.snapshot_path).expanduser() if args.snapshot_path else default_snapshot_path()
+    )
+    print(f"[coordinator] state snapshot at {snapshot_path}", file=sys.stderr)
+
+    ws_tls_config = WsTlsConfig.from_sources(
+        ca_file=getattr(args, "ws_ca_file", None),
+        ca_path=getattr(args, "ws_ca_path", None),
+        insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
+        allow_insecure_debug=True,
+    )
+
+    registry = RelayRegistry(snapshot_path=snapshot_path)
+    transport = BaleCoordinatorTransport(
+        listen_jwt=listen_jwt,
+        dispatch_jwt=dispatch_jwt,
+        identity_prefix=args.identity_prefix,
+        ws_tls_config=ws_tls_config,
+    )
+    service = CoordinatorService(
+        transport=transport,
+        registry=registry,
+        config=ServiceConfig(stale_relay_timeout_secs=args.stale_timeout),
+    )
+    service.start()
+    print(
+        f"[coordinator] listening — total_relays={len(registry.list_relays())} "
+        f"capacity={registry.total_capacity()} in_use={registry.total_in_use()}",
+        file=sys.stderr,
+    )
+
+    stop_event = threading.Event()
+
+    def prune_loop() -> None:
+        while not stop_event.wait(args.prune_interval):
+            try:
+                service.prune_stale()
+            except Exception:  # noqa: BLE001
+                log.exception("coordinator: prune pass failed")
+
+    pruner = threading.Thread(target=prune_loop, name="coord-prune", daemon=True)
+    pruner.start()
+
+    from .runner import wait_for_signal
+    try:
+        wait_for_signal()
+    finally:
+        stop_event.set()
+        try:
+            service.stop()
+        except Exception:  # noqa: BLE001
+            log.exception("coordinator: service.stop failed")
+    return 0
+
+
+def _read_jwt_arg(value: str | None, file_path: str | None) -> str | None:
+    if value:
+        return value.strip()
+    if file_path:
+        return Path(file_path).expanduser().read_text().strip()
+    return None
 
 
 def cmd_vpn_loopback(args: argparse.Namespace) -> int:
