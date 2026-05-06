@@ -76,7 +76,8 @@ class BaleAuth(
             "Hex: " + resp.body.take(128).joinToString("") { String.format("%02x", it) }
         )
         Log.i(TAG, "SignUp OK via $path; JWT length=${jwt.length}")
-        return AuthSession(jwt = jwt, responseBody = resp.body)
+        val userId = BaleProtos.parseUserIdFromAuth(resp.body)
+        return AuthSession(jwt = jwt, responseBody = resp.body, userId = userId)
     }
 
     /** True when ValidateCode succeeded but no JWT was returned (typical of new accounts). */
@@ -137,7 +138,8 @@ class BaleAuth(
         }
         Log.i(TAG, "Auth OK via $path; JWT length=${jwt.length}")
         needsSignUp = false
-        return AuthSession(jwt = jwt, responseBody = resp.body)
+        val userId = BaleProtos.parseUserIdFromAuth(resp.body)
+        return AuthSession(jwt = jwt, responseBody = resp.body, userId = userId)
     }
 
     companion object {
@@ -159,8 +161,9 @@ class NeedsSignUpException(
     val detail: String,
 ) : RuntimeException("Bale account needs sign-up (provide your name).")
 
-data class AuthSession(val jwt: String, val responseBody: ByteArray) {
+data class AuthSession(val jwt: String, val responseBody: ByteArray, val userId: Long? = null) {
     override fun equals(other: Any?): Boolean = other is AuthSession &&
-        jwt == other.jwt && responseBody.contentEquals(other.responseBody)
-    override fun hashCode(): Int = 31 * jwt.hashCode() + responseBody.contentHashCode()
+        jwt == other.jwt && responseBody.contentEquals(other.responseBody) && userId == other.userId
+    override fun hashCode(): Int =
+        31 * (31 * jwt.hashCode() + responseBody.contentHashCode()) + (userId?.hashCode() ?: 0)
 }

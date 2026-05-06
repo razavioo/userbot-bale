@@ -233,6 +233,60 @@ def test_load_balances_across_relays(service, transport, registry):
     assert counts == [1, 2]
 
 
+def test_heartbeat_from_unknown_relay_uses_peer_id_field_not_call_peer_id(
+    service, transport, registry
+):
+    """When a HEARTBEAT arrives for an unknown relay, re-registration must use
+    the peer_id from the message body — `call.peer_id` is the callee's
+    (coordinator's own) peer_id under Bale push semantics, so it would
+    register the coordinator itself as a relay."""
+    # The fake sets call.peer_id to 999 (simulating coordinator's own peer_id);
+    # the heartbeat body carries the relay's actual peer_id 4242.
+    call = FakeIncomingCall(peer_id=999, inbox=[
+        make_heartbeat(relay_id="r1", in_use=[42], peer_id=4242, capacity=3)
+    ])
+    transport.deliver(call)
+    relay = registry.get_relay("r1")
+    assert relay is not None
+    assert relay.peer_id == 4242
+    assert relay.capacity == 3
+    assert relay.in_use == [42]
+
+
+def test_hello_uses_client_peer_id_field_not_call_peer_id(service, transport, registry):
+    """HELLO must take client_peer_id from the message body so the coordinator
+    can identify the caller. `call.peer_id` is the callee's peer_id under
+    Bale push semantics and would route EXPECT_CLIENT to the coordinator
+    itself."""
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport.ack_for_relay = {200: ControlMessage(kind=Kind.EXPECT_ACK, body={})}
+
+    # call.peer_id = 999 (would be coordinator's own); HELLO body has true caller=42.
+    call = FakeIncomingCall(peer_id=999, inbox=[
+        make_hello(client_id="dev-1", client_peer_id=42)
+    ])
+    transport.deliver(call)
+
+    target_peer_id, expect_msg = transport.outbound[0]
+    assert target_peer_id == 200
+    assert expect_msg.get("client_peer_id") == 42
+
+    relay = registry.get_relay("r1")
+    assert relay is not None and relay.in_use == [42]
+
+
+def test_hello_falls_back_to_call_peer_id_when_field_missing(service, transport, registry):
+    """Legacy clients that don't include client_peer_id in HELLO still work
+    via the fallback to call.peer_id (preserving backward compatibility)."""
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport.ack_for_relay = {200: ControlMessage(kind=Kind.EXPECT_ACK, body={})}
+
+    call = FakeIncomingCall(peer_id=42, inbox=[make_hello(client_id="legacy")])
+    transport.deliver(call)
+    target_peer_id, expect_msg = transport.outbound[0]
+    assert expect_msg.get("client_peer_id") == 42
+
+
 def test_round_trip_through_encode_decode_in_handler(service, transport, registry):
     """Sanity: messages built with factories survive encode/decode and the
     service still processes them correctly."""

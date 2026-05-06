@@ -179,7 +179,12 @@ class BaleVpnService : VpnService() {
     }
 
     private fun makeBaleTransport(): Transport {
-        val jwt = AuthStore(this).jwt() ?: throw IllegalStateException("no Bale JWT stored")
+        val store = AuthStore(this)
+        val jwt = store.jwt() ?: throw IllegalStateException("no Bale JWT stored")
+        val clientPeerId = store.userId()
+        if (clientPeerId == null || clientPeerId <= 0L) {
+            broadcast("log", "warn: no stored user_id; HELLO will rely on legacy callee-peer fallback")
+        }
         val creds = BaleCallClient(
             jwt = jwt,
             onLog = { broadcast("log", it) },
@@ -188,6 +193,7 @@ class BaleVpnService : VpnService() {
             coordinatorPeerId = coordinatorPeerId,
             clientId = "android-vpn",
             appContext = applicationContext,
+            clientPeerId = clientPeerId,
             timeoutMs = STARTCALL_TIMEOUT_MS,
         )
         // Bale call done; release the WS reference so a later cancel only

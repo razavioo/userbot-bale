@@ -165,12 +165,21 @@ class DirectProxyWorker(QObject):
             self.connecting.emit("Contacting coordinator…")
             self.log_line.emit(f"coordinator peer_id={self._coordinator_peer_id}")
             from baleobala.coordinator.client_flow import resolve_via_coordinator
+            client_peer_id = None
+            try:
+                from baleobala.control import AuthStore
+                stored = AuthStore().status().get("user_id")
+                if stored not in (None, "unknown"):
+                    client_peer_id = int(stored)
+            except Exception:  # noqa: BLE001
+                client_peer_id = None
             creds = resolve_via_coordinator(
                 jwt=self._jwt,
                 coordinator_peer_id=self._coordinator_peer_id,
                 ws_tls_config=ws_tls,
                 identity="gui-proxy-client",
                 answer_timeout=30.0,
+                client_peer_id=client_peer_id,
             )
             # resolve_via_coordinator returns CarrierCredentials; unpack to url/token
             lk_url, lk_token = creds.url, creds.token

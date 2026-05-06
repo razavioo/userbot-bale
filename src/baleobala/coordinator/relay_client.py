@@ -95,8 +95,13 @@ class CoordinatorReporter:
             capacity=capacity,
         ))
 
-    def report_heartbeat(self, in_use: list[int]) -> None:
-        self._enqueue(make_heartbeat(relay_id=self._relay_id, in_use=in_use))
+    def report_heartbeat(self, in_use: list[int], *, capacity: int | None = None) -> None:
+        self._enqueue(make_heartbeat(
+            relay_id=self._relay_id,
+            in_use=in_use,
+            peer_id=self._relay_peer_id,
+            capacity=capacity,
+        ))
 
     def report_released(self, session_id: str) -> None:
         self._enqueue(make_released(relay_id=self._relay_id, session_id=session_id))
@@ -109,6 +114,7 @@ class CoordinatorReporter:
         *,
         interval: float = 60.0,
         get_in_use: Callable[[], list[int]],
+        capacity: int | None = None,
     ) -> None:
         if self._heartbeat_thread is not None:
             return
@@ -116,7 +122,7 @@ class CoordinatorReporter:
         def _loop() -> None:
             while not self._stop_ev.wait(interval):
                 try:
-                    self.report_heartbeat(get_in_use())
+                    self.report_heartbeat(get_in_use(), capacity=capacity)
                 except Exception:  # noqa: BLE001
                     log.exception("coord-reporter: heartbeat error for relay=%s", self._relay_id)
 

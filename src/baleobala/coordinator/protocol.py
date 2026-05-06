@@ -71,8 +71,16 @@ def decode(payload: bytes) -> ControlMessage:
     return ControlMessage(kind=kind, body=data, version=version)
 
 
-def make_hello(*, client_id: str, app_version: str = "") -> ControlMessage:
-    return ControlMessage(kind=Kind.HELLO, body={"client_id": client_id, "app_version": app_version})
+def make_hello(
+    *,
+    client_id: str,
+    app_version: str = "",
+    client_peer_id: int | None = None,
+) -> ControlMessage:
+    body: dict[str, Any] = {"client_id": client_id, "app_version": app_version}
+    if client_peer_id is not None:
+        body["client_peer_id"] = int(client_peer_id)
+    return ControlMessage(kind=Kind.HELLO, body=body)
 
 
 def make_assign(*, relay_peer_id: int, session_id: str, expires_in_secs: int) -> ControlMessage:
@@ -108,11 +116,22 @@ def make_online(*, relay_id: str, peer_id: int, capacity: int = 1) -> ControlMes
     )
 
 
-def make_heartbeat(*, relay_id: str, in_use: list[int]) -> ControlMessage:
-    return ControlMessage(
-        kind=Kind.HEARTBEAT,
-        body={"relay_id": relay_id, "in_use": [int(p) for p in in_use]},
-    )
+def make_heartbeat(
+    *,
+    relay_id: str,
+    in_use: list[int],
+    peer_id: int | None = None,
+    capacity: int | None = None,
+) -> ControlMessage:
+    body: dict[str, Any] = {
+        "relay_id": relay_id,
+        "in_use": [int(p) for p in in_use],
+    }
+    if peer_id is not None:
+        body["peer_id"] = int(peer_id)
+    if capacity is not None:
+        body["capacity"] = int(capacity)
+    return ControlMessage(kind=Kind.HEARTBEAT, body=body)
 
 
 def make_released(*, relay_id: str, session_id: str) -> ControlMessage:

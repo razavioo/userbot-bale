@@ -19,19 +19,27 @@ class AuthStore(ctx: Context) {
         migrateLegacyPrefsIfPresent(ctx)
     }
 
-    fun saveJwt(jwt: String, phoneNumber: Long? = null) {
+    fun saveJwt(jwt: String, phoneNumber: Long? = null, userId: Long? = null) {
         prefs.edit()
             .putString(KEY_JWT, jwt)
             .apply { if (phoneNumber != null) putLong(KEY_PHONE, phoneNumber) }
+            .apply { if (userId != null && userId > 0) putLong(KEY_USER_ID, userId) }
             .apply()
+    }
+
+    fun saveUserId(userId: Long) {
+        if (userId <= 0) return
+        prefs.edit().putLong(KEY_USER_ID, userId).apply()
     }
 
     fun jwt(): String? = prefs.getString(KEY_JWT, null)
 
     fun phoneNumber(): Long? = if (prefs.contains(KEY_PHONE)) prefs.getLong(KEY_PHONE, 0) else null
 
+    fun userId(): Long? = if (prefs.contains(KEY_USER_ID)) prefs.getLong(KEY_USER_ID, 0) else null
+
     fun clear() {
-        prefs.edit().remove(KEY_JWT).remove(KEY_PHONE).apply()
+        prefs.edit().remove(KEY_JWT).remove(KEY_PHONE).remove(KEY_USER_ID).apply()
     }
 
     private fun migrateLegacyPrefsIfPresent(ctx: Context) {
@@ -51,5 +59,6 @@ class AuthStore(ctx: Context) {
         private const val LEGACY_PREFS = "baleobala_auth"
         private const val KEY_JWT = "jwt"
         private const val KEY_PHONE = "phone"
+        private const val KEY_USER_ID = "user_id"
     }
 }

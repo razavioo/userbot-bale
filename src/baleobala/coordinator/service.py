@@ -124,7 +124,15 @@ class CoordinatorService:
     # ---- client-side flow ------------------------------------------------
 
     def _handle_hello(self, call: IncomingCall, msg: ControlMessage) -> None:
-        client_peer_id = call.peer_id
+        # Bale push notifications only carry the callee's OutPeer, so
+        # `call.peer_id` is the coordinator's own peer_id, not the caller's.
+        # Prefer the explicit `client_peer_id` field from HELLO; fall back to
+        # `call.peer_id` only for legacy clients that don't send it.
+        client_peer_id = int(msg.get("client_peer_id") or call.peer_id)
+        if client_peer_id <= 0:
+            log.warning("coordinator: HELLO missing client_peer_id and call has no peer_id")
+            self._safe_send(call, make_deny(reason=DenyReason.INTERNAL, detail="missing client_peer_id"))
+            return
         slot = pick_relay(self._registry, client_peer_id=client_peer_id)
         if slot is None:
             log.info(
@@ -208,8 +216,20 @@ class CoordinatorService:
         if not relay_id:
             return
         if self._registry.heartbeat(relay_id, in_use=in_use) is None:
-            log.info("coordinator: heartbeat from unknown relay=%s — re-registering", relay_id)
-            self._registry.register(RelaySlot(relay_id=relay_id, peer_id=call.peer_id, in_use=in_use))
+            # `call.peer_id` is the callee's (coordinator's own) peer_id under
+            # Bale's push semantics; prefer the explicit `peer_id` field from
+            # the HEARTBEAT body if the relay sent it. Falling back to
+            # `call.peer_id` makes the registry useless because we'd record
+            # the coordinator as a relay — only do that for legacy clients.
+            peer_id = int(msg.get("peer_id") or call.peer_id)
+            capacity = int(msg.get("capacity", 1))
+            log.info(
+                "coordinator: heartbeat from unknown relay=%s — re-registering peer=%d capacity=%d",
+                relay_id, peer_id, capacity,
+            )
+            self._registry.register(
+                RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=in_use)
+            )
 
     def _handle_released(self, call: IncomingCall, msg: ControlMessage) -> None:
         session_id = str(msg.get("session_id", ""))

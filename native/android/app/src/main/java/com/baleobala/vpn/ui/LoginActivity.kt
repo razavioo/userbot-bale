@@ -97,7 +97,7 @@ class LoginActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 try {
                     val session = withContext(Dispatchers.IO) { auth.validateCode(code) }
-                    store.saveJwt(session.jwt, phoneNumber)
+                    store.saveJwt(session.jwt, phoneNumber, session.userId)
                     setStatus("Signed in. JWT length=${session.jwt.length}")
                     setResult(RESULT_OK)
                     finish()
@@ -123,7 +123,7 @@ class LoginActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 try {
                     val session = withContext(Dispatchers.IO) { auth.signUp(name) }
-                    store.saveJwt(session.jwt, phoneNumber)
+                    store.saveJwt(session.jwt, phoneNumber, session.userId)
                     setStatus("Signed up. JWT length=${session.jwt.length}")
                     setResult(RESULT_OK)
                     finish()

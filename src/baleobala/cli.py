@@ -1628,12 +1628,23 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
 
     if coordinator_peer_id is not None and not no_coordinator:
         from baleobala.coordinator.client_flow import resolve_via_coordinator
+
+        client_peer_id = getattr(args, "client_peer_id", None)
+        if client_peer_id is None:
+            try:
+                from baleobala.control import AuthStore
+                stored = AuthStore().status().get("user_id")
+                if stored not in (None, "unknown"):
+                    client_peer_id = int(stored)
+            except Exception:  # noqa: BLE001
+                client_peer_id = None
         return resolve_via_coordinator(
             coordinator_peer_id=coordinator_peer_id,
             jwt=jwt,
             ws_tls_config=ws_tls_config,
             identity=getattr(args, "identity", "baleobala-client"),
             answer_timeout=float(getattr(args, "answer_timeout", 60.0)),
+            client_peer_id=client_peer_id,
         )
     # ─────────────────────────────────────────────────────────────────────
 

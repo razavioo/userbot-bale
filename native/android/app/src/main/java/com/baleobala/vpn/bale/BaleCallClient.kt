@@ -26,6 +26,7 @@ class BaleCallClient(
         coordinatorPeerId: Long,
         clientId: String,
         appContext: Context,
+        clientPeerId: Long? = null,
         timeoutMs: Long = 60_000,
     ): BaleProtos.CallCredentials {
         onLog("coordinator: dialing coordinator peer=$coordinatorPeerId")
@@ -43,7 +44,10 @@ class BaleCallClient(
 
         val relayPeerId: Long
         try {
-            transport.sendBytes(BaleControlMessages.makeHello(clientId = clientId))
+            transport.sendBytes(BaleControlMessages.makeHello(
+                clientId = clientId,
+                clientPeerId = clientPeerId,
+            ))
             onLog("coordinator: HELLO sent; waiting for ASSIGN/DENY")
             val payload = transport.recvBytes(10_000)
                 ?: throw RuntimeException("coordinator did not respond to HELLO")
