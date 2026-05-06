@@ -242,53 +242,67 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             return
 
-        # ── Coordinator mode: distinguish instruction vs client call ────────
-        if use_coordinator and peer_id == coordinator_peer_id:
-            print(
-                f"[vpn-mesh] coordinator instruction from peer={peer_id}; handling EXPECT_CLIENT",
-                file=sys.stderr,
-            )
-            reporter = reporters[account_index] if reporters else None
-            threading.Thread(
-                target=handle_coordinator_instruction,
-                kwargs=dict(
-                    event=event,
-                    expected=expected_clients,
-                    reporter=reporter,
-                    identity=f"{args.identity_prefix}-ctrl-{account_index}",
-                ),
-                daemon=True,
-                name=f"coord-instr-{account_index}",
-            ).start()
-            return
-
-        if use_coordinator and peer_id == coordinator_peer_id:
-            print(
-                f"[vpn-mesh] coordinator instruction from peer={peer_id}; handling EXPECT_CLIENT",
-                file=sys.stderr,
-            )
-            reporter = reporters[account_index] if reporters else None
-            threading.Thread(
-                target=handle_coordinator_instruction,
-                kwargs=dict(
-                    event=event,
-                    expected=expected_clients,
-                    reporter=reporter,
-                    identity=f"{args.identity_prefix}-ctrl-{account_index}",
-                ),
-                daemon=True,
-                name=f"coord-instr-{account_index}",
-            ).start()
-            return
-
+        # ── Coordinator mode: route by probing the control channel ────────
+        # parse_call_peer_id returns the CALLEE's peer_id (our own account),
+        # not the CALLER's. We cannot use peer_id to distinguish coordinator
+        # instruction calls (EXPECT_CLIENT) from VPN client calls. Instead we
+        # join the room and check if EXPECT_CLIENT arrives on "control" topic.
+        _session_pre_joined: "LiveKitSession | None" = None
         if use_coordinator:
-            session_id = expected_clients.consume(peer_id)
-            if session_id is None:
-                print(
-                    f"[vpn-mesh] incoming call rejected: peer={peer_id} not in expected set",
-                    file=sys.stderr,
-                )
+            from baleobala.coordinator.protocol import (
+                CONTROL_TOPIC as _CTRL_TOPIC,
+                ControlMessage as _CM,
+                Kind as _Kind,
+                decode as _ctrl_decode,
+                encode as _ctrl_encode,
+                ControlError as _CtrlError,
+            )
+            _probe = LiveKitSession(
+                url=event.credentials.url, token=event.credentials.token,
+                identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
+            )
+            try:
+                _probe.start()
+                try:
+                    _probe.wait_for_remote_participant(timeout=5.0)
+                except (TimeoutError, RuntimeError):
+                    pass
+                _ctrl = _probe.data_channel(topic=_CTRL_TOPIC, reliable=True)
+                _ctrl_payload = _ctrl.recv_bytes(timeout=1.5)
+                if _ctrl_payload is not None:
+                    try:
+                        _ctrl_msg = _ctrl_decode(_ctrl_payload)
+                        if _ctrl_msg.kind == _Kind.EXPECT_CLIENT:
+                            _cpid = int(_ctrl_msg.get("client_peer_id", 0))
+                            _csid = str(_ctrl_msg.get("session_id", ""))
+                            _cexp = int(_ctrl_msg.get("expires_in_secs", 30))
+                            if _cpid and _csid:
+                                expected_clients.register(
+                                    client_peer_id=_cpid,
+                                    session_id=_csid,
+                                    expires_in_secs=_cexp,
+                                )
+                                _ctrl.send_bytes(_ctrl_encode(_CM(kind=_Kind.EXPECT_ACK, body={})))
+                                print(
+                                    f"[vpn-mesh] EXPECT_CLIENT: registered client={_cpid} session={_csid}",
+                                    file=sys.stderr,
+                                )
+                            try:
+                                _probe.stop()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            return  # coordinator instruction handled
+                    except _CtrlError:
+                        pass
+            except Exception:  # noqa: BLE001
+                log.exception("relay: probe session error")
+                try:
+                    _probe.stop()
+                except Exception:  # noqa: BLE001
+                    pass
                 return
+            # VPN client call — reuse the already-joined probe session
+            _session_pre_joined = _probe
         # ───────────────────────────────────────────────────────────────────
 
         print(
@@ -303,6 +317,11 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 f"capacity={allocator.total_capacity}",
                 file=sys.stderr,
             )
+            if _session_pre_joined is not None:
+                try:
+                    _session_pre_joined.stop()
+                except Exception:  # noqa: BLE001
+                    pass
             return
         print(
             f"[vpn-mesh] server_jwt_assignment={allocator.assignment()} "
@@ -319,11 +338,14 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 reporters[account_index].report_released(str(sid))
 
         try:
-            session = LiveKitSession(
-                url=event.credentials.url, token=event.credentials.token,
-                identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
-            )
-            session.start()
+            if _session_pre_joined is not None:
+                session = _session_pre_joined
+            else:
+                session = LiveKitSession(
+                    url=event.credentials.url, token=event.credentials.token,
+                    identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
+                )
+                session.start()
             LiveKitKeepalive(session, interval=20.0).start()
             dc = DataChannelTransport(session, topic="vpn", reliable=False)
             transport = EncryptedTransport(dc, psk_key) if psk_key else dc
