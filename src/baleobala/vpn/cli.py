@@ -432,6 +432,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                     p for s in allocator.slots() if s.index == idx
                     for p in s.peer_ids
                 ],
+                capacity=args.max_peers_per_server_jwt,
             )
             reporters.append(reporter)
 

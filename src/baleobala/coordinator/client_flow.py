@@ -29,6 +29,7 @@ def resolve_via_coordinator(
     ws_tls_config,
     identity: str,
     answer_timeout: float,
+    client_peer_id: int | None = None,
     client_factory=None,
     controller_factory=None,
 ):
@@ -71,6 +72,7 @@ def resolve_via_coordinator(
         ch.send_bytes(ctrl_encode(make_hello(
             client_id=identity,
             app_version=platform.node(),
+            client_peer_id=client_peer_id,
         )))
         payload = ch.recv_bytes(timeout=10.0)
         if payload is None:

@@ -142,8 +142,14 @@ object BaleControlMessages {
         replace("\\", "\\\\").replace("\"", "\\\"")
             .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
-    fun makeHello(clientId: String, appVersion: String = ""): ByteArray =
-        encode(Kind.HELLO, mapOf("client_id" to clientId, "app_version" to appVersion))
+    fun makeHello(clientId: String, appVersion: String = "", clientPeerId: Long? = null): ByteArray {
+        val body = mutableMapOf<String, Any>(
+            "client_id" to clientId,
+            "app_version" to appVersion,
+        )
+        if (clientPeerId != null && clientPeerId > 0L) body["client_peer_id"] = clientPeerId
+        return encode(Kind.HELLO, body)
+    }
 
     fun parseAssign(msg: ControlMessage): Pair<Long, String>? {
         if (msg.kind != Kind.ASSIGN) return null
