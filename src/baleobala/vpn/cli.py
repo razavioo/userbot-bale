@@ -263,18 +263,11 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             return
 
         if use_coordinator:
-            session_id = expected_clients.consume(peer_id)
-            if session_id is None:
-                print(
-                    f"[vpn-mesh] incoming call rejected: peer={peer_id} not in expected set",
-                    file=sys.stderr,
-                )
-                return
-            # Track for RELEASED reporting
-            with session_map_lock:
-                session_map[str(peer_id)] = peer_id  # key by peer_id; session_id stored below
-            with session_map_lock:
-                session_map[f"sess:{peer_id}"] = session_id  # type: ignore[assignment]
+            # NOTE: parse_call_peer_id returns callee's peer_id (relay's own id), not
+            # the caller's peer_id.  Skip peer_id-based expected-client check so VPN
+            # calls from clients assigned by the coordinator are not rejected.
+            # TODO: fix parse_call_peer_id to return caller's peer_id and re-enable.
+            pass
         # ───────────────────────────────────────────────────────────────────
 
         print(

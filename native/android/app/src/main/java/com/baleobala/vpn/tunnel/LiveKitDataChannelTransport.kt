@@ -127,6 +127,30 @@ class LiveKitDataChannelTransport(
             throw RuntimeException("LiveKit peer did not join within ${timeoutMs}ms")
         }
         onLog("LiveKit peer ready")
+
+        // Mesh provisioning handshake — the relay sends BBMESH1:{kind:"assign",...}
+        // immediately after joining. We must ACK it before VPN traffic can flow.
+        if (topic == "vpn") {
+            val provRaw = inbox.poll(10_000, TimeUnit.MILLISECONDS)
+            if (provRaw != null) {
+                val provStr = provRaw.toString(Charsets.UTF_8)
+                if (provStr.startsWith("BBMESH1:")) {
+                    val sessionId = Regex(""""session_id"\s*:\s*(\d+)""")
+                        .find(provStr)?.groupValues?.get(1)
+                    if (sessionId != null) {
+                        val ack = "BBMESH1:{\"kind\":\"ack\",\"session_id\":$sessionId}".toByteArray(Charsets.UTF_8)
+                        sendBytes(ack)
+                        onLog("provisioning: sent ACK session_id=$sessionId")
+                    } else {
+                        onLog("provisioning: BBMESH1 message missing session_id, skipping ACK")
+                    }
+                } else {
+                    // Not a provisioning message — put it back for the carrier
+                    inbox.put(provRaw)
+                }
+            }
+        }
+
         return this
     }
 
