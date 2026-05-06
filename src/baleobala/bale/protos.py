@@ -505,9 +505,7 @@ def parse_call_peer_id(buf: bytes) -> int | None:
         _commit_candidate()
 
     _scan(buf)
-    # The first candidate is consistently the CALLEE (account receiving the call,
-    # i.e. our own peer_id). The CALLER's peer_id appears last in the push bytes.
-    return candidates[-1] if candidates else None
+    return candidates[0] if candidates else None
 
 
 # ============================================================
