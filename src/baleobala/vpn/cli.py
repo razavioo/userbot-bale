@@ -234,6 +234,16 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     # Maps session_id → peer_id for RELEASED reporting
     session_map: dict[str, int] = {}
     session_map_lock = threading.Lock()
+    # Serialise concurrent probe sessions. The livekit-ffi Rust runtime is
+    # global and races when multiple rooms connect/disconnect simultaneously.
+    # An EXPECT_CLIENT probe and a VPN probe arriving at the same time (which
+    # is the normal pattern — coordinator sends EXPECT_CLIENT right after
+    # assigning a relay, Android dials the relay almost simultaneously) both
+    # start LiveKit sessions, and the concurrent teardown can corrupt room
+    # handles in the Rust runtime, causing the VPN session to drop 1–6 s
+    # after tun up.  Serialising probes via this lock fixes the race at the
+    # cost of a short delay (< the EXPECT_CLIENT probe duration, ~3–5 s).
+    _probe_lock = threading.Lock()
 
     def on_incoming_call(event, account_index: int = 0):  # type: ignore[no-untyped-def]
         peer_id = event.peer_id
@@ -257,50 +267,51 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 encode as _ctrl_encode,
                 ControlError as _CtrlError,
             )
-            _probe = LiveKitSession(
-                url=event.credentials.url, token=event.credentials.token,
-                identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
-            )
-            try:
-                _probe.start()
+            with _probe_lock:
+                _probe = LiveKitSession(
+                    url=event.credentials.url, token=event.credentials.token,
+                    identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
+                )
                 try:
-                    _probe.wait_for_remote_participant(timeout=5.0)
-                except (TimeoutError, RuntimeError):
-                    pass
-                _ctrl = _probe.data_channel(topic=_CTRL_TOPIC, reliable=True)
-                _ctrl_payload = _ctrl.recv_bytes(timeout=1.5)
-                if _ctrl_payload is not None:
+                    _probe.start()
                     try:
-                        _ctrl_msg = _ctrl_decode(_ctrl_payload)
-                        if _ctrl_msg.kind == _Kind.EXPECT_CLIENT:
-                            _cpid = int(_ctrl_msg.get("client_peer_id", 0))
-                            _csid = str(_ctrl_msg.get("session_id", ""))
-                            _cexp = int(_ctrl_msg.get("expires_in_secs", 30))
-                            if _cpid and _csid:
-                                expected_clients.register(
-                                    client_peer_id=_cpid,
-                                    session_id=_csid,
-                                    expires_in_secs=_cexp,
-                                )
-                                _ctrl.send_bytes(_ctrl_encode(_CM(kind=_Kind.EXPECT_ACK, body={})))
-                                print(
-                                    f"[vpn-mesh] EXPECT_CLIENT: registered client={_cpid} session={_csid}",
-                                    file=sys.stderr,
-                                )
-                            try:
-                                _probe.stop()
-                            except Exception:  # noqa: BLE001
-                                pass
-                            return  # coordinator instruction handled
-                    except _CtrlError:
+                        _probe.wait_for_remote_participant(timeout=5.0)
+                    except (TimeoutError, RuntimeError):
                         pass
-            except Exception:  # noqa: BLE001
-                log.exception("relay: probe session error")
-                try:
-                    _probe.stop()
+                    _ctrl = _probe.data_channel(topic=_CTRL_TOPIC, reliable=True)
+                    _ctrl_payload = _ctrl.recv_bytes(timeout=1.5)
+                    if _ctrl_payload is not None:
+                        try:
+                            _ctrl_msg = _ctrl_decode(_ctrl_payload)
+                            if _ctrl_msg.kind == _Kind.EXPECT_CLIENT:
+                                _cpid = int(_ctrl_msg.get("client_peer_id", 0))
+                                _csid = str(_ctrl_msg.get("session_id", ""))
+                                _cexp = int(_ctrl_msg.get("expires_in_secs", 30))
+                                if _cpid and _csid:
+                                    expected_clients.register(
+                                        client_peer_id=_cpid,
+                                        session_id=_csid,
+                                        expires_in_secs=_cexp,
+                                    )
+                                    _ctrl.send_bytes(_ctrl_encode(_CM(kind=_Kind.EXPECT_ACK, body={})))
+                                    print(
+                                        f"[vpn-mesh] EXPECT_CLIENT: registered client={_cpid} session={_csid}",
+                                        file=sys.stderr,
+                                    )
+                                try:
+                                    _probe.stop()
+                                except Exception:  # noqa: BLE001
+                                    pass
+                                return  # coordinator instruction handled
+                        except _CtrlError:
+                            pass
                 except Exception:  # noqa: BLE001
-                    pass
-                return
+                    log.exception("relay: probe session error")
+                    try:
+                        _probe.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
             # VPN client call — reuse the already-joined probe session
             _session_pre_joined = _probe
         # ───────────────────────────────────────────────────────────────────
