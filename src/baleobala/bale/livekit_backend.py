@@ -612,6 +612,12 @@ class LiveKitSession:
                 payload, reliable=reliable, topic=topic
             ),
         )
+        if not reliable:
+            # Unreliable (VPN frames, keepalive): fire-and-forget so the
+            # caller is never blocked by Rust runtime backpressure from
+            # concurrent heartbeat session teardowns. Dropped sends are
+            # acceptable — WireGuard and keepalive both tolerate loss.
+            return
         try:
             fut.result(timeout=15)
         except Exception:  # noqa: BLE001
