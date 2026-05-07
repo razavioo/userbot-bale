@@ -225,6 +225,16 @@ class BaleApiClient:
             "bale.meet.v1.Meet", "StartCall", payload, timeout=10.0,
         )
         log.info("StartCall ack: seq=%s payload=%dB", resp.seq, len(resp.payload))
+        # Bale echoes every outgoing StartCall back to the caller's own push
+        # stream as a compact-offer "incoming call". If we don't suppress it,
+        # our push listener fires AcceptCall on that echo — which is a second
+        # AcceptCall on the same callId and terminates the LiveKit room,
+        # preventing us from joining it. Suppress by pre-registering the
+        # outgoing callId in _accepted_call_ids.
+        _outgoing_call_id = parse_incoming_call_offer(resp.raw)
+        if _outgoing_call_id is not None:
+            self._accepted_call_ids.add(_outgoing_call_id)
+            log.debug("suppressed echo accept for outgoing callId=%d", _outgoing_call_id)
         if resp.payload:
             try:
                 status = resp.payload.decode("utf-8")
