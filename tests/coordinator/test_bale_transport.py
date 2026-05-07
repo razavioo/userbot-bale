@@ -57,7 +57,7 @@ class FakeDataChannel:
 class FakeLiveKitSession:
     instances: list["FakeLiveKitSession"] = []
 
-    def __init__(self, *, url: str, token: str, identity: str) -> None:
+    def __init__(self, *, url: str, token: str, identity: str, **_kwargs: object) -> None:
         self.url = url
         self.token = token
         self.identity = identity

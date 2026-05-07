@@ -150,6 +150,7 @@ class BaleCoordinatorTransport(CoordinatorTransport):
             url=creds.url,
             token=creds.token,
             identity=f"{self._identity_prefix}-out-{peer_id}",
+            publish_audio=False,
         )
         try:
             session.start()
@@ -214,7 +215,7 @@ class BaleCoordinatorTransport(CoordinatorTransport):
         creds = event.credentials
         identity = f"{self._identity_prefix}-in-{peer_id}"
         try:
-            session = LiveKitSession(url=creds.url, token=creds.token, identity=identity)
+            session = LiveKitSession(url=creds.url, token=creds.token, identity=identity, publish_audio=False)
             session.start()
             # Register the "control" data channel queue BEFORE waiting for the
             # remote participant. The caller (client or relay) may send a message

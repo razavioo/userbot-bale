@@ -271,6 +271,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 _probe = LiveKitSession(
                     url=event.credentials.url, token=event.credentials.token,
                     identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
+                    publish_audio=False,
                 )
                 try:
                     _probe.start()

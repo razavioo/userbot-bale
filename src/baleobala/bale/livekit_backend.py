@@ -106,10 +106,18 @@ class LiveKitSession:
     which is what GGWave's streaming decoder expects).
     """
 
-    def __init__(self, url: str, token: str, identity: str = "baleobala") -> None:
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        identity: str = "baleobala",
+        *,
+        publish_audio: bool = True,
+    ) -> None:
         self.url = url
         self.token = token
         self.identity = identity
+        self._publish_audio = publish_audio
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -410,13 +418,14 @@ class LiveKitSession:
         except Exception:  # noqa: BLE001
             pass
 
-        source = rtc.AudioSource(LIVEKIT_SAMPLE_RATE, 1)
-        self._audio_source = source
-        track = rtc.LocalAudioTrack.create_audio_track("baleobala", source)
-        self._audio_track = track
-        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        await room.local_participant.publish_track(track, options)
-        log.info("local audio track published")
+        if self._publish_audio:
+            source = rtc.AudioSource(LIVEKIT_SAMPLE_RATE, 1)
+            self._audio_source = source
+            track = rtc.LocalAudioTrack.create_audio_track("baleobala", source)
+            self._audio_track = track
+            options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+            await room.local_participant.publish_track(track, options)
+            log.info("local audio track published")
 
         with self._state_lock:
             if self._state == LiveKitSessionState.STARTING:
