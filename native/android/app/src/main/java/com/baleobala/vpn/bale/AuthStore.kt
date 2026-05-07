@@ -2,7 +2,9 @@ package com.baleobala.vpn.bale
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Base64
 import android.util.Log
+import org.json.JSONObject
 
 /**
  * JWT/phone persistence backed by plain SharedPreferences. Older builds
@@ -36,7 +38,32 @@ class AuthStore(ctx: Context) {
 
     fun phoneNumber(): Long? = if (prefs.contains(KEY_PHONE)) prefs.getLong(KEY_PHONE, 0) else null
 
-    fun userId(): Long? = if (prefs.contains(KEY_USER_ID)) prefs.getLong(KEY_USER_ID, 0) else null
+    fun userId(): Long? {
+        if (prefs.contains(KEY_USER_ID)) return prefs.getLong(KEY_USER_ID, 0)
+        // Fallback: parse user_id from JWT payload so existing sessions don't require re-login.
+        val jwtUserId = parseUserIdFromJwt(prefs.getString(KEY_JWT, null))
+        if (jwtUserId != null && jwtUserId > 0) {
+            saveUserId(jwtUserId)
+            return jwtUserId
+        }
+        return null
+    }
+
+    private fun parseUserIdFromJwt(jwt: String?): Long? {
+        if (jwt == null) return null
+        return try {
+            val parts = jwt.split(".")
+            if (parts.size < 2) return null
+            val payload = String(Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING), Charsets.UTF_8)
+            val obj = JSONObject(payload)
+            val payloadInner = obj.optJSONObject("payload") ?: obj
+            val id = payloadInner.optLong("user_id", 0)
+            if (id > 0) id else null
+        } catch (e: Exception) {
+            Log.w(TAG, "JWT user_id parse failed: ${e.message}")
+            null
+        }
+    }
 
     fun clear() {
         prefs.edit().remove(KEY_JWT).remove(KEY_PHONE).remove(KEY_USER_ID).apply()
