@@ -292,9 +292,15 @@ struct MainView: View {
                         Button("Sign out") { controller.logout() }
                             .buttonStyle(LinkButtonStyle())
                      ))
-            InfoCard(icon: "antenna.radiowaves.left.and.right",
-                     title: "Relay peer",
-                     value: controller.proxy.relayPeerId.isEmpty ? "(not set — open Settings)" : controller.proxy.relayPeerId)
+            if !controller.proxy.coordinatorPeerId.isEmpty {
+                InfoCard(icon: "antenna.radiowaves.left.and.right",
+                         title: "Coordinator peer",
+                         value: controller.proxy.coordinatorPeerId)
+            } else {
+                InfoCard(icon: "antenna.radiowaves.left.and.right",
+                         title: "Relay peer",
+                         value: controller.proxy.relayPeerId.isEmpty ? "(not set — open Settings)" : controller.proxy.relayPeerId)
+            }
             InfoCard(icon: "network",
                      title: "Endpoint",
                      value: controller.proxy.endpoint)
@@ -321,6 +327,7 @@ struct SettingsView: View {
     @State private var port: String = ""
     @State private var service: String = ""
     @State private var relayPeerId: String = ""
+    @State private var coordinatorPeerId: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -341,9 +348,17 @@ struct SettingsView: View {
                 .foregroundStyle(.white)
 
             VStack(alignment: .leading, spacing: 6) {
-                FieldLabel("Relay peer ID")
+                FieldLabel("Coordinator peer ID (recommended)")
+                StyledField(placeholder: "e.g. 423217348", text: $coordinatorPeerId)
+                Text("Bale user_id of the coordinator. When set, the coordinator picks a relay — the relay's identity is hidden from this device.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                FieldLabel("Direct relay peer ID (fallback)")
                 StyledField(placeholder: "1519372475", text: $relayPeerId)
-                Text("Bale user_id of the relay/exit node you want to call. Required.")
+                Text("Used only when Coordinator peer ID is empty. Connects directly to a known relay.")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.45))
             }
@@ -370,7 +385,12 @@ struct SettingsView: View {
 
             Button {
                 let p = Int(port) ?? controller.settings.listenPort
-                controller.saveSettings(port: p, service: service, relayPeerId: relayPeerId.trimmingCharacters(in: .whitespaces))
+                controller.saveSettings(
+                    port: p,
+                    service: service,
+                    relayPeerId: relayPeerId.trimmingCharacters(in: .whitespaces),
+                    coordinatorPeerId: coordinatorPeerId.trimmingCharacters(in: .whitespaces)
+                )
                 withAnimation { showSettings = false }
             } label: {
                 Label("Save", systemImage: "tray.and.arrow.down.fill")
@@ -386,6 +406,7 @@ struct SettingsView: View {
             port = String(controller.settings.listenPort)
             service = controller.settings.service
             relayPeerId = controller.settings.relayPeerId
+            coordinatorPeerId = controller.settings.coordinatorPeerId
         }
     }
 }

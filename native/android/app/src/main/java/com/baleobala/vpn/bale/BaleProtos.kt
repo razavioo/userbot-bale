@@ -277,9 +277,35 @@ object BaleProtos {
         val url = Regex("(wss://[A-Za-z0-9./\\-]+\\.(?:ir|ai))").find(ascii)?.groupValues?.get(1)
         val token = Regex("(eyJhbGciOi[A-Za-z0-9_\\-.]{100,})").find(ascii)?.groupValues?.get(1)
         if (url == null || token == null) return null
-        val room = Regex("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
-            .find(ascii)?.groupValues?.get(1) ?: ""
-        return CallCredentials(url, token, room, parseCallPeerId(buf), buf)
+        return CallCredentials(url, token, extractRoomFromBuf(buf, ascii), parseCallPeerId(buf), buf)
+    }
+
+    /**
+     * Extract the LiveKit room UUID from a Bale response/push payload.
+     *
+     * Strategy 1 (structure-aware): scan for tag 0x1A (field 3, wiretype 2)
+     * followed by length 0x24 (36 = UUID string length). The 36 bytes that
+     * follow are the room name. This anchor is confirmed live-probed and avoids
+     * picking the wrong UUID when multiple appear in the same payload (e.g. call
+     * IDs in StartCall vs AcceptCall responses differ in field order).
+     *
+     * Strategy 2 (fallback): first UUID regex match anywhere in the buffer.
+     */
+    private fun extractRoomFromBuf(buf: ByteArray, ascii: String): String {
+        val uuidPat = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        // Strategy 1: field-3 anchor (0x1a 0x24)
+        var pos = 0
+        while (pos < buf.size - 1) {
+            val idx = buf.indexOf(0x1a.toByte(), pos)
+            if (idx == -1 || idx + 1 >= buf.size) break
+            if (buf[idx + 1] == 0x24.toByte() && idx + 2 + 36 <= buf.size) {
+                val candidate = ascii.substring(idx + 2, idx + 38)
+                if (uuidPat.matches(candidate)) return candidate
+            }
+            pos = idx + 1
+        }
+        // Strategy 2: first UUID anywhere
+        return uuidPat.find(ascii)?.value ?: ""
     }
 
     private fun parseCallPeerId(buf: ByteArray): Long? {
