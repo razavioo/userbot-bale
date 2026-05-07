@@ -215,6 +215,12 @@ class CoordinatorReporter:
                 session.stop()
             except Exception:  # noqa: BLE001
                 pass
+            # Give the livekit-ffi Rust runtime time to flush pending
+            # cleanup tasks before we return. Without this sleep, starting
+            # the next session immediately races with the previous session's
+            # async teardown in the Rust tokio runtime, eventually causing
+            # "LiveKit room did not become ready within 45s" timeouts.
+            _time.sleep(2.0)
 
 
 class ExpectedClientSet:
