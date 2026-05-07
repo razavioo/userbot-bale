@@ -458,6 +458,30 @@ class LiveKitSession:
             self._stopped.set()
             raise
 
+    def enable_audio(self) -> None:
+        """Publish a local audio track on an already-running session.
+
+        Call this when a probe session (created with publish_audio=False for
+        low overhead) is promoted to a long-lived VPN session that needs a
+        media track to keep the Bale SFU from closing it after ~20 s.
+        """
+        if self._publish_audio:
+            return  # already publishing
+        self._publish_audio = True
+        self._submit_coro(self._publish_audio_track())
+
+    async def _publish_audio_track(self) -> None:
+        _require_livekit()
+        if self._room is None or self._audio_source is not None:
+            return
+        source = rtc.AudioSource(LIVEKIT_SAMPLE_RATE, 1)
+        self._audio_source = source
+        track = rtc.LocalAudioTrack.create_audio_track("baleobala", source)
+        self._audio_track = track
+        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        await self._room.local_participant.publish_track(track, options)
+        log.info("late audio track published (VPN session promoted)")
+
     async def _shutdown(self) -> None:
         await self._cancel_tasks()
         room = self._room
