@@ -425,6 +425,42 @@ def encode_accept_call(call_id: int, invite_enable: bool = True) -> bytes:
     return bytes(body)
 
 
+_UUID_PAT = rb'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+_UUID_LEN = 36
+
+
+def _extract_room_from_buf(buf: bytes) -> str:
+    """Extract the LiveKit room UUID from a Bale push/response payload.
+
+    Uses two strategies, in order of reliability:
+
+    1. **Field-3 tag probe** (`\\x1a\\x24`): tag byte 0x1a = field 3 wiretype 2
+       (len-delim), length byte 0x24 = 36 (exact UUID string length). The 36
+       bytes that follow are the room name string. This anchor is confirmed in
+       `parse_incoming_call_offer` (live-probed 2026-04-23) and is
+       structure-aware — it won't pick up other UUIDs that happen to appear in
+       the payload (e.g. call-IDs, session tokens).
+
+    2. **Generic UUID regex fallback**: matches the first UUID-shaped string
+       anywhere in the buffer. Used when the field-3 anchor is absent (e.g.
+       older payload shapes).
+    """
+    import re
+    # Strategy 1: field 3 anchor (reliable, structure-aware)
+    pos = 0
+    while True:
+        idx = buf.find(b"\x1a\x24", pos)
+        if idx == -1:
+            break
+        candidate = buf[idx + 2: idx + 2 + _UUID_LEN]
+        if len(candidate) == _UUID_LEN and re.match(_UUID_PAT, candidate):
+            return candidate.decode("ascii")
+        pos = idx + 1
+    # Strategy 2: first UUID regex fallback
+    m = re.search(_UUID_PAT, buf)
+    return m.group(0).decode("ascii") if m else ""
+
+
 def parse_call_credentials(buf: bytes) -> CallCredentials | None:
     """Extract LiveKit url + JWT + room out of an opaque server update.
 
@@ -435,16 +471,13 @@ def parse_call_credentials(buf: bytes) -> CallCredentials | None:
     import re
     url_m = re.search(rb'(wss://[a-zA-Z0-9./\-]+\.(?:ir|ai))', buf)
     tok_m = re.search(rb'(eyJhbGciOi[A-Za-z0-9_\-.]{100,})', buf)
-    room_m = re.search(
-        rb'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', buf,
-    )
     if not (url_m and tok_m):
         return None
     peer_id = parse_call_peer_id(buf)
     return CallCredentials(
         url=url_m.group(0).decode("ascii"),
         token=tok_m.group(0).decode("ascii"),
-        room=room_m.group(0).decode("ascii") if room_m else "",
+        room=_extract_room_from_buf(buf),
         peer_id=peer_id,
         raw=buf,
     )

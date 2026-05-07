@@ -70,6 +70,35 @@ def test_parse_call_credentials_returns_none_without_match() -> None:
     assert parse_call_credentials(b"just some random bytes") is None
 
 
+def test_parse_call_credentials_picks_field3_room_over_earlier_uuid() -> None:
+    """Regression: StartCall and AcceptCall responses have different protobuf
+    field ordering, causing the generic first-UUID regex to pick a wrong UUID
+    (e.g. a call/session ID that appears before the actual room UUID in one of
+    the responses). The field-3 anchor (0x1a 0x24) must take priority.
+
+    Simulates the layout observed in AcceptCall responses where an earlier UUID
+    (some call-ID or outer session ID) appears before the room field."""
+    CALL_ID_UUID   = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"  # appears first
+    REAL_ROOM_UUID = "11111111-2222-3333-4444-555555555555"  # the actual room
+
+    # Build a payload that has the call-id UUID earlier than the room,
+    # and the room anchored with the field-3 tag (0x1a 0x24).
+    room_bytes = REAL_ROOM_UUID.encode("ascii")
+    assert len(room_bytes) == 36
+    blob = (
+        b"\x0a\x28" + CALL_ID_UUID.encode("ascii") +   # outer field 1, length 40 (UUID + extras) — just noise
+        b" wss://meet-gwe.ble.ir "
+        b"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + b"A" * 200 + b".XYZ "
+        b"\x1a\x24" + room_bytes +                      # field 3, length 36 = room
+        b" tail"
+    )
+    c = parse_call_credentials(blob)
+    assert c is not None
+    assert c.room == REAL_ROOM_UUID, (
+        f"Expected room {REAL_ROOM_UUID!r} via field-3 anchor, got {c.room!r}"
+    )
+
+
 def test_rid_dedup_evicts_after_cap_and_is_thread_safe() -> None:
     """Regression: RID dedup buffer used to be cap=1024 with no lock.
     Confirm the cap evicts oldest, lookups remain consistent under

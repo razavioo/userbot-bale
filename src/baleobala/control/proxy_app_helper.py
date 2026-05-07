@@ -24,6 +24,7 @@ DEFAULT_LISTEN_HOST = "127.0.0.1"
 DEFAULT_LISTEN_PORT = 1080
 DEFAULT_NETWORK_SERVICE = "Wi-Fi"
 DEFAULT_RELAY_PEER_ID = "1519372475"
+DEFAULT_COORDINATOR_PEER_ID = ""
 
 _SETTINGS_DIR = Path.home() / ".baleobala"
 _SETTINGS_PATH = _SETTINGS_DIR / "proxy_app_settings.json"
@@ -41,6 +42,7 @@ class ProxySettings:
     listen_port: int = DEFAULT_LISTEN_PORT
     network_service: str = DEFAULT_NETWORK_SERVICE
     relay_peer_id: str = DEFAULT_RELAY_PEER_ID
+    coordinator_peer_id: str = DEFAULT_COORDINATOR_PEER_ID
     transport: str = "dc"
 
     @classmethod
@@ -56,6 +58,7 @@ class ProxySettings:
             listen_port=int(data.get("listen_port") or DEFAULT_LISTEN_PORT),
             network_service=str(data.get("network_service") or DEFAULT_NETWORK_SERVICE),
             relay_peer_id=str(data.get("relay_peer_id") or DEFAULT_RELAY_PEER_ID),
+            coordinator_peer_id=str(data.get("coordinator_peer_id") or DEFAULT_COORDINATOR_PEER_ID),
             transport=str(data.get("transport") or "dc"),
         )
 
@@ -273,6 +276,7 @@ def _state_payload() -> dict[str, Any]:
             "listen_port": settings.listen_port,
             "service": settings.network_service,
             "relay_peer_id": settings.relay_peer_id,
+            "coordinator_peer_id": settings.coordinator_peer_id,
             "started_at": meta.get("started_at") if running else None,
             # Distinguishes "subprocess alive" from "macOS networksetup
             # actually points Wi-Fi traffic at our SOCKS listener". The
@@ -302,6 +306,8 @@ def _cmd_save_settings(payload: dict[str, Any]) -> Result:
         settings.network_service = str(payload["network_service"]).strip() or DEFAULT_NETWORK_SERVICE
     if "relay_peer_id" in payload:
         settings.relay_peer_id = str(payload["relay_peer_id"]).strip() or DEFAULT_RELAY_PEER_ID
+    if "coordinator_peer_id" in payload:
+        settings.coordinator_peer_id = str(payload["coordinator_peer_id"]).strip()
     if "transport" in payload:
         settings.transport = str(payload["transport"]).strip() or "dc"
     settings.save()
@@ -400,13 +406,17 @@ def _cmd_proxy_start(payload: dict[str, Any]) -> Result:
         python_bin, "-u", "-m", "baleobala.cli", "bale-proxy", "system",
         "--transport", settings.transport,
         "--bale-jwt-file", str(_account_path()),
-        "--peer-id", settings.relay_peer_id,
         "--listen-host", settings.listen_host,
         "--listen-port", str(settings.listen_port),
         "--service", settings.network_service,
         "--proxy-ready-timeout", "60",
         "--ws-ssl-no-verify",
     ]
+    # Prefer coordinator mode (hides relay identity); fall back to direct peer_id.
+    if settings.coordinator_peer_id.strip():
+        cmd.extend(["--coordinator-peer-id", settings.coordinator_peer_id.strip()])
+    elif settings.relay_peer_id.strip():
+        cmd.extend(["--peer-id", settings.relay_peer_id.strip()])
     psk = Path.home() / ".baleobala" / "baleobala-vpn.psk"
     if psk.exists():
         cmd.extend(["--proxy-secret-file", str(psk)])

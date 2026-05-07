@@ -2974,6 +2974,10 @@ def build_parser() -> argparse.ArgumentParser:
     bp_system.add_argument("--peer-name", default=None)
     bp_system.add_argument("--answer", action="store_true")
     bp_system.add_argument("--answer-timeout", type=float, default=120.0)
+    bp_system.add_argument("--coordinator-peer-id", type=int, default=None,
+                           help="Bale user_id of the coordinator. When set, calls coordinator for relay assignment.")
+    bp_system.add_argument("--no-coordinator", action="store_true",
+                           help="Skip coordinator and dial --peer-id directly even if coordinator config exists.")
     bp_system.add_argument("--identity", default="baleobala")
     bp_system.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_system.add_argument("--volume", type=int, default=50)
