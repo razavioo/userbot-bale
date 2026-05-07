@@ -313,7 +313,13 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                     except Exception:  # noqa: BLE001
                         pass
                     return
-            # VPN client call — reuse the already-joined probe session
+            # VPN client call — reuse the already-joined probe session.
+            # Publish audio now so the Bale SFU keeps this long-lived
+            # session alive (without a media track the SFU closes it
+            # after ~20 s). The probe was created with publish_audio=False
+            # to avoid audio-track cleanup overhead on short EXPECT_CLIENT
+            # probes; we enable it here only when the session is promoted.
+            _probe.enable_audio()
             _session_pre_joined = _probe
         # ───────────────────────────────────────────────────────────────────
 
