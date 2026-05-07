@@ -9,6 +9,7 @@ from baleobala.bale.endpoints import Endpoint
 from baleobala.bale.messaging_backend import MessagingBackend
 from baleobala.bale.protos import (
     CallCredentials, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
+    parse_incoming_call_offer,
 )
 
 
@@ -97,6 +98,35 @@ def test_parse_call_credentials_picks_field3_room_over_earlier_uuid() -> None:
     assert c.room == REAL_ROOM_UUID, (
         f"Expected room {REAL_ROOM_UUID!r} via field-3 anchor, got {c.room!r}"
     )
+
+
+def test_parse_incoming_call_offer_with_two_byte_varint_length() -> None:
+    """Regression: StartCall inline responses use 2-byte varint lengths for the
+    outer field (e.g. 0xfe 0x04 = 638).  parse_incoming_call_offer previously
+    read only one byte and computed the wrong inner_end, so the containment
+    check always failed and it returned None — leaving the self-accept echo
+    unsuppressed and causing the relay to terminate its own heartbeat LiveKit
+    rooms."""
+    ROOM = "c9432d6c-12c6-4b8f-8f75-4150495dc055"
+    CALL_ID_VARINT = b"\xb9\x60"   # varint for 12345
+
+    # Build inner payload: \x08 <callId varint> \x1a\x24 <room> ... wss URL
+    inner = (
+        b"\x08" + CALL_ID_VARINT
+        + b"\x1a\x24" + ROOM.encode()
+        + b" wss://meet-gwe.ble.ir"
+    )
+    # Encode outer field 1 with a 2-byte varint length (>= 128 bytes)
+    # Pad inner so length > 127 to force a 2-byte varint.
+    inner += b"\x00" * (130 - len(inner))
+    assert len(inner) >= 128
+    # 2-byte varint: encode len(inner)
+    n = len(inner)
+    length_varint = bytes([(n & 0x7F) | 0x80, (n >> 7) & 0x7F])
+    buf = b"\x0a" + length_varint + inner
+
+    call_id = parse_incoming_call_offer(buf)
+    assert call_id == 12345, f"Expected 12345, got {call_id!r}"
 
 
 def test_rid_dedup_evicts_after_cap_and_is_thread_safe() -> None:
