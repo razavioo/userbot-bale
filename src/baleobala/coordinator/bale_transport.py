@@ -178,6 +178,8 @@ class BaleCoordinatorTransport(CoordinatorTransport):
                 session.stop()
             except Exception:
                 pass
+            import time as _time
+            _time.sleep(2.0)
 
         if payload is None:
             return None

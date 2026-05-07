@@ -275,7 +275,7 @@ class LiveKitSession:
         try:
             if fut is not None:
                 try:
-                    fut.result(timeout=5)
+                    fut.result(timeout=6)
                 except FutureCancelledError:
                     pass
                 except FutureTimeoutError:
@@ -284,7 +284,7 @@ class LiveKitSession:
                     log.exception("LiveKit shutdown failed")
         finally:
             if thread is not None:
-                thread.join(timeout=5)
+                thread.join(timeout=8)
                 if thread.is_alive():
                     log.warning("LiveKit thread did not exit cleanly within timeout")
                 else:
@@ -458,10 +458,13 @@ class LiveKitSession:
         self._video_track = None
         if room is not None:
             try:
-                await room.disconnect()
-                await asyncio.sleep(0.25)
-            except Exception:  # noqa: BLE001
-                log.exception("room.disconnect failed")
+                # Cap disconnect at 3 s so the shutdown future (5 s budget)
+                # completes before the thread-join timeout, letting the Rust
+                # runtime release its connection slot cleanly.
+                await asyncio.wait_for(room.disconnect(), timeout=3.0)
+                await asyncio.sleep(0.1)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                pass
             self._room = None
         self._flush_sync_queues()
 
