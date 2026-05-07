@@ -171,6 +171,7 @@ class CoordinatorReporter:
             url=creds.url,
             token=creds.token,
             identity=f"{self._identity}-{msg.kind.lower()}",
+            publish_audio=False,
         )
         try:
             try:
@@ -282,7 +283,7 @@ def handle_coordinator_instruction(
     the expected client in `expected`, acks, and hangs up.
     """
     creds = event.credentials
-    session = LiveKitSession(url=creds.url, token=creds.token, identity=identity)
+    session = LiveKitSession(url=creds.url, token=creds.token, identity=identity, publish_audio=False)
     try:
         session.start()
         session.wait_for_remote_participant(timeout=REMOTE_JOIN_TIMEOUT)

@@ -46,7 +46,7 @@ class FakeDataChannel:
 
 
 class FakeLiveKitSession:
-    def __init__(self, *, url, token, identity):
+    def __init__(self, *, url, token, identity, **_kwargs):
         self.stopped = False
         self._channels: dict[str, FakeDataChannel] = {}
 
