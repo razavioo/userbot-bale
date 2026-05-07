@@ -389,8 +389,14 @@ def parse_incoming_call_offer(buf: bytes) -> int | None:
     for start in range(room_pos - 2, -1, -1):
         if buf[start] != 0x0A or start + 1 >= len(buf):
             continue
-        length = buf[start + 1]
-        inner_start = start + 2
+        # Decode the field length as a proper varint (not a single byte):
+        # the StartCall inline response uses 2-byte lengths (e.g. 0xfe 0x04
+        # for 638), so reading only buf[start+1] gave the wrong inner_end,
+        # causing the containment check to fail for all outgoing call responses.
+        try:
+            length, inner_start = _dec_varint(buf, start + 1)
+        except (IndexError, ValueError):
+            continue
         inner_end = inner_start + length
         if inner_end > len(buf):
             continue
