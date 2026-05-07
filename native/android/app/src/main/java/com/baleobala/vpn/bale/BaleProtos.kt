@@ -293,16 +293,13 @@ object BaleProtos {
      */
     private fun extractRoomFromBuf(buf: ByteArray, ascii: String): String {
         val uuidPat = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-        // Strategy 1: field-3 anchor (0x1a 0x24)
-        var pos = 0
-        while (pos < buf.size - 1) {
-            val idx = buf.indexOf(0x1a.toByte(), pos)
-            if (idx == -1 || idx + 1 >= buf.size) break
-            if (buf[idx + 1] == 0x24.toByte() && idx + 2 + 36 <= buf.size) {
-                val candidate = ascii.substring(idx + 2, idx + 38)
+        // Strategy 1: field-3 anchor (0x1a 0x24) — structure-aware UUID extraction.
+        // 0x1a = field 3 wiretype 2 (len-delim); 0x24 = 36 (exact UUID string length).
+        for (i in 0 until buf.size - 38) {
+            if (buf[i] == 0x1a.toByte() && buf[i + 1] == 0x24.toByte()) {
+                val candidate = ascii.substring(i + 2, i + 38)
                 if (uuidPat.matches(candidate)) return candidate
             }
-            pos = idx + 1
         }
         // Strategy 2: first UUID anywhere
         return uuidPat.find(ascii)?.value ?: ""
