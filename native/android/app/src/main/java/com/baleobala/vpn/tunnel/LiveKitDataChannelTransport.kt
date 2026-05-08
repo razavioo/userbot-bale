@@ -52,6 +52,22 @@ class LiveKitDataChannelTransport(
      *  disconnects as carrier death (not a failed initial dial). */
     private val connectedOnce = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** Client IP assigned by the relay's BBMESH1 provisioning message,
+     *  populated during `connect()` for `topic == "vpn"`. The
+     *  BaleVpnService reads this BEFORE calling VpnService.Builder.
+     *  addAddress() so the device's TUN address matches the slot the
+     *  relay's PacketRouter has attached — without this, return packets
+     *  are silently dropped on the relay because Android sent from a
+     *  hardcoded 10.77.0.2 while the relay had a different /30. */
+    @Volatile var clientIp: String? = null
+        private set
+    @Volatile var gatewayIp: String? = null
+        private set
+    /** Subnet prefix length (e.g. 30 for a /30 — but VpnService usually
+     *  wants 24 to share the gateway in the same broadcast domain). */
+    @Volatile var prefixLen: Int = 0
+        private set
+
     fun connect(timeoutMs: Long = 30_000): LiveKitDataChannelTransport {
         val r = LiveKit.create(appContext)
         room = r
@@ -145,10 +161,25 @@ class LiveKitDataChannelTransport(
                 if (provStr.startsWith("BBMESH1:")) {
                     val sessionId = Regex(""""session_id"\s*:\s*(\d+)""")
                         .find(provStr)?.groupValues?.get(1)
+                    // Capture the assigned client/gateway IPs so the
+                    // BaleVpnService can rebuild VpnService.Builder with
+                    // the correct TUN address. Without this each device
+                    // hardcoded 10.77.0.2; second concurrent client got
+                    // 10.77.0.6 from the relay and silently dropped all
+                    // return traffic.
+                    clientIp = Regex(""""client_ip"\s*:\s*"([^"]+)"""")
+                        .find(provStr)?.groupValues?.get(1)
+                    gatewayIp = Regex(""""gateway_ip"\s*:\s*"([^"]+)"""")
+                        .find(provStr)?.groupValues?.get(1)
+                    val prefixStr = Regex(""""prefix"\s*:\s*"[^/]+/(\d+)"""")
+                        .find(provStr)?.groupValues?.get(1)
+                    if (prefixStr != null) {
+                        prefixLen = prefixStr.toIntOrNull() ?: 0
+                    }
                     if (sessionId != null) {
                         val ack = "BBMESH1:{\"kind\":\"ack\",\"session_id\":$sessionId}".toByteArray(Charsets.UTF_8)
                         sendBytes(ack)
-                        onLog("provisioning: sent ACK session_id=$sessionId")
+                        onLog("provisioning: sent ACK session_id=$sessionId client_ip=$clientIp gateway_ip=$gatewayIp")
                     } else {
                         onLog("provisioning: BBMESH1 message missing session_id, skipping ACK")
                     }
