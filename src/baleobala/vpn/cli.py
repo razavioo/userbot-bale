@@ -244,6 +244,14 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     # after tun up.  Serialising probes via this lock fixes the race at the
     # cost of a short delay (< the EXPECT_CLIENT probe duration, ~3–5 s).
     _probe_lock = threading.Lock()
+    # Track per-account active VPN sessions so a duplicate Bale push (the
+    # SFU sometimes redelivers a call notification after AcceptCall) does
+    # not start a second probe that overwrites the live tunnel via
+    # mesh.issue_client.  A second push arriving within the ~5 s window
+    # before allocator.join populates the slot would otherwise replace the
+    # live transport with a transport bound to a different LiveKit room,
+    # silently dropping every Android frame → tunnel_dead in 6 s.
+    _account_active: dict[int, bool] = {i: False for i in range(len(jwts))}
 
     def on_incoming_call(event, account_index: int = 0):  # type: ignore[no-untyped-def]
         peer_id = event.peer_id
@@ -266,14 +274,6 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             # WireGuard keepalive drops → tunnel_dead within 30 s.
             # The coordinator will get no EXPECT_ACK and roll back, then
             # retry via the other relay.
-            _slot = allocator.slots()[account_index]
-            if _slot.peer_ids:
-                print(
-                    f"[vpn-mesh] skipping probe for account={account_index}: "
-                    f"VPN session already active ({_slot.peer_ids})",
-                    file=sys.stderr,
-                )
-                return
             from baleobala.coordinator.protocol import (
                 CONTROL_TOPIC as _CTRL_TOPIC,
                 ControlMessage as _CM,
@@ -283,6 +283,22 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 ControlError as _CtrlError,
             )
             with _probe_lock:
+                # Re-check inside the lock: a duplicate Bale push (same call
+                # redelivered, or coordinator's EXPECT_CLIENT arriving while
+                # we still hold the lock for the client probe) must NOT
+                # start a second probe — it would overwrite the live VPN
+                # tunnel and silently drop every Android frame.
+                _slot = allocator.slots()[account_index]
+                if _slot.peer_ids or _account_active.get(account_index):
+                    print(
+                        f"[vpn-mesh] skipping probe for account={account_index}: "
+                        f"VPN session already active "
+                        f"(slot={_slot.peer_ids} active={_account_active.get(account_index)})",
+                        file=sys.stderr,
+                    )
+                    return
+                _account_active[account_index] = True
+                _became_vpn_session = False
                 _probe = LiveKitSession(
                     url=event.credentials.url, token=event.credentials.token,
                     identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
@@ -318,6 +334,9 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                                     _probe.stop()
                                 except Exception:  # noqa: BLE001
                                     pass
+                                # Not a VPN session — release the slot so the
+                                # next real client call can start a probe.
+                                _account_active[account_index] = False
                                 return  # coordinator instruction handled
                         except _CtrlError:
                             pass
@@ -327,7 +346,9 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                         _probe.stop()
                     except Exception:  # noqa: BLE001
                         pass
+                    _account_active[account_index] = False
                     return
+                _became_vpn_session = True
             # VPN client call — reuse the already-joined probe session.
             # Publish audio now so the Bale SFU keeps this long-lived
             # session alive (without a media track the SFU closes it
@@ -355,6 +376,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                     _session_pre_joined.stop()
                 except Exception:  # noqa: BLE001
                     pass
+            _account_active[account_index] = False
             return
         print(
             f"[vpn-mesh] server_jwt_assignment={allocator.assignment()} "
@@ -363,6 +385,9 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         )
 
         def _on_drop(dropped_peer_id: int) -> None:
+            # Slot freed — clear the per-account active flag so the next
+            # incoming Bale call can start a fresh probe.
+            _account_active[account_index] = False
             if not use_coordinator or not reporters:
                 return
             with session_map_lock:
