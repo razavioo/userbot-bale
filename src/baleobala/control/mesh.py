@@ -86,9 +86,58 @@ class MeshProvisionRecord:
 
 
 class MeshProvisionStore:
+    # Stale "active" assignments older than this are auto-released on
+    # process startup. Without this, an unclean shutdown leaves slot 0
+    # (10.77.0.2 — the hardcoded TUN address used by the Android and
+    # macOS clients) reserved indefinitely; new connections then get
+    # slot 1+ (10.77.0.6, .10, …) which the clients can't address. With
+    # auto-release every fresh service start cleanly reuses slot 0.
+    STARTUP_STALE_TTL_SECS = 60
+
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (config_dir() / "mesh.json")
         self._store = JsonStore(self.path)
+        self._auto_release_stale_on_startup()
+
+    def _auto_release_stale_on_startup(self) -> None:
+        items = self._load_all()
+        if not items:
+            return
+        now = time.time()
+        cutoff = now - self.STARTUP_STALE_TTL_SECS
+        changed = False
+        for idx, item in enumerate(items):
+            if item.provisioning_status in {"released", "failed"}:
+                continue
+            last_activity = max(
+                item.last_seen_at or 0.0,
+                item.activated_at or 0.0,
+                item.updated_at or 0.0,
+            )
+            if last_activity >= cutoff:
+                continue
+            items[idx] = MeshProvisionRecord(
+                peer_id=item.peer_id,
+                pool_cidr=item.pool_cidr,
+                slot=item.slot,
+                prefix=item.prefix,
+                gateway_ip=item.gateway_ip,
+                client_ip=item.client_ip,
+                provisioning_status="released",
+                profile_id=item.profile_id,
+                peer_name=item.peer_name,
+                transport=item.transport,
+                session_id=item.session_id,
+                validation_error=item.validation_error,
+                issued_at=item.issued_at,
+                last_seen_at=item.last_seen_at,
+                activated_at=item.activated_at,
+                released_at=now,
+                updated_at=now,
+            )
+            changed = True
+        if changed:
+            self._save_all(items)
 
     def _load_all(self) -> list[MeshProvisionRecord]:
         payload = self._store.load(default={"items": []})

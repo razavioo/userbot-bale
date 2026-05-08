@@ -67,8 +67,16 @@ class LiveKitDataChannelTransport(
                             peerReady.countDown()
                         }
                         is RoomEvent.ParticipantDisconnected -> {
-                            onLog("LiveKit remote participant disconnected: ${event.participant.identity}")
-                            if (connectedOnce.get()) fireDisconnected("ParticipantDisconnected: ${event.participant.identity}")
+                            // The Bale SFU emits ParticipantDisconnected on
+                            // transient signaling glitches even while the
+                            // peer's data channel keeps publishing. Treating
+                            // this as fatal here used to kill the carrier
+                            // and trigger a full reconnect for every blip.
+                            // RoomEvent.Disconnected is the authoritative
+                            // teardown signal — keep the carrier open until
+                            // we see that or until ARQ on the Tunnel layer
+                            // declares tunnel_dead from real frame loss.
+                            onLog("LiveKit remote participant disconnected: ${event.participant.identity} (carrier staying up)")
                         }
                         is RoomEvent.DataReceived -> {
                             // Bale/LiveKit sits between two different SDKs
