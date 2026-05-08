@@ -259,6 +259,21 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         # join the room and check if EXPECT_CLIENT arrives on "control" topic.
         _session_pre_joined: "LiveKitSession | None" = None
         if use_coordinator:
+            # If this relay account already hosts an active VPN session, skip
+            # the probe entirely. Starting a concurrent LiveKit session while
+            # a VPN session is running overloads the shared livekit-ffi Rust
+            # runtime, delaying on_data_received callbacks and causing
+            # WireGuard keepalive drops → tunnel_dead within 30 s.
+            # The coordinator will get no EXPECT_ACK and roll back, then
+            # retry via the other relay.
+            _slot = allocator.slots()[account_index]
+            if _slot.peer_ids:
+                print(
+                    f"[vpn-mesh] skipping probe for account={account_index}: "
+                    f"VPN session already active ({_slot.peer_ids})",
+                    file=sys.stderr,
+                )
+                return
             from baleobala.coordinator.protocol import (
                 CONTROL_TOPIC as _CTRL_TOPIC,
                 ControlMessage as _CM,
