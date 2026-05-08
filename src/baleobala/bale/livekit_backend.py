@@ -366,13 +366,18 @@ class LiveKitSession:
             topic = packet.topic or ""
             with self._data_lock:
                 q = self._data_queues.get(topic)
-                if q is None and topic == "" and len(self._data_queues) == 1:
-                    # This LiveKit room is dedicated to one VPN tunnel, but
-                    # some SDK/SFU paths report an empty topic. Route only
-                    # empty-topic data to the sole registered channel; explicit
-                    # non-VPN topics such as keepalive/failover-control must
-                    # not be fed into the VPN frame decoder.
-                    _, q = next(iter(self._data_queues.items()))
+                if q is None and topic == "":
+                    # Bale's SFU / livekit-rtc-android does not reliably
+                    # propagate the `topic` field on DataReceived packets
+                    # across SDK versions (the Android transport explicitly
+                    # warns about this). Empty-topic frames must still be
+                    # routed: prefer the "vpn" queue if registered (the only
+                    # queue that drives a real consumer post-provisioning),
+                    # otherwise fall back to the sole registered queue.
+                    if "vpn" in self._data_queues:
+                        q = self._data_queues["vpn"]
+                    elif len(self._data_queues) == 1:
+                        _, q = next(iter(self._data_queues.items()))
             if q is not None:
                 q.put(bytes(packet.data))
             else:
