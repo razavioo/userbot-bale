@@ -507,10 +507,58 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
 
+    # Reaper thread: when a VPN session's underlying LiveKit room ends
+    # (client disconnects, network gone, room.disconnected fires), the
+    # main loop never noticed and left the session in `sessions`, the
+    # allocator slot reserved, and `_account_active[idx]` set. The next
+    # connection from the same client then either failed the skip-probe
+    # check or reused the dead tunnel and dropped every frame. Walk the
+    # sessions list and reap anything whose session is terminal.
+    _reaper_stop = threading.Event()
+    def _session_reaper() -> None:
+        while not _reaper_stop.wait(2.0):
+            dead_indices: list[int] = []
+            for i, (pid, sess, _tx) in enumerate(sessions):
+                try:
+                    if sess.is_terminal():
+                        dead_indices.append(i)
+                except Exception:  # noqa: BLE001
+                    dead_indices.append(i)
+            if not dead_indices:
+                continue
+            # Walk in reverse so list mutation is safe.
+            for i in reversed(dead_indices):
+                pid, sess, _tx = sessions.pop(i)
+                print(
+                    f"[vpn-mesh] reaper: cleaning up dead session peer={pid}",
+                    file=sys.stderr,
+                )
+                try:
+                    sess.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    mesh.drop_client(pid)  # invokes on_drop → clears _account_active
+                except Exception:  # noqa: BLE001
+                    log.exception("reaper: drop_client failed for peer=%d", pid)
+                try:
+                    control.release_mesh_assignment(pid)
+                except Exception:  # noqa: BLE001
+                    log.exception("reaper: release_mesh_assignment failed for peer=%d", pid)
+                try:
+                    allocator.leave(pid)
+                except Exception:  # noqa: BLE001
+                    pass
+    _reaper_thread = threading.Thread(
+        target=_session_reaper, name="vpn-mesh-reaper", daemon=True,
+    )
+    _reaper_thread.start()
+
     from .runner import wait_for_signal
     try:
         wait_for_signal()
     finally:
+        _reaper_stop.set()
         print(f"[vpn-mesh] shutting down ({len(sessions)} active clients)",
               file=sys.stderr)
         for reporter in reporters:
