@@ -58,7 +58,7 @@ LIVEKIT_STARTUP_TIMEOUT = float(os.environ.get("BALEOBALA_LIVEKIT_STARTUP_TIMEOU
 # peer departure (Android stopped the VPN, network gone) is promoted
 # to a terminal session failure after this delay so the reaper can
 # free the relay slot and the next reconnect succeeds.
-PEER_LOST_GRACE_SECS = float(os.environ.get("BALEOBALA_PEER_LOST_GRACE", "10"))
+PEER_LOST_GRACE_SECS = float(os.environ.get("BALEOBALA_PEER_LOST_GRACE", "3"))
 SAMPLE_RATE = LIVEKIT_SAMPLE_RATE
 
 try:  # soft dep; only Phase 3 callers need this

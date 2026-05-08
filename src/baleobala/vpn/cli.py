@@ -290,13 +290,47 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 # tunnel and silently drop every Android frame.
                 _slot = allocator.slots()[account_index]
                 if _slot.peer_ids or _account_active.get(account_index):
-                    print(
-                        f"[vpn-mesh] skipping probe for account={account_index}: "
-                        f"VPN session already active "
-                        f"(slot={_slot.peer_ids} active={_account_active.get(account_index)})",
-                        file=sys.stderr,
-                    )
-                    return
+                    # Fast-path: if any session on this account has lost
+                    # its peer (grace timer started or already terminal),
+                    # this incoming call is the user's reconnect attempt.
+                    # Force-cleanup the dead session immediately so the new
+                    # probe can proceed instead of waiting out the full
+                    # PEER_LOST_GRACE_SECS window.
+                    _evicted: list[int] = []
+                    for _i, (_pid, _sess, _) in list(enumerate(sessions)):
+                        try:
+                            _is_terminal = _sess.is_terminal()
+                            _peer_lost = getattr(_sess, "_peer_disconnect_at", None) is not None
+                        except Exception:  # noqa: BLE001
+                            _is_terminal, _peer_lost = True, True
+                        if _is_terminal or _peer_lost:
+                            _evicted.append(_i)
+                    if _evicted:
+                        print(
+                            f"[vpn-mesh] reconnect detected for account={account_index}; "
+                            f"evicting {len(_evicted)} stale session(s) and continuing",
+                            file=sys.stderr,
+                        )
+                        for _i in reversed(_evicted):
+                            _ev_pid, _ev_sess, _ = sessions.pop(_i)
+                            try: _ev_sess.stop()
+                            except Exception: pass  # noqa: BLE001
+                            try: mesh.drop_client(_ev_pid)
+                            except Exception: pass  # noqa: BLE001
+                            try: control.release_mesh_assignment(_ev_pid)
+                            except Exception: pass  # noqa: BLE001
+                            try: allocator.leave(_ev_pid)
+                            except Exception: pass  # noqa: BLE001
+                        # Re-read slot after eviction.
+                        _slot = allocator.slots()[account_index]
+                    if _slot.peer_ids or _account_active.get(account_index):
+                        print(
+                            f"[vpn-mesh] skipping probe for account={account_index}: "
+                            f"VPN session already active "
+                            f"(slot={_slot.peer_ids} active={_account_active.get(account_index)})",
+                            file=sys.stderr,
+                        )
+                        return
                 _account_active[account_index] = True
                 _became_vpn_session = False
                 _probe = LiveKitSession(
