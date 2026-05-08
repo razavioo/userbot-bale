@@ -137,29 +137,62 @@ class BaleVpnService : VpnService() {
             stopSelf()
             return
         }
+        // Preflight: connect the Bale transport BEFORE establishing the
+        // VPN tunnel so we can read the relay's assigned client_ip from
+        // the BBMESH1 provisioning message. The TUN must be built with
+        // the assigned IP — without this, the relay's PacketRouter has
+        // a different /30 attached than the one Android sends from, and
+        // every return packet is silently dropped (Android shows
+        // "connected" while moving 0 B).
+        broadcast("log", "carrier=bale coordinator=$coordinatorPeerId")
+        broadcast("log", "preflight: connecting to relay to receive provisioning…")
+        val preTransport: com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
+        try {
+            preTransport = makeBaleTransport() as com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
+        } catch (e: Throwable) {
+            broadcast("error", "carrier start failed: ${e.message}")
+            stopTunnel(); stopSelf(); return
+        }
+        // Default to the legacy hardcoded address if the relay didn't
+        // hand back a client_ip (older relay version, or non-coordinator
+        // mode). Newer relays always include client_ip in BBMESH1.
+        val tunIp = preTransport.clientIp ?: "10.77.0.2"
+        // VpnService.Builder.addAddress wants a host prefix that lets the
+        // OS reach the gateway in the same subnet. The relay's prefix is
+        // /30 (4 addrs) but Android wants the gateway on-link so we
+        // widen to /24 (the same /24 covers all the per-client /30s in
+        // 10.77.0.0/16 and the relay's vpn0 is .1).
+        val tunPrefix = 24
+        broadcast("log", "preflight: assigned client_ip=$tunIp gateway=${preTransport.gatewayIp}")
+
         val builder = Builder()
             .setSession("Baleobala VPN")
             .setMtu(1400)
-            .addAddress("10.77.0.2", 24)
+            .addAddress(tunIp, tunPrefix)
             .addRoute("0.0.0.0", 0)
         dnsServers().forEach { builder.addDnsServer(it) }
         try { builder.addDisallowedApplication(packageName) } catch (_: Throwable) {}
 
         val fd = builder.establish()
         if (fd == null) {
+            try { preTransport.close() } catch (_: Throwable) {}
             broadcast("error", "VpnService.establish() returned null")
             updateNotification("failed", "VpnService.establish() returned null"); stopSelf(); return
         }
         tunFd = fd
         running = true
 
+        // Hand the pre-connected transport back to the carrier; the
+        // factory lambda just returns the cached instance so the carrier
+        // doesn't redial. Subsequent reconnects (after onCarrierDead)
+        // would build a fresh transport via the original makeBaleTransport
+        // path — but those go through stopTunnel/startTunnel anyway.
         carrier = BaleCarrier(
-            transportFactory = ::makeBaleTransport,
+            transportFactory = { preTransport },
             sessId = DEFAULT_TUNNEL_SESS_ID,
             onLog = { broadcast("log", it) },
             onCarrierDead = { reason -> handleTunnelDrop("tunnel dead: $reason") },
         )
-        broadcast("log", "carrier=bale coordinator=$coordinatorPeerId")
         carrier?.onPacketReceived = { ip -> outQueue.offer(ip) }
 
         try { carrier?.start() } catch (e: Throwable) {
@@ -175,7 +208,7 @@ class BaleVpnService : VpnService() {
         startedAt.set(System.currentTimeMillis())
         updateNotification("connected", connectedDetail())
         broadcastSnapshot("connected")
-        broadcast("log", "tun up: 10.77.0.2/24 mtu 1400")
+        broadcast("log", "tun up: $tunIp/$tunPrefix mtu 1400")
     }
 
     private fun makeBaleTransport(): Transport {
