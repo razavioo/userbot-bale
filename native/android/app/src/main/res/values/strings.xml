@@ -31,6 +31,9 @@
     <string name="login_complete_signup">Complete sign-up</string>
     <string name="login_logged_in">Signed in. Phone: %1$s</string>
     <string name="login_sign_out">Sign out</string>
+    <string name="sign_out_confirm_title">Sign out of Bale?</string>
+    <string name="sign_out_confirm_message">You\'ll need to enter your phone number again to sign back in.</string>
+    <string name="sign_out_confirm_cancel">Cancel</string>
     <string name="relay_not_set">Signed in. Add your relay peer ID in Settings.</string>
     <string name="login_not_signed_in_local">Not signed in. VPN cannot start yet.</string>
     <string name="login_not_signed_in_bale">Not signed in. Tap the main button to sign in.</string>

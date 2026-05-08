@@ -18,6 +18,7 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.baleobala.vpn.bale.AuthStore
 import com.baleobala.vpn.databinding.ActivityMainBinding
 import com.baleobala.vpn.ui.LoginActivity
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import org.json.JSONObject
 
@@ -114,8 +115,15 @@ class MainActivity : AppCompatActivity() {
         binding.toggleCard.setOnClickListener { onTogglePressed() }
 
         binding.signOutButton.setOnClickListener {
-            store.clear()
-            refreshAuthUi()
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.sign_out_confirm_title)
+                .setMessage(R.string.sign_out_confirm_message)
+                .setNegativeButton(R.string.sign_out_confirm_cancel, null)
+                .setPositiveButton(R.string.login_sign_out) { _, _ ->
+                    store.clear()
+                    refreshAuthUi()
+                }
+                .show()
         }
 
         if (settings.reconnectOnLaunch && canStart()) {

@@ -128,6 +128,7 @@ struct SignInView: View {
 struct MainView: View {
     @ObservedObject var controller: ProxyController
     @Binding var showSettings: Bool
+    @State private var showSignOutConfirm = false
 
     var body: some View {
         VStack(spacing: 22) {
@@ -150,6 +151,16 @@ struct MainView: View {
             .buttonStyle(.plain)
             .padding(.trailing, 16)
             .padding(.top, -36)
+        }
+        .confirmationDialog(
+            "Sign out of Bale?",
+            isPresented: $showSignOutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Sign out", role: .destructive) { controller.logout() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You'll need to enter your phone number again to sign back in.")
         }
     }
 
@@ -289,7 +300,7 @@ struct MainView: View {
                      title: "Bale account",
                      value: controller.auth.phone.isEmpty ? "Signed in" : controller.auth.phone,
                      trailing: AnyView(
-                        Button("Sign out") { controller.logout() }
+                        Button("Sign out") { showSignOutConfirm = true }
                             .buttonStyle(LinkButtonStyle())
                      ))
             if !controller.proxy.coordinatorPeerId.isEmpty {
