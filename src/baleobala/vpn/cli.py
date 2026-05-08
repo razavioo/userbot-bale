@@ -552,6 +552,13 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             sessions.append((peer_id, session, transport))
+            # Probe + provisioning are done — release the per-account
+            # probe-in-progress flag so a *different* peer (e.g. a
+            # second device on the same Bale account) can also probe
+            # this account. The reaper handles cleanup of the session
+            # itself when the LiveKit room ends; _on_drop also clears
+            # this flag, so the dual-clearing is safe.
+            _account_active[account_index] = False
         except Exception:  # noqa: BLE001
             control.release_mesh_assignment(peer_id, error="provisioning failed")
             _on_drop(peer_id)
