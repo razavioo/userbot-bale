@@ -345,7 +345,13 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
                     except (TimeoutError, RuntimeError):
                         pass
                     _ctrl = _probe.data_channel(topic=_CTRL_TOPIC, reliable=True)
-                    _ctrl_payload = _ctrl.recv_bytes(timeout=1.5)
+                    # Wait long enough for the coordinator's EXPECT_CLIENT
+                    # message to arrive after both sides are in the room.
+                    # 1.5 s was previously too tight when the coordinator's
+                    # quick_exchange ran behind audio-track setup; bumping
+                    # to 5 s keeps real VPN-call latency acceptable while
+                    # giving EXPECT_CLIENT a reliable window.
+                    _ctrl_payload = _ctrl.recv_bytes(timeout=5.0)
                     if _ctrl_payload is not None:
                         try:
                             _ctrl_msg = _ctrl_decode(_ctrl_payload)
@@ -389,8 +395,65 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             # after ~20 s). The probe was created with publish_audio=False
             # to avoid audio-track cleanup overhead on short EXPECT_CLIENT
             # probes; we enable it here only when the session is promoted.
-            _probe.enable_audio()
+            try:
+                _probe.enable_audio()
+            except Exception:  # noqa: BLE001
+                log.exception("relay: enable_audio failed; cleaning up")
+                try: _probe.stop()
+                except Exception: pass  # noqa: BLE001
+                _account_active[account_index] = False
+                return
             _session_pre_joined = _probe
+            # Override peer_id with the ACTUAL caller user_id from the
+            # LiveKit participant identity. event.peer_id is the relay's
+            # own peer_id under Bale push semantics, so all clients on
+            # the same relay account would collide on mesh.issue_client.
+            # The Android/CLI clients join with identity = JWT `sub` =
+            # their own user_id; consume that here so each client gets
+            # its own /30 slot and tunnel.
+            try:
+                _identities = _probe.remote_participant_identities()
+            except Exception:  # noqa: BLE001
+                _identities = []
+            for _ident in _identities:
+                try:
+                    _caller_id = int(_ident)
+                except (TypeError, ValueError):
+                    continue
+                if _caller_id != peer_id and _caller_id > 0:
+                    print(
+                        f"[vpn-mesh] caller user_id resolved from LiveKit "
+                        f"identity: peer_id={peer_id} → {_caller_id}",
+                        file=sys.stderr,
+                    )
+                    peer_id = _caller_id
+                    break
+
+            # Verify the caller was pre-approved by the coordinator.
+            # The probe path falls through to "VPN call" when no
+            # EXPECT_CLIENT message arrives within 1.5 s, but the
+            # coordinator's own dispatch call also lands here when its
+            # message is lost or arrives late — and that dispatch peer
+            # then gets allocated a /30 and we try to provision it as if
+            # it were a real client (BBMESH1), which times out. Reject
+            # any caller user_id that the coordinator hasn't told us to
+            # expect; the dispatch call gets cleanly hung up and the
+            # coordinator's quick_exchange returns ack=None, rolling the
+            # session back so the real client retries via another relay.
+            _expected_session = expected_clients.consume(peer_id)
+            if _expected_session is None:
+                print(
+                    f"[vpn-mesh] rejecting unknown caller={peer_id} on "
+                    f"account={account_index} (no EXPECT_CLIENT pre-approval; "
+                    f"likely the coordinator's dispatch call landed here)",
+                    file=sys.stderr,
+                )
+                try: _probe.stop()
+                except Exception: pass  # noqa: BLE001
+                _account_active[account_index] = False
+                return
+            with session_map_lock:
+                session_map[f"sess:{peer_id}"] = _expected_session
         # ───────────────────────────────────────────────────────────────────
 
         print(

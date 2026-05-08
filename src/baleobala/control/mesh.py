@@ -177,10 +177,24 @@ class MeshProvisionStore:
         for item in items:
             if item.pool_cidr != pool_cidr:
                 continue
-            if item.provisioning_status == "released":
+            # Both "released" (clean teardown) and "failed" (provisioning
+            # never completed) free the slot. Without releasing failed
+            # records, a single client whose first attempt failed would
+            # block its slot forever, forcing the next reconnect onto
+            # slot 1+ (10.77.0.6, .10, …) — IPs the Android/macOS
+            # clients can't address with their hardcoded 10.77.0.2 TUN.
+            if item.provisioning_status in {"released", "failed"}:
                 continue
             allocator.reserve(item.slot, item.peer_id)
-        current = next((item for item in items if item.peer_id == peer_id), None)
+        # Reuse the prior assignment only if it was successful (active or
+        # assigned). A failed record's IP may not match the client's
+        # current expectations; let the allocator pick a fresh slot.
+        current = next(
+            (item for item in items
+             if item.peer_id == peer_id
+             and item.provisioning_status in {"assigned", "active"}),
+            None,
+        )
         if current is not None and current.pool_cidr == pool_cidr:
             assignment = current.assignment()
             issued_at = current.issued_at
