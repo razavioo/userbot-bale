@@ -49,7 +49,12 @@ class BaleCallClient(
                 clientPeerId = clientPeerId,
             ))
             onLog("coordinator: HELLO sent; waiting for ASSIGN/DENY")
-            val payload = transport.recvBytes(10_000)
+            // Coordinator's quick_exchange to the relay (StartCall + LiveKit
+            // join + EXPECT_CLIENT exchange + EXPECT_ACK + room teardown +
+            // post-stop Rust-runtime flush) commonly takes 7-12 s end-to-end.
+            // 10 s was right at the edge; bump to 25 s so legitimate slow
+            // exchanges aren't reported as "coordinator did not respond".
+            val payload = transport.recvBytes(25_000)
                 ?: throw RuntimeException("coordinator did not respond to HELLO")
             val msg = BaleControlMessages.decode(payload)
                 ?: throw RuntimeException("coordinator sent non-control payload")

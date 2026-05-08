@@ -154,9 +154,23 @@ class LiveKitDataChannelTransport(
 
         // Mesh provisioning handshake — the relay sends BBMESH1:{kind:"assign",...}
         // immediately after joining. We must ACK it before VPN traffic can flow.
+        // If BBMESH1 doesn't arrive within the window, the relay almost
+        // certainly rejected the call (e.g. coordinator's EXPECT_CLIENT
+        // hadn't propagated yet). Falling through with default values
+        // produces a tun_up that's connected to nothing — the carrier
+        // then sends frames into the void and only notices via
+        // tunnel_dead 25 s later. Throwing here lets the BaleVpnService
+        // catch it and trigger an immediate retry instead.
         if (topic == "vpn") {
-            val provRaw = inbox.poll(10_000, TimeUnit.MILLISECONDS)
-            if (provRaw != null) {
+            val provRaw = inbox.poll(15_000, TimeUnit.MILLISECONDS)
+            if (provRaw == null) {
+                close()
+                throw RuntimeException(
+                    "no BBMESH1 provisioning received within 15s; " +
+                    "relay likely rejected the call (race with EXPECT_CLIENT)"
+                )
+            }
+            run {
                 val provStr = provRaw.toString(Charsets.UTF_8)
                 if (provStr.startsWith("BBMESH1:")) {
                     val sessionId = Regex(""""session_id"\s*:\s*(\d+)""")
