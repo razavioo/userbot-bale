@@ -380,8 +380,21 @@ class LiveKitSession:
                         _, q = next(iter(self._data_queues.items()))
             if q is not None:
                 q.put(bytes(packet.data))
+                self._dbg_rx_count = getattr(self, "_dbg_rx_count", 0) + 1
+                if self._dbg_rx_count <= 5 or self._dbg_rx_count % 50 == 0:
+                    log.info(
+                        "RX#%d topic=%r %d bytes (queue=%s)",
+                        self._dbg_rx_count, topic, len(packet.data),
+                        list(self._data_queues.keys()),
+                    )
             else:
-                log.debug("data on unhandled topic=%r (%d bytes)", topic, len(packet.data))
+                log.warning(
+                    "data on unhandled topic=%r raw_topic=%r (%d bytes); "
+                    "registered=%r",
+                    topic, getattr(packet, "topic", None),
+                    len(packet.data),
+                    list(self._data_queues.keys()),
+                )
 
         @room.on("participant_connected")  # type: ignore[misc]
         def on_participant_connected(participant):  # type: ignore[no-untyped-def]

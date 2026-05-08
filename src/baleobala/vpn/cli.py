@@ -407,7 +407,10 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             LiveKitKeepalive(session, interval=20.0).start()
             dc = DataChannelTransport(session, topic="vpn", reliable=False)
             transport = EncryptedTransport(dc, psk_key) if psk_key else dc
-            sess_id = (0x1111 + peer_id) & 0xFFFF
+            # Must match the Android client's hardcoded DEFAULT_TUNNEL_SESS_ID
+            # (0x1111). Per-peer offsets caused frames to be silently dropped
+            # by the receiving side's sess_id filter — see exit_node.py.
+            sess_id = 0x1111
             record = control.issue_mesh_assignment(
                 peer_id,
                 pool_cidr=args.pool_cidr,

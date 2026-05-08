@@ -527,7 +527,10 @@ class TestMeshMultiClient:
                 transports.extend([srv, cli])
                 a = mesh.accept_client(peer_id, srv, mtu_override=300)
                 # Set up a tunnel on the client side to receive packets.
-                t_cli = Tunnel(cli, sess_id=(0x1111 + peer_id) & 0xFFFF, ack_timeout=0.1, mtu_override=300)
+                # Match exit_node.py: sess_id is now a constant 0x1111
+                # (the Android client's hardcoded value); per-peer offsets
+                # caused frame-level filter mismatches in production.
+                t_cli = Tunnel(cli, sess_id=0x1111, ack_timeout=0.1, mtu_override=300)
                 rx_q: queue.Queue = queue.Queue()
                 t_cli.start(on_packet=rx_q.put)
                 client_rxs[peer_id] = rx_q
