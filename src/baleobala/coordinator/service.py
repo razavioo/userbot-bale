@@ -157,6 +157,33 @@ class CoordinatorService:
             self._safe_send(call, make_deny(reason=DenyReason.INTERNAL))
             return
 
+        # Instruct the relay BEFORE sending ASSIGN. The device dials the
+        # relay within ~100-300 ms of receiving ASSIGN, but the dispatch
+        # call (Bale push + LiveKit join + EXPECT_CLIENT exchange) takes
+        # 5-8 s. With the previous "ASSIGN first, instruct later" order,
+        # the device's call landed at the relay before EXPECT_CLIENT was
+        # registered; the relay's probe set _account_active=True and then
+        # skip-probe'd the dispatch call when it finally arrived, so the
+        # device timed out without ever receiving EXPECT_CLIENT and got
+        # rejected as an unknown caller. Dispatching first guarantees the
+        # relay has the client pre-approved by the time the device dials.
+        # The device's HELLO recv timeout (25 s) comfortably absorbs the
+        # added latency on the client side.
+        if not self._instruct_relay(
+            slot=slot,
+            client_peer_id=client_peer_id,
+            session_id=session_id,
+        ):
+            self._safe_send(
+                call,
+                make_deny(
+                    reason=DenyReason.INTERNAL,
+                    detail="relay did not ack EXPECT_CLIENT",
+                ),
+            )
+            self._safe_hangup(call)
+            return
+
         self._safe_send(
             call,
             make_assign(
@@ -165,13 +192,16 @@ class CoordinatorService:
                 expires_in_secs=self._config.session_expires_secs,
             ),
         )
-        # Hang up before instructing relay so client is freed up to
-        # listen for the inbound call.
         self._safe_hangup(call)
 
-        self._instruct_relay(slot=slot, client_peer_id=client_peer_id, session_id=session_id)
+    def _instruct_relay(self, *, slot: RelaySlot, client_peer_id: int, session_id: str) -> bool:
+        """Send EXPECT_CLIENT to the relay and wait for EXPECT_ACK.
 
-    def _instruct_relay(self, *, slot: RelaySlot, client_peer_id: int, session_id: str) -> None:
+        Returns True if the relay acknowledged so the caller can safely
+        proceed to ASSIGN the client. On any failure the session is
+        released and False is returned so the caller can DENY instead of
+        directing the client at a relay that won't accept it.
+        """
         msg = make_expect_client(
             client_peer_id=client_peer_id,
             session_id=session_id,
@@ -186,7 +216,7 @@ class CoordinatorService:
         except Exception:  # noqa: BLE001
             log.exception("coordinator: quick_exchange to relay=%s failed", slot.relay_id)
             self._registry.release_session(session_id)
-            return
+            return False
 
         if ack is None or ack.kind != Kind.EXPECT_ACK:
             log.warning(
@@ -196,6 +226,8 @@ class CoordinatorService:
                 session_id,
             )
             self._registry.release_session(session_id)
+            return False
+        return True
 
     # ---- relay-side events -----------------------------------------------
 
@@ -261,7 +293,14 @@ class CoordinatorService:
             log.info("coordinator: pruned stale relay=%s", relay_id)
         expired = self._registry.expire_pending()
         for session in expired:
-            log.info("coordinator: expired pending session=%s", session.session_id)
+            # Sessions expire when the relay never sends RELEASED to confirm
+            # teardown. With the current protocol that's the normal case for
+            # any session that's still active on the relay — there's no
+            # ACTIVATED report, so the registry has no way to extend the TTL.
+            # Logging at INFO clutters the journal with one line per session
+            # per ~30s; drop to DEBUG so it's available for forensics but
+            # doesn't drown the real signals.
+            log.debug("coordinator: expired pending session=%s", session.session_id)
 
     # ---- helpers ---------------------------------------------------------
 
