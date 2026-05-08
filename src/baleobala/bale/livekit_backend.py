@@ -413,11 +413,15 @@ class LiveKitSession:
         @room.on("participant_disconnected")  # type: ignore[misc]
         def on_participant_disconnected(participant):  # type: ignore[no-untyped-def]
             identity = getattr(participant, "identity", "?")
-            log.warning("LiveKit remote participant disconnected: identity=%s", identity)
-            self._set_terminal_failure(
-                RuntimeError(f"LiveKit remote participant disconnected: {identity}")
-            )
-            self._stopped.set()
+            # Do NOT mark the session as terminal here. For long-lived VPN
+            # sessions a transient SFU view of the remote participant
+            # leaving (e.g. mid-call signaling glitch) was killing the data
+            # channel even though the actual peer was still publishing. A
+            # real room disconnect (network gone, room closed) still
+            # arrives via the `disconnected` handler above and is fatal.
+            log.warning("LiveKit remote participant disconnected: identity=%s "
+                        "(session staying open; awaiting room.disconnected)",
+                        identity)
 
         @room.on("reconnecting")  # type: ignore[misc]
         def on_reconnecting():  # type: ignore[no-untyped-def]
