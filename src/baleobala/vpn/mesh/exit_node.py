@@ -149,9 +149,17 @@ class MeshExitNode:
             raise LookupError(f"peer {peer_id} has no pending slot")
         if slot.active and slot.tunnel is not None:
             return slot.assignment
+        # The Android client hardcodes its tunnel sess_id to 0x1111
+        # (DEFAULT_TUNNEL_SESS_ID in BaleVpnService.kt). Each VPN call has
+        # its own dedicated LiveKit room, so per-peer disambiguation is
+        # unnecessary at the frame layer. Use the base value verbatim so
+        # both sides decode each other's frames; mismatched sess_ids
+        # caused every Android frame to be silently dropped at the relay
+        # and every relay ACK to be silently dropped at Android, producing
+        # tunnel_dead within 6 s of tun up.
         tunnel = Tunnel(
             slot.transport,
-            sess_id=(self._sess_id_base + slot.assignment.peer_id) & 0xFFFF,
+            sess_id=self._sess_id_base & 0xFFFF,
             ack_timeout=ack_timeout,
             window=window,
             mtu_override=mtu_override,
