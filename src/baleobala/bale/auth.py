@@ -39,6 +39,7 @@ from baleobala.bale.grpc_web import (
 from baleobala.bale.protos import (
     AUTH_SERVICE,
     RequestGetJWTToken,
+    RequestSignUp,
     RequestStartPhoneAuth,
     RequestValidateCode,
     WEB_API_KEY,
@@ -48,6 +49,19 @@ from baleobala.bale.protos import (
     parse_transaction_hash,
     parse_user_id_from_auth_response,
 )
+
+
+class NeedsSignUpException(Exception):
+    """Raised by validate_code when Bale accepted the SMS code but the
+    phone has no profile yet — caller must follow up with sign_up(name).
+    Carries the same transaction_hash so the SignUp call reuses it."""
+
+    def __init__(self, transaction_hash: str, detail: str = "") -> None:
+        super().__init__(
+            f"Bale account needs sign-up (provide a name). {detail}".rstrip()
+        )
+        self.transaction_hash = transaction_hash
+        self.detail = detail
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +129,17 @@ class BaleAuth:
         if not tx:
             raise RuntimeError("no transaction_hash — call start_phone_auth() first")
         req = RequestValidateCode(transaction_hash=tx, code=code, is_jwt=True)
-        resp = self._client.unary(AUTH_SERVICE, "ValidateCode", req.encode())
+        try:
+            resp = self._client.unary(AUTH_SERVICE, "ValidateCode", req.encode())
+        except GrpcWebError as e:
+            # PHONE_NUMBER_UNOCCUPIED means the SMS code was accepted but no
+            # profile exists for this phone. Same tx must be reused for SignUp.
+            if "PHONE_NUMBER_UNOCCUPIED" in (e.message or ""):
+                raise NeedsSignUpException(
+                    transaction_hash=tx,
+                    detail="PHONE_NUMBER_UNOCCUPIED",
+                ) from e
+            raise
         jwt = extract_access_token(resp.set_cookies)
         if not jwt:
             # Fallback: Bale sometimes ships the JWT inside the
@@ -151,4 +175,42 @@ class BaleAuth:
                 "Check logs for details."
             )
         log.info("Auth OK; JWT length=%d", len(jwt))
+        return AuthSession(jwt=jwt, response_body=resp.body)
+
+    def sign_up(self, name: str, *, transaction_hash: str | None = None) -> AuthSession:
+        """Complete sign-up for a fresh phone after validate_code raised
+        NeedsSignUpException. Reuses the same transaction_hash and the
+        same gRPC-Web session_id, then resolves a JWT via the same
+        cookie / body / GetJWTToken cascade as validate_code."""
+        tx = transaction_hash or self._last_tx
+        if not tx:
+            raise RuntimeError("no transaction_hash — call start_phone_auth() first")
+        req = RequestSignUp(transaction_hash=tx, name=name)
+        resp = self._client.unary(AUTH_SERVICE, "SignUp", req.encode())
+        jwt = extract_access_token(resp.set_cookies)
+        if not jwt:
+            parsed = parse_response_auth(resp.body)
+            if parsed is not None:
+                jwt = parsed.jwt
+        if not jwt:
+            user_id = parse_user_id_from_auth_response(resp.body)
+            log.warning(
+                "No JWT in SignUp response; calling GetJWTToken (user_id=%s)",
+                user_id,
+            )
+            try:
+                if user_id is not None:
+                    self._client.set_user_id(user_id)
+                jwt_resp = self._client.unary(
+                    AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
+                )
+                jwt = parse_get_jwt_token_response(jwt_resp.body)
+            except Exception as e:
+                log.warning("GetJWTToken after SignUp failed: %s", e)
+        if not jwt:
+            raise RuntimeError(
+                "SignUp succeeded but no JWT could be obtained "
+                "(neither cookie, body, nor GetJWTToken returned one)."
+            )
+        log.info("SignUp OK; JWT length=%d", len(jwt))
         return AuthSession(jwt=jwt, response_body=resp.body)

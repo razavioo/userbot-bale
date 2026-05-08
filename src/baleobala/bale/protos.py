@@ -827,6 +827,37 @@ class RequestGetJWTToken:
         return b""
 
 
+@dataclass(frozen=True)
+class RequestSignUp:
+    """RequestSignUp — sent after ValidateCode for a phone that has no
+    Bale account yet. Field numbers verified against the web bundle's
+    SignUp request encoder and the Android port (BaleProtos.kt):
+        1: transaction_hash (string)
+        2: name             (string)
+        3: sex              (int32 enum; 0=UNKNOWN, omitted)
+        4: password         (google.protobuf.StringValue; omitted unless set)
+    The server replies with the same ResponseAuth shape as ValidateCode.
+    """
+
+    transaction_hash: str
+    name: str
+    sex: int = 0
+    password: str | None = None
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        if self.transaction_hash:
+            out += _enc_len_delim(1, self.transaction_hash.encode("utf-8"))
+        if self.name:
+            out += _enc_len_delim(2, self.name.encode("utf-8"))
+        if self.sex:
+            out += _enc_tag(3, 0) + _enc_varint(self.sex)
+        if self.password is not None:
+            inner = _enc_len_delim(1, self.password.encode("utf-8"))
+            out += _enc_len_delim(4, bytes(inner))
+        return bytes(out)
+
+
 def parse_get_jwt_token_response(buf: bytes) -> str | None:
     """ResponseGetJWTToken { jwt: StringValue }.
     StringValue wraps a string at field 1 of the inner message;

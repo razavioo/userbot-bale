@@ -2543,6 +2543,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="browser mode: show Chromium window instead of headless",
     )
+    auth_bale_login.add_argument(
+        "--name",
+        default=None,
+        help="profile name for sign-up (used only when the phone has no Bale account yet)",
+    )
     auth_bale_login.add_argument("--save", action="store_true", help="save JWT to auth store")
     auth_bale_login.add_argument("--user-id", type=int, default=None, help="optional user_id for saved auth")
     auth_bale_login.add_argument("--jwt-out", default=None, help="optional file path to write JWT")
@@ -3176,7 +3181,7 @@ def _run_bale_auth_login_browser(args: argparse.Namespace) -> str:
 
 def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
     """Direct gRPC-Web fallback used by CLI."""
-    from baleobala.bale.auth import BaleAuth
+    from baleobala.bale.auth import BaleAuth, NeedsSignUpException
     from baleobala.bale.grpc_web import GrpcWebError
 
     phone = str(args.phone).lstrip("+")
@@ -3204,6 +3209,18 @@ def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
         code = input("SMS code: ").strip()
         try:
             session = auth.validate_code(code)
+            break
+        except NeedsSignUpException:
+            name = (getattr(args, "name", None) or "").strip()
+            if not name:
+                print(
+                    "[bale-auth] phone has no Bale account yet — sign-up needed",
+                    file=sys.stderr,
+                )
+                name = input("Profile name: ").strip()
+            if not name:
+                raise SystemExit("sign-up requires a non-empty name")
+            session = auth.sign_up(name)
             break
         except GrpcWebError as e:
             if "EXPIRED" in e.message:
