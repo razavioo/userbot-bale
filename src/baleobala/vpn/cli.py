@@ -721,39 +721,73 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     # sessions list and reap anything whose session is terminal.
     _reaper_stop = threading.Event()
     def _session_reaper() -> None:
+        # Reap AT MOST ONE dead session per cycle. Earlier the reaper
+        # processed all terminal sessions in one batch, calling
+        # `sess.stop()` (→ `room.disconnect()`) back-to-back. With two
+        # devices dropping within ~10 s of each other, two
+        # `room.disconnect()` calls overlapped through the shared
+        # livekit-rtc FFI singleton and put the FFI's internal asyncio
+        # loop into a state where every subsequent event raised
+        # "Event loop is closed". From that point on the relay process
+        # was effectively dead — no probe could ACK an EXPECT_CLIENT and
+        # every dispatch failed until systemd restarted the service.
+        # Spreading reaps one-per-2-second-cycle (and skipping stop()
+        # for already-FAILED sessions, since their thread already ran
+        # `loop.close()` naturally) keeps the FFI singleton from being
+        # asked to tear down two rooms at the same instant.
         while not _reaper_stop.wait(2.0):
-            dead_indices: list[int] = []
+            dead_index: int | None = None
+            dead_was_failed = False
             for i, (pid, sess, _tx) in enumerate(sessions):
                 try:
                     if sess.is_terminal():
-                        dead_indices.append(i)
+                        dead_index = i
+                        try:
+                            from baleobala.bale.livekit_backend import (
+                                LiveKitSessionState,
+                            )
+                            dead_was_failed = (
+                                getattr(sess, "_state", None)
+                                == LiveKitSessionState.FAILED
+                            )
+                        except Exception:  # noqa: BLE001
+                            dead_was_failed = False
+                        break
                 except Exception:  # noqa: BLE001
-                    dead_indices.append(i)
-            if not dead_indices:
+                    dead_index = i
+                    dead_was_failed = True
+                    break
+            if dead_index is None:
                 continue
-            # Walk in reverse so list mutation is safe.
-            for i in reversed(dead_indices):
-                pid, sess, _tx = sessions.pop(i)
-                print(
-                    f"[vpn-mesh] reaper: cleaning up dead session peer={pid}",
-                    file=sys.stderr,
-                )
+            pid, sess, _tx = sessions.pop(dead_index)
+            print(
+                f"[vpn-mesh] reaper: cleaning up dead session peer={pid} "
+                f"(failed={dead_was_failed})",
+                file=sys.stderr,
+            )
+            # Skip stop() if the session is already in FAILED state — its
+            # thread has already exited and closed its own loop. Calling
+            # stop() again would just join the already-dead thread, but
+            # the act of running `room.disconnect()` from a *concurrent*
+            # reap is what poisons the FFI singleton. STOPPED state means
+            # someone already called stop() cleanly so this is a no-op.
+            if not dead_was_failed:
                 try:
                     sess.stop()
                 except Exception:  # noqa: BLE001
                     pass
-                try:
-                    mesh.drop_client(pid)  # invokes on_drop → clears _account_active
-                except Exception:  # noqa: BLE001
-                    log.exception("reaper: drop_client failed for peer=%d", pid)
-                try:
-                    control.release_mesh_assignment(pid)
-                except Exception:  # noqa: BLE001
-                    log.exception("reaper: release_mesh_assignment failed for peer=%d", pid)
-                try:
-                    allocator.leave(pid)
-                except Exception:  # noqa: BLE001
-                    pass
+            try:
+                mesh.drop_client(pid)  # invokes on_drop → clears _account_active
+            except Exception:  # noqa: BLE001
+                log.exception("reaper: drop_client failed for peer=%d", pid)
+            try:
+                control.release_mesh_assignment(pid)
+            except Exception:  # noqa: BLE001
+                log.exception("reaper: release_mesh_assignment failed for peer=%d", pid)
+            try:
+                allocator.leave(pid)
+            except Exception:  # noqa: BLE001
+                pass
     _reaper_thread = threading.Thread(
         target=_session_reaper, name="vpn-mesh-reaper", daemon=True,
     )
