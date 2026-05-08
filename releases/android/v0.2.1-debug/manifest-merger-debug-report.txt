@@ -1,0 +1,430 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:2:1-55:12
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:2:1-55:12
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:2:1-55:12
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:2:1-55:12
+MERGED from [androidx.databinding:viewbinding:8.11.1] /Users/emad/.gradle/caches/8.13/transforms/6c98ac6c12430bdb27af0f23a94c1bac/transformed/viewbinding-8.11.1/AndroidManifest.xml:2:1-7:12
+MERGED from [com.google.android.material:material:1.12.0] /Users/emad/.gradle/caches/8.13/transforms/a196e9898e2454e8ae0053f3b2a28933/transformed/material-1.12.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] /Users/emad/.gradle/caches/8.13/transforms/02380e17a3506e2b24bb2981751fa3fb/transformed/constraintlayout-2.1.4/AndroidManifest.xml:2:1-11:12
+MERGED from [androidx.appcompat:appcompat-resources:1.7.0] /Users/emad/.gradle/caches/8.13/transforms/75db399c1733a3027d304d0fcc87e563/transformed/appcompat-resources-1.7.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.appcompat:appcompat:1.7.0] /Users/emad/.gradle/caches/8.13/transforms/3a759b1093161a241d0253997e5dfcf3/transformed/appcompat-1.7.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.viewpager2:viewpager2:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/fdc922e1895d9e02831b3f32f3e58aba/transformed/viewpager2-1.0.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.fragment:fragment:1.6.2] /Users/emad/.gradle/caches/8.13/transforms/e398bbe409d854b0c6806d7f9d959ee0/transformed/fragment-1.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.fragment:fragment-ktx:1.6.2] /Users/emad/.gradle/caches/8.13/transforms/4edb73a6a0d71a952051bde964625556/transformed/fragment-ktx-1.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:17:1-37:12
+MERGED from [androidx.emoji2:emoji2-views-helper:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a7e6b6ec51faba8fec62738b1b4d698a/transformed/emoji2-views-helper-1.3.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:17:1-35:12
+MERGED from [androidx.drawerlayout:drawerlayout:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/8f35ce322114e1777ad925067a27ef2c/transformed/drawerlayout-1.1.1/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.coordinatorlayout:coordinatorlayout:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/56185477413f5cfe54216d50a5c12909/transformed/coordinatorlayout-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.transition:transition:1.5.0] /Users/emad/.gradle/caches/8.13/transforms/edbd2e7bd985c6bea96afea58c6ea5ec/transformed/transition-1.5.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.dynamicanimation:dynamicanimation:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/e9bd4c4be2543b8f360ad5fc15f6e60b/transformed/dynamicanimation-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.vectordrawable:vectordrawable-animated:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/04c5cc4bf98106b813f6542e0c3d5195/transformed/vectordrawable-animated-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.vectordrawable:vectordrawable:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/507c2f72d9938a6607bd94951d9d19b6/transformed/vectordrawable-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.recyclerview:recyclerview:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/1d3afafa6e5141a5c0962d3c96291070/transformed/recyclerview-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.viewpager:viewpager:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/8e6560ddfb98ee77fa93bb7bac6994fb/transformed/viewpager-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.customview:customview:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/9f3c3c7df55e3ae9fb44db837adcd2d9/transformed/customview-1.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.legacy:legacy-support-core-utils:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/8a095a8b18d9724d5a69f36b1d462d79/transformed/legacy-support-core-utils-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.loader:loader:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/449d048e68af9f4a0b82e7c2e8d1a157/transformed/loader-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:17:1-30:12
+MERGED from [androidx.activity:activity-ktx:1.10.1] /Users/emad/.gradle/caches/8.13/transforms/75d6016864b5471bbf9f02ca85656a12/transformed/activity-ktx-1.10.1/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.activity:activity:1.10.1] /Users/emad/.gradle/caches/8.13/transforms/96353e1da8ad29db7966b495e9344ca7/transformed/activity-1.10.1/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.savedstate:savedstate-ktx:1.2.1] /Users/emad/.gradle/caches/8.13/transforms/3c81f2a689d24d6ab60cebd8edebd0f9/transformed/savedstate-ktx-1.2.1/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.savedstate:savedstate:1.2.1] /Users/emad/.gradle/caches/8.13/transforms/190d28b98a616133ba606764bc5f2d65/transformed/savedstate-1.2.1/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/084eaad1e9a1b4bd35454ab41765d505/transformed/lifecycle-livedata-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/fa765e26eec2ebec9e1f3eb121135056/transformed/lifecycle-livedata-core-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:17:1-35:12
+MERGED from [androidx.lifecycle:lifecycle-viewmodel:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/6738ce16d81413962e1ac69d91bb99af/transformed/lifecycle-viewmodel-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-livedata-core-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/9c98d9bd2cba1bca608625ebcbb31b2b/transformed/lifecycle-livedata-core-ktx-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/ad26de6357e66935eec07bdbc378f87e/transformed/lifecycle-runtime-2.6.2/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.lifecycle:lifecycle-runtime-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/bf1b0e7a76ecc5ccd4a79e09fcc5a203/transformed/lifecycle-runtime-ktx-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/de6af5573b92a71f657d8bfd94eabe2c/transformed/lifecycle-viewmodel-ktx-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-savedstate:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f12530a32ccefeed2bb8228a563a48b3/transformed/lifecycle-viewmodel-savedstate-2.6.2/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.core:core-ktx:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/5a54d50e0ca85ed2888e913eb0c0db21/transformed/core-ktx-1.15.0/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.localbroadcastmanager:localbroadcastmanager:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/30a9f7bcd35e2e0e9323ba4d62841599/transformed/localbroadcastmanager-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.cursoradapter:cursoradapter:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/936a5e85757f4d9270d6eef9b1fd61f6/transformed/cursoradapter-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.cardview:cardview:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/ac7fb2b2809f256a682863f843f51efc/transformed/cardview-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [com.auth0.android:jwtdecode:2.0.2] /Users/emad/.gradle/caches/8.13/transforms/d2cf63b70277927fe6f33a44ce7e1628/transformed/jwtdecode-2.0.2/AndroidManifest.xml:2:1-11:12
+MERGED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:2:1-12:12
+MERGED from [androidx.interpolator:interpolator:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/ac7912f84b4d2c7a28a75f0252ed7185/transformed/interpolator-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:17:1-55:12
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:17:1-33:12
+MERGED from [androidx.tracing:tracing:1.2.0] /Users/emad/.gradle/caches/8.13/transforms/edffde1182978000f6a3b45dcec0523c/transformed/tracing-1.2.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/4f9ebd6cac3139147931d11569957b31/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:17:1-27:12
+MERGED from [androidx.arch.core:core-runtime:2.2.0] /Users/emad/.gradle/caches/8.13/transforms/febbe3bb2a685c194796a42615bffb95/transformed/core-runtime-2.2.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.documentfile:documentfile:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/101a98aa72731ffb27f6617bab4c0e6e/transformed/documentfile-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.print:print:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/6cff252b20964f93f0b2b8f61f6ca2e8/transformed/print-1.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.annotation:annotation-experimental:1.4.1] /Users/emad/.gradle/caches/8.13/transforms/b7df048dee59895017b0108d1587ae22/transformed/annotation-experimental-1.4.1/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.core:core-viewtree:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/c0cf77684821c36cb1129016cbc84b51/transformed/core-viewtree-1.0.0/AndroidManifest.xml:2:1-7:12
+MERGED from [io.github.webrtc-sdk:android-prefixed:144.7559.01] /Users/emad/.gradle/caches/8.13/transforms/a4d11fd595ddb376f8b6790ceb1c9c8b/transformed/android-prefixed-144.7559.01/AndroidManifest.xml:2:1-9:12
+	package
+		INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+	android:versionName
+		INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+	android:versionCode
+		INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:2:11-69
+uses-permission#android.permission.INTERNET
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:4:5-67
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:23:5-67
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:23:5-67
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:4:22-64
+uses-permission#android.permission.ACCESS_NETWORK_STATE
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:5:5-79
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:22:5-79
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:22:5-79
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:5:22-76
+uses-permission#android.permission.FOREGROUND_SERVICE
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:6:5-77
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:26:5-77
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:26:5-77
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:6:22-74
+uses-permission#android.permission.FOREGROUND_SERVICE_SPECIAL_USE
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:7:5-89
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:7:22-86
+uses-permission#android.permission.POST_NOTIFICATIONS
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:8:5-77
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:8:22-74
+application
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:10:5-54:19
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:10:5-54:19
+MERGED from [com.google.android.material:material:1.12.0] /Users/emad/.gradle/caches/8.13/transforms/a196e9898e2454e8ae0053f3b2a28933/transformed/material-1.12.0/AndroidManifest.xml:22:5-20
+MERGED from [com.google.android.material:material:1.12.0] /Users/emad/.gradle/caches/8.13/transforms/a196e9898e2454e8ae0053f3b2a28933/transformed/material-1.12.0/AndroidManifest.xml:22:5-20
+MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] /Users/emad/.gradle/caches/8.13/transforms/02380e17a3506e2b24bb2981751fa3fb/transformed/constraintlayout-2.1.4/AndroidManifest.xml:9:5-20
+MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] /Users/emad/.gradle/caches/8.13/transforms/02380e17a3506e2b24bb2981751fa3fb/transformed/constraintlayout-2.1.4/AndroidManifest.xml:9:5-20
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:29:5-35:19
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:29:5-35:19
+MERGED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:28:5-89
+MERGED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:28:5-89
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:23:5-33:19
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:23:5-53:19
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:23:5-53:19
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:25:5-31:19
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:25:5-31:19
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/4f9ebd6cac3139147931d11569957b31/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:24:5-25:19
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/4f9ebd6cac3139147931d11569957b31/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:24:5-25:19
+	android:extractNativeLibs
+		INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+	android:appComponentFactory
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:28:18-86
+	android:supportsRtl
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:15:9-35
+	android:label
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:14:9-38
+	android:roundIcon
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:13:9-54
+	android:icon
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:12:9-43
+	android:allowBackup
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:11:9-35
+	android:theme
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:16:9-50
+activity#com.baleobala.vpn.MainActivity
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:18:9-26:20
+	android:screenOrientation
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:21:13-49
+	android:exported
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:20:13-36
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:19:13-41
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:22:13-25:29
+action#android.intent.action.MAIN
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:23:17-69
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:23:25-66
+category#android.intent.category.LAUNCHER
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:24:17-77
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:24:27-74
+activity#com.baleobala.vpn.ui.LoginActivity
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:28:9-33:52
+	android:screenOrientation
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:33:13-49
+	android:parentActivityName
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:32:13-55
+	android:label
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:31:13-48
+	android:exported
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:30:13-37
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:29:13-45
+activity#com.baleobala.vpn.SettingsActivity
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:35:9-40:52
+	android:screenOrientation
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:40:13-49
+	android:parentActivityName
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:39:13-55
+	android:label
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:38:13-51
+	android:exported
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:37:13-37
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:36:13-45
+service#com.baleobala.vpn.BaleVpnService
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:42:9-53:19
+	android:exported
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:44:13-37
+	android:permission
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:46:13-69
+	android:foregroundServiceType
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:45:13-55
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:43:13-43
+property#android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:47:13-49:46
+	android:value
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:49:17-43
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:48:17-76
+intent-filter#action:name:android.net.VpnService
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:50:13-52:29
+action#android.net.VpnService
+ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:51:17-65
+	android:name
+		ADDED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml:51:25-62
+uses-sdk
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+MERGED from [androidx.databinding:viewbinding:8.11.1] /Users/emad/.gradle/caches/8.13/transforms/6c98ac6c12430bdb27af0f23a94c1bac/transformed/viewbinding-8.11.1/AndroidManifest.xml:5:5-44
+MERGED from [androidx.databinding:viewbinding:8.11.1] /Users/emad/.gradle/caches/8.13/transforms/6c98ac6c12430bdb27af0f23a94c1bac/transformed/viewbinding-8.11.1/AndroidManifest.xml:5:5-44
+MERGED from [com.google.android.material:material:1.12.0] /Users/emad/.gradle/caches/8.13/transforms/a196e9898e2454e8ae0053f3b2a28933/transformed/material-1.12.0/AndroidManifest.xml:20:5-44
+MERGED from [com.google.android.material:material:1.12.0] /Users/emad/.gradle/caches/8.13/transforms/a196e9898e2454e8ae0053f3b2a28933/transformed/material-1.12.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] /Users/emad/.gradle/caches/8.13/transforms/02380e17a3506e2b24bb2981751fa3fb/transformed/constraintlayout-2.1.4/AndroidManifest.xml:5:5-7:41
+MERGED from [androidx.constraintlayout:constraintlayout:2.1.4] /Users/emad/.gradle/caches/8.13/transforms/02380e17a3506e2b24bb2981751fa3fb/transformed/constraintlayout-2.1.4/AndroidManifest.xml:5:5-7:41
+MERGED from [androidx.appcompat:appcompat-resources:1.7.0] /Users/emad/.gradle/caches/8.13/transforms/75db399c1733a3027d304d0fcc87e563/transformed/appcompat-resources-1.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.appcompat:appcompat-resources:1.7.0] /Users/emad/.gradle/caches/8.13/transforms/75db399c1733a3027d304d0fcc87e563/transformed/appcompat-resources-1.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.appcompat:appcompat:1.7.0] /Users/emad/.gradle/caches/8.13/transforms/3a759b1093161a241d0253997e5dfcf3/transformed/appcompat-1.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.appcompat:appcompat:1.7.0] /Users/emad/.gradle/caches/8.13/transforms/3a759b1093161a241d0253997e5dfcf3/transformed/appcompat-1.7.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.viewpager2:viewpager2:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/fdc922e1895d9e02831b3f32f3e58aba/transformed/viewpager2-1.0.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.viewpager2:viewpager2:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/fdc922e1895d9e02831b3f32f3e58aba/transformed/viewpager2-1.0.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.fragment:fragment:1.6.2] /Users/emad/.gradle/caches/8.13/transforms/e398bbe409d854b0c6806d7f9d959ee0/transformed/fragment-1.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.fragment:fragment:1.6.2] /Users/emad/.gradle/caches/8.13/transforms/e398bbe409d854b0c6806d7f9d959ee0/transformed/fragment-1.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.fragment:fragment-ktx:1.6.2] /Users/emad/.gradle/caches/8.13/transforms/4edb73a6a0d71a952051bde964625556/transformed/fragment-ktx-1.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.fragment:fragment-ktx:1.6.2] /Users/emad/.gradle/caches/8.13/transforms/4edb73a6a0d71a952051bde964625556/transformed/fragment-ktx-1.6.2/AndroidManifest.xml:20:5-44
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:20:5-44
+MERGED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.emoji2:emoji2-views-helper:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a7e6b6ec51faba8fec62738b1b4d698a/transformed/emoji2-views-helper-1.3.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.emoji2:emoji2-views-helper:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a7e6b6ec51faba8fec62738b1b4d698a/transformed/emoji2-views-helper-1.3.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.drawerlayout:drawerlayout:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/8f35ce322114e1777ad925067a27ef2c/transformed/drawerlayout-1.1.1/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.drawerlayout:drawerlayout:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/8f35ce322114e1777ad925067a27ef2c/transformed/drawerlayout-1.1.1/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.coordinatorlayout:coordinatorlayout:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/56185477413f5cfe54216d50a5c12909/transformed/coordinatorlayout-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.coordinatorlayout:coordinatorlayout:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/56185477413f5cfe54216d50a5c12909/transformed/coordinatorlayout-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.transition:transition:1.5.0] /Users/emad/.gradle/caches/8.13/transforms/edbd2e7bd985c6bea96afea58c6ea5ec/transformed/transition-1.5.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.transition:transition:1.5.0] /Users/emad/.gradle/caches/8.13/transforms/edbd2e7bd985c6bea96afea58c6ea5ec/transformed/transition-1.5.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.dynamicanimation:dynamicanimation:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/e9bd4c4be2543b8f360ad5fc15f6e60b/transformed/dynamicanimation-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.dynamicanimation:dynamicanimation:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/e9bd4c4be2543b8f360ad5fc15f6e60b/transformed/dynamicanimation-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.vectordrawable:vectordrawable-animated:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/04c5cc4bf98106b813f6542e0c3d5195/transformed/vectordrawable-animated-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.vectordrawable:vectordrawable-animated:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/04c5cc4bf98106b813f6542e0c3d5195/transformed/vectordrawable-animated-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.vectordrawable:vectordrawable:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/507c2f72d9938a6607bd94951d9d19b6/transformed/vectordrawable-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.vectordrawable:vectordrawable:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/507c2f72d9938a6607bd94951d9d19b6/transformed/vectordrawable-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.recyclerview:recyclerview:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/1d3afafa6e5141a5c0962d3c96291070/transformed/recyclerview-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.recyclerview:recyclerview:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/1d3afafa6e5141a5c0962d3c96291070/transformed/recyclerview-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.viewpager:viewpager:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/8e6560ddfb98ee77fa93bb7bac6994fb/transformed/viewpager-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.viewpager:viewpager:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/8e6560ddfb98ee77fa93bb7bac6994fb/transformed/viewpager-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.customview:customview:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/9f3c3c7df55e3ae9fb44db837adcd2d9/transformed/customview-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.customview:customview:1.1.0] /Users/emad/.gradle/caches/8.13/transforms/9f3c3c7df55e3ae9fb44db837adcd2d9/transformed/customview-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.legacy:legacy-support-core-utils:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/8a095a8b18d9724d5a69f36b1d462d79/transformed/legacy-support-core-utils-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.legacy:legacy-support-core-utils:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/8a095a8b18d9724d5a69f36b1d462d79/transformed/legacy-support-core-utils-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.loader:loader:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/449d048e68af9f4a0b82e7c2e8d1a157/transformed/loader-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.loader:loader:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/449d048e68af9f4a0b82e7c2e8d1a157/transformed/loader-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.activity:activity-ktx:1.10.1] /Users/emad/.gradle/caches/8.13/transforms/75d6016864b5471bbf9f02ca85656a12/transformed/activity-ktx-1.10.1/AndroidManifest.xml:5:5-44
+MERGED from [androidx.activity:activity-ktx:1.10.1] /Users/emad/.gradle/caches/8.13/transforms/75d6016864b5471bbf9f02ca85656a12/transformed/activity-ktx-1.10.1/AndroidManifest.xml:5:5-44
+MERGED from [androidx.activity:activity:1.10.1] /Users/emad/.gradle/caches/8.13/transforms/96353e1da8ad29db7966b495e9344ca7/transformed/activity-1.10.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.activity:activity:1.10.1] /Users/emad/.gradle/caches/8.13/transforms/96353e1da8ad29db7966b495e9344ca7/transformed/activity-1.10.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.savedstate:savedstate-ktx:1.2.1] /Users/emad/.gradle/caches/8.13/transforms/3c81f2a689d24d6ab60cebd8edebd0f9/transformed/savedstate-ktx-1.2.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.savedstate:savedstate-ktx:1.2.1] /Users/emad/.gradle/caches/8.13/transforms/3c81f2a689d24d6ab60cebd8edebd0f9/transformed/savedstate-ktx-1.2.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.savedstate:savedstate:1.2.1] /Users/emad/.gradle/caches/8.13/transforms/190d28b98a616133ba606764bc5f2d65/transformed/savedstate-1.2.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.savedstate:savedstate:1.2.1] /Users/emad/.gradle/caches/8.13/transforms/190d28b98a616133ba606764bc5f2d65/transformed/savedstate-1.2.1/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/084eaad1e9a1b4bd35454ab41765d505/transformed/lifecycle-livedata-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/084eaad1e9a1b4bd35454ab41765d505/transformed/lifecycle-livedata-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/fa765e26eec2ebec9e1f3eb121135056/transformed/lifecycle-livedata-core-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/fa765e26eec2ebec9e1f3eb121135056/transformed/lifecycle-livedata-core-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:21:5-44
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:21:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/6738ce16d81413962e1ac69d91bb99af/transformed/lifecycle-viewmodel-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/6738ce16d81413962e1ac69d91bb99af/transformed/lifecycle-viewmodel-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/9c98d9bd2cba1bca608625ebcbb31b2b/transformed/lifecycle-livedata-core-ktx-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/9c98d9bd2cba1bca608625ebcbb31b2b/transformed/lifecycle-livedata-core-ktx-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/ad26de6357e66935eec07bdbc378f87e/transformed/lifecycle-runtime-2.6.2/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/ad26de6357e66935eec07bdbc378f87e/transformed/lifecycle-runtime-2.6.2/AndroidManifest.xml:5:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/bf1b0e7a76ecc5ccd4a79e09fcc5a203/transformed/lifecycle-runtime-ktx-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/bf1b0e7a76ecc5ccd4a79e09fcc5a203/transformed/lifecycle-runtime-ktx-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/de6af5573b92a71f657d8bfd94eabe2c/transformed/lifecycle-viewmodel-ktx-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/de6af5573b92a71f657d8bfd94eabe2c/transformed/lifecycle-viewmodel-ktx-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-savedstate:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f12530a32ccefeed2bb8228a563a48b3/transformed/lifecycle-viewmodel-savedstate-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-viewmodel-savedstate:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f12530a32ccefeed2bb8228a563a48b3/transformed/lifecycle-viewmodel-savedstate-2.6.2/AndroidManifest.xml:20:5-44
+MERGED from [androidx.core:core-ktx:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/5a54d50e0ca85ed2888e913eb0c0db21/transformed/core-ktx-1.15.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.core:core-ktx:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/5a54d50e0ca85ed2888e913eb0c0db21/transformed/core-ktx-1.15.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.localbroadcastmanager:localbroadcastmanager:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/30a9f7bcd35e2e0e9323ba4d62841599/transformed/localbroadcastmanager-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.localbroadcastmanager:localbroadcastmanager:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/30a9f7bcd35e2e0e9323ba4d62841599/transformed/localbroadcastmanager-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.cursoradapter:cursoradapter:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/936a5e85757f4d9270d6eef9b1fd61f6/transformed/cursoradapter-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.cursoradapter:cursoradapter:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/936a5e85757f4d9270d6eef9b1fd61f6/transformed/cursoradapter-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.cardview:cardview:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/ac7fb2b2809f256a682863f843f51efc/transformed/cardview-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.cardview:cardview:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/ac7fb2b2809f256a682863f843f51efc/transformed/cardview-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [com.auth0.android:jwtdecode:2.0.2] /Users/emad/.gradle/caches/8.13/transforms/d2cf63b70277927fe6f33a44ce7e1628/transformed/jwtdecode-2.0.2/AndroidManifest.xml:7:5-9:41
+MERGED from [com.auth0.android:jwtdecode:2.0.2] /Users/emad/.gradle/caches/8.13/transforms/d2cf63b70277927fe6f33a44ce7e1628/transformed/jwtdecode-2.0.2/AndroidManifest.xml:7:5-9:41
+MERGED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:5:5-44
+MERGED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:5:5-44
+MERGED from [androidx.interpolator:interpolator:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/ac7912f84b4d2c7a28a75f0252ed7185/transformed/interpolator-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.interpolator:interpolator:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/ac7912f84b4d2c7a28a75f0252ed7185/transformed/interpolator-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:21:5-44
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:21:5-23:41
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:21:5-23:41
+MERGED from [androidx.tracing:tracing:1.2.0] /Users/emad/.gradle/caches/8.13/transforms/edffde1182978000f6a3b45dcec0523c/transformed/tracing-1.2.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.tracing:tracing:1.2.0] /Users/emad/.gradle/caches/8.13/transforms/edffde1182978000f6a3b45dcec0523c/transformed/tracing-1.2.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/4f9ebd6cac3139147931d11569957b31/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/4f9ebd6cac3139147931d11569957b31/transformed/versionedparcelable-1.1.1/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.arch.core:core-runtime:2.2.0] /Users/emad/.gradle/caches/8.13/transforms/febbe3bb2a685c194796a42615bffb95/transformed/core-runtime-2.2.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.arch.core:core-runtime:2.2.0] /Users/emad/.gradle/caches/8.13/transforms/febbe3bb2a685c194796a42615bffb95/transformed/core-runtime-2.2.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.documentfile:documentfile:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/101a98aa72731ffb27f6617bab4c0e6e/transformed/documentfile-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.documentfile:documentfile:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/101a98aa72731ffb27f6617bab4c0e6e/transformed/documentfile-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.print:print:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/6cff252b20964f93f0b2b8f61f6ca2e8/transformed/print-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.print:print:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/6cff252b20964f93f0b2b8f61f6ca2e8/transformed/print-1.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.annotation:annotation-experimental:1.4.1] /Users/emad/.gradle/caches/8.13/transforms/b7df048dee59895017b0108d1587ae22/transformed/annotation-experimental-1.4.1/AndroidManifest.xml:5:5-44
+MERGED from [androidx.annotation:annotation-experimental:1.4.1] /Users/emad/.gradle/caches/8.13/transforms/b7df048dee59895017b0108d1587ae22/transformed/annotation-experimental-1.4.1/AndroidManifest.xml:5:5-44
+MERGED from [androidx.core:core-viewtree:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/c0cf77684821c36cb1129016cbc84b51/transformed/core-viewtree-1.0.0/AndroidManifest.xml:5:5-44
+MERGED from [androidx.core:core-viewtree:1.0.0] /Users/emad/.gradle/caches/8.13/transforms/c0cf77684821c36cb1129016cbc84b51/transformed/core-viewtree-1.0.0/AndroidManifest.xml:5:5-44
+MERGED from [io.github.webrtc-sdk:android-prefixed:144.7559.01] /Users/emad/.gradle/caches/8.13/transforms/a4d11fd595ddb376f8b6790ceb1c9c8b/transformed/android-prefixed-144.7559.01/AndroidManifest.xml:5:5-7:41
+MERGED from [io.github.webrtc-sdk:android-prefixed:144.7559.01] /Users/emad/.gradle/caches/8.13/transforms/a4d11fd595ddb376f8b6790ceb1c9c8b/transformed/android-prefixed-144.7559.01/AndroidManifest.xml:5:5-7:41
+	android:targetSdkVersion
+		INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/emad/IdeaProjects/baleobala/native/android/app/src/main/AndroidManifest.xml
+uses-permission#android.permission.RECORD_AUDIO
+ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:24:5-71
+	android:name
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:24:22-68
+uses-permission#android.permission.CAMERA
+ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:25:5-65
+	android:name
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:25:22-62
+uses-permission#android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION
+ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:27:5-94
+	android:name
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:27:22-91
+service#io.livekit.android.room.track.screencapture.ScreenCaptureService
+ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:30:9-34:43
+	android:enabled
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:32:13-35
+	android:stopWithTask
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:34:13-40
+	android:foregroundServiceType
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:33:13-60
+	android:name
+		ADDED from [io.livekit:livekit-android:2.25.1] /Users/emad/.gradle/caches/8.13/transforms/89295700ac8458010d51f93cc97a01a4/transformed/livekit-android-2.25.1/AndroidManifest.xml:31:13-92
+provider#androidx.startup.InitializationProvider
+ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:24:9-32:20
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:26:9-30:34
+MERGED from [androidx.startup:startup-runtime:1.1.1] /Users/emad/.gradle/caches/8.13/transforms/311fc64b7e19839e908e4b197cd99419/transformed/startup-runtime-1.1.1/AndroidManifest.xml:26:9-30:34
+	tools:node
+		ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:28:13-31
+	android:authorities
+		ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:26:13-68
+	android:exported
+		ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:27:13-37
+	android:name
+		ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:25:13-67
+meta-data#androidx.emoji2.text.EmojiCompatInitializer
+ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:29:13-31:52
+	android:value
+		ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:31:17-49
+	android:name
+		ADDED from [androidx.emoji2:emoji2:1.3.0] /Users/emad/.gradle/caches/8.13/transforms/a6271281e3ca96c7f783d22bb1af1d0a/transformed/emoji2-1.3.0/AndroidManifest.xml:30:17-75
+permission#${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:22:5-24:47
+	android:protectionLevel
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:24:9-44
+	android:name
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:23:9-81
+permission#com.baleobala.vpn.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:22:5-24:47
+	android:protectionLevel
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:24:9-44
+	android:name
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:23:9-81
+uses-permission#${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:26:5-97
+	android:name
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:26:22-94
+uses-permission#com.baleobala.vpn.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:26:5-97
+	android:name
+		ADDED from [androidx.core:core:1.15.0] /Users/emad/.gradle/caches/8.13/transforms/8035212c5891bdca34644b2b3dc059fb/transformed/core-1.15.0/AndroidManifest.xml:26:22-94
+meta-data#androidx.lifecycle.ProcessLifecycleInitializer
+ADDED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:29:13-31:52
+	android:value
+		ADDED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:31:17-49
+	android:name
+		ADDED from [androidx.lifecycle:lifecycle-process:2.6.2] /Users/emad/.gradle/caches/8.13/transforms/f9637cdecdf39602978977b0771a16ca/transformed/lifecycle-process-2.6.2/AndroidManifest.xml:30:17-78
+uses-permission#android.permission.BLUETOOTH
+ADDED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:7:5-9:38
+	android:maxSdkVersion
+		ADDED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:9:9-35
+	android:name
+		ADDED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:8:9-52
+uses-permission#android.permission.MODIFY_AUDIO_SETTINGS
+ADDED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:10:5-80
+	android:name
+		ADDED from [com.github.davidliu:audioswitch:70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb] /Users/emad/.gradle/caches/8.13/transforms/40b29fdda04a23f5b4ac953b435a676f/transformed/audioswitch-70efa204dda4f468f989b4b3e1b5ecb6ffe56ceb/AndroidManifest.xml:10:22-77
+meta-data#androidx.profileinstaller.ProfileInstallerInitializer
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:29:13-31:52
+	android:value
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:31:17-49
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:30:17-85
+receiver#androidx.profileinstaller.ProfileInstallReceiver
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:34:9-52:20
+	android:enabled
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:37:13-35
+	android:exported
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:38:13-36
+	android:permission
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:39:13-57
+	android:directBootAware
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:36:13-44
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:35:13-76
+intent-filter#action:name:androidx.profileinstaller.action.INSTALL_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:40:13-42:29
+action#androidx.profileinstaller.action.INSTALL_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:41:17-91
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:41:25-88
+intent-filter#action:name:androidx.profileinstaller.action.SKIP_FILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:43:13-45:29
+action#androidx.profileinstaller.action.SKIP_FILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:44:17-85
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:44:25-82
+intent-filter#action:name:androidx.profileinstaller.action.SAVE_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:46:13-48:29
+action#androidx.profileinstaller.action.SAVE_PROFILE
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:47:17-88
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:47:25-85
+intent-filter#action:name:androidx.profileinstaller.action.BENCHMARK_OPERATION
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:49:13-51:29
+action#androidx.profileinstaller.action.BENCHMARK_OPERATION
+ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:50:17-95
+	android:name
+		ADDED from [androidx.profileinstaller:profileinstaller:1.4.0] /Users/emad/.gradle/caches/8.13/transforms/43df292d091508ca2c41ae54aab880be/transformed/profileinstaller-1.4.0/AndroidManifest.xml:50:25-92
