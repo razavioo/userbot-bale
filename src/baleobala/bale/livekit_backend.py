@@ -218,6 +218,30 @@ class LiveKitSession:
         self._raise_if_not_operational("remote participant did not join")
         raise TimeoutError(f"remote participant did not join within {timeout:.1f}s")
 
+    def remote_participant_identities(self) -> list[str]:
+        """Return the identities of all currently-joined remote participants.
+
+        Used by the relay probe to discover the actual caller's user_id —
+        Bale's LiveKit JWT puts the caller's user_id in `sub`, so the
+        participant identity equals the caller user_id when joined. The
+        relay then uses THIS to key its mesh.issue_client(peer_id, ...)
+        instead of `event.peer_id` (which is the relay's own peer_id under
+        Bale push semantics, causing collisions when multiple Android
+        clients call the same relay account).
+        """
+        if self._room is None:
+            return []
+        try:
+            participants = getattr(self._room, "remote_participants", None) or {}
+        except Exception:  # noqa: BLE001
+            return []
+        out: list[str] = []
+        for p in participants.values():
+            ident = getattr(p, "identity", None)
+            if ident is not None:
+                out.append(str(ident))
+        return out
+
     def start(self) -> None:
         _require_livekit()
         with self._state_lock:
