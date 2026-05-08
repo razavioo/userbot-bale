@@ -39,6 +39,7 @@ import os
 import logging
 import queue
 import threading
+import time
 from urllib.parse import urlparse
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
@@ -53,6 +54,11 @@ LIVEKIT_SAMPLE_RATE = 48_000
 LIVEKIT_FRAME_MS = 10
 LIVEKIT_FRAME_SAMPLES = LIVEKIT_SAMPLE_RATE * LIVEKIT_FRAME_MS // 1000  # 480
 LIVEKIT_STARTUP_TIMEOUT = float(os.environ.get("BALEOBALA_LIVEKIT_STARTUP_TIMEOUT", "45"))
+# Grace window for transient `participant_disconnected` blips. A real
+# peer departure (Android stopped the VPN, network gone) is promoted
+# to a terminal session failure after this delay so the reaper can
+# free the relay slot and the next reconnect succeeds.
+PEER_LOST_GRACE_SECS = float(os.environ.get("BALEOBALA_PEER_LOST_GRACE", "10"))
 SAMPLE_RATE = LIVEKIT_SAMPLE_RATE
 
 try:  # soft dep; only Phase 3 callers need this
@@ -123,6 +129,11 @@ class LiveKitSession:
         self._ready = threading.Event()
         self._stopped = threading.Event()
         self._peer_ready = threading.Event()
+        # monotonic timestamp of the most recent participant_disconnected
+        # event with no following participant_connected. Set by the LiveKit
+        # callback under self._state_lock; the run loop watchdog promotes
+        # to terminal once it has aged past PEER_LOST_GRACE_SECS.
+        self._peer_disconnect_at: float | None = None
         self._state_lock = threading.Lock()
         self._state = LiveKitSessionState.NEW
         self._terminal_error: BaseException | None = None
@@ -401,6 +412,10 @@ class LiveKitSession:
             identity = getattr(participant, "identity", "?")
             log.info("LiveKit remote participant connected: identity=%s", identity)
             self._peer_ready.set()
+            # Cancel any pending "peer is gone" countdown if the same peer
+            # rejoined fast enough to be a transient blip.
+            with self._state_lock:
+                self._peer_disconnect_at = None
 
         @room.on("disconnected")  # type: ignore[misc]
         def on_disconnected(reason=None):  # type: ignore[no-untyped-def]
@@ -413,15 +428,22 @@ class LiveKitSession:
         @room.on("participant_disconnected")  # type: ignore[misc]
         def on_participant_disconnected(participant):  # type: ignore[no-untyped-def]
             identity = getattr(participant, "identity", "?")
-            # Do NOT mark the session as terminal here. For long-lived VPN
-            # sessions a transient SFU view of the remote participant
-            # leaving (e.g. mid-call signaling glitch) was killing the data
-            # channel even though the actual peer was still publishing. A
-            # real room disconnect (network gone, room closed) still
-            # arrives via the `disconnected` handler above and is fatal.
-            log.warning("LiveKit remote participant disconnected: identity=%s "
-                        "(session staying open; awaiting room.disconnected)",
-                        identity)
+            # Tolerate transient SFU blips where the peer briefly
+            # disappears but keeps publishing — earlier code marked the
+            # session terminal here and killed live VPN tunnels on a
+            # signaling hiccup. But we MUST eventually mark terminal when
+            # the peer is truly gone, otherwise the relay's slot stays
+            # locked forever and reconnect is impossible. Start a grace
+            # countdown; the watchdog co-routine in _run() promotes this
+            # to a terminal failure after PEER_LOST_GRACE_SECS unless a
+            # `participant_connected` for the same identity arrives first.
+            log.warning(
+                "LiveKit remote participant disconnected: identity=%s "
+                "(grace %.0fs before terminal)",
+                identity, PEER_LOST_GRACE_SECS,
+            )
+            with self._state_lock:
+                self._peer_disconnect_at = time.monotonic()
 
         @room.on("reconnecting")  # type: ignore[misc]
         def on_reconnecting():  # type: ignore[no-untyped-def]
@@ -456,6 +478,24 @@ class LiveKitSession:
 
         while not self._stopped.is_set():
             await asyncio.sleep(0.25)
+            # Watchdog: if a remote participant disconnected and didn't
+            # come back within the grace window, promote to terminal so
+            # the reaper can free the relay slot.
+            with self._state_lock:
+                disconnect_at = self._peer_disconnect_at
+            if disconnect_at is not None and (
+                time.monotonic() - disconnect_at >= PEER_LOST_GRACE_SECS
+            ):
+                log.warning(
+                    "LiveKit remote participant did not return within %.0fs; "
+                    "marking session terminal so the relay slot can be freed",
+                    PEER_LOST_GRACE_SECS,
+                )
+                self._set_terminal_failure(
+                    RuntimeError("remote participant lost (grace expired)")
+                )
+                self._stopped.set()
+                break
 
     async def _consume_audio(self, stream) -> None:  # type: ignore[no-untyped-def]
         try:
