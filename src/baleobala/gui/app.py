@@ -914,6 +914,19 @@ class MainWindow(QMainWindow):
             self._status_label.setText("Not signed in")
 
     def _on_logout(self) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Sign out of Bale?")
+        box.setText("Sign out of Bale?")
+        box.setInformativeText(
+            "You'll need to enter your phone number again to sign back in."
+        )
+        sign_out_btn = box.addButton("Sign out", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        if box.clickedButton() is not sign_out_btn:
+            return
         try:
             self._service.clear_auth()
         except Exception as e:
