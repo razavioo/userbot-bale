@@ -3352,10 +3352,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     level = logging.WARNING - 10 * min(args.verbose, 2)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
+    from baleobala.runtime.logging_config import configure_logging
+    configure_logging(level=level)
     try:
         return int(args.func(args) or 0)
     except Exception as e:  # noqa: BLE001

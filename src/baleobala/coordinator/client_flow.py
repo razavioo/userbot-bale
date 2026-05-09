@@ -6,10 +6,12 @@ import that tests can patch cleanly.
 
 from __future__ import annotations
 
+import logging
 import platform
-import sys
 
 from baleobala.bale.api import BaleApiClient
+
+log = logging.getLogger(__name__)
 from baleobala.bale.livekit_backend import LiveKitSession
 from baleobala.carrier.bale import BaleCarrierController
 from baleobala.coordinator.protocol import (
@@ -45,10 +47,7 @@ def resolve_via_coordinator(
     _BaleApiClient = client_factory or BaleApiClient
     _BaleCarrierController = controller_factory or BaleCarrierController
 
-    print(
-        f"[bale-call] coordinator mode — calling coordinator peer={coordinator_peer_id}",
-        file=sys.stderr,
-    )
+    log.info("coordinator: dialing coordinator peer=%d", coordinator_peer_id)
 
     coord_client = _BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
     coord_client.start()
@@ -101,9 +100,9 @@ def resolve_via_coordinator(
         raise SystemExit("coordinator returned invalid relay_peer_id")
     # B3: per-session ephemeral PSK sent by the coordinator.
     session_psk: str = str(assign_msg.get("session_psk", ""))
-    print(
-        f"[bale-call] assigned relay={relay_peer_id} psk={'ephemeral' if session_psk else 'global'} — calling relay directly",
-        file=sys.stderr,
+    log.info(
+        "coordinator: assigned relay=%d psk=%s — calling relay directly",
+        relay_peer_id, "ephemeral" if session_psk else "global",
     )
 
     # Call the relay directly; it will accept because the coordinator
@@ -115,7 +114,7 @@ def resolve_via_coordinator(
     finally:
         relay_client.stop()
 
-    print(f"[bale-call] relay connected — room={creds.url}", file=sys.stderr)
+    log.info("coordinator: relay connected room=%s", creds.url)
     # Attach session_psk so callers can use it for EncryptedTransport instead
     # of the global PSK file. Empty string means no ephemeral PSK (legacy relay).
     try:
