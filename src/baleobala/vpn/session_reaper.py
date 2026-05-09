@@ -29,8 +29,17 @@ import sys
 import threading
 from typing import Any, Callable, Protocol
 
+from baleobala.runtime.metrics import counter
+
 
 log = logging.getLogger(__name__)
+
+
+_REAPED = counter(
+    "baleobala_relay_reaper_reaped_total",
+    "Sessions removed by the reaper, labelled by terminal state.",
+    labelnames=("failed",),
+)
 
 
 class _MeshLike(Protocol):
@@ -128,6 +137,10 @@ class SessionReaper:
         try:
             self._allocator.leave(pid)
         except Exception:  # noqa: BLE001
+            pass
+        try:
+            _REAPED.inc(failed=str(dead_was_failed))
+        except Exception:
             pass
         return True
 

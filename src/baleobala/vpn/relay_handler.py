@@ -26,11 +26,42 @@ import threading
 import time as _time
 from typing import Any, Callable, Protocol
 
+from baleobala.runtime.metrics import counter, gauge
+
 from .constants import DEFAULT_TUNNEL_SESS_ID
 from .relay_state import RelayState
 
 
 log = logging.getLogger(__name__)
+
+
+# Outcomes:
+#   committed       — full tunnel up (sessions.append reached)
+#   expect_client   — coordinator dispatch handled (EXPECT_CLIENT registered)
+#   skip_probe      — call rejected because account already has a session
+#   no_capacity     — allocator full
+#   no_expect_client — coordinator never pre-approved this caller
+#   probe_error     — probe LiveKit session failed to start
+#   enable_audio_failed — audio publish raised on the promotion
+#   missing_peer_id — Bale event arrived without a canonical peer_id
+#   provision_failed — tunnel bring-up failed inside _provision_tunnel
+_CALLS = counter(
+    "baleobala_relay_calls_total",
+    "Inbound relay calls, labelled by outcome.",
+    labelnames=("outcome",),
+)
+_EVICTIONS = counter(
+    "baleobala_relay_evictions_total",
+    "Stale sessions evicted on a fresh inbound call (reconnect-evict path).",
+)
+_STALE_RECOVERY = counter(
+    "baleobala_relay_stale_flag_recoveries_total",
+    "Times the stale-flag auto-recovery branch fired (leaked _account_active flag was force-cleared).",
+)
+_SESSIONS_GAUGE = gauge(
+    "baleobala_relay_sessions_active",
+    "Current count of live VPN sessions on this relay process.",
+)
 
 
 class _LiveKitSessionFactory(Protocol):
@@ -121,6 +152,20 @@ class RelayCallHandler:
         self._recv_provision = recv_provision
         self._ProvisioningError = provisioning_error_cls
         self._log = log_stream
+        # Wire the sessions-active gauge to the live list. Idempotent;
+        # if multiple handlers exist (one per relay process), they all
+        # point at the same list anyway.
+        try:
+            _SESSIONS_GAUGE.set_function(lambda: float(len(self._sessions)))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _bump(outcome: str) -> None:
+        try:
+            _CALLS.inc(outcome=outcome)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Public entry point — the listen callback adapter binds the
@@ -134,6 +179,7 @@ class RelayCallHandler:
                 "[vpn-mesh] incoming call rejected: missing canonical peer_id",
                 file=self._log,
             )
+            self._bump("missing_peer_id")
             return
 
         # cell[0] = "did this call set _account_active=True"
@@ -199,6 +245,7 @@ class RelayCallHandler:
                 except Exception:  # noqa: BLE001
                     pass
             self._relay_state.transition(account_index, False, "no-jwt-capacity")
+            self._bump("no_capacity")
             return
         print(
             f"[vpn-mesh] server_jwt_assignment={self._allocator.assignment()} "
@@ -256,6 +303,10 @@ class RelayCallHandler:
                     self._relay_state.transition(
                         account_index, False, "stale-recovery"
                     )
+                    try:
+                        _STALE_RECOVERY.inc()
+                    except Exception:
+                        pass
                 if slot.peer_ids or self._relay_state.is_active(account_index):
                     age_str = (
                         f" age={self._relay_state.age(account_index):.1f}s"
@@ -268,6 +319,7 @@ class RelayCallHandler:
                         f"(slot={slot.peer_ids} active={self._relay_state.is_active(account_index)}{age_str})",
                         file=self._log,
                     )
+                    self._bump("skip_probe")
                     return None
 
             self._relay_state.transition(account_index, True, "probe-start")
@@ -324,6 +376,7 @@ class RelayCallHandler:
                             self._relay_state.transition(
                                 account_index, False, "expect-client-done"
                             )
+                            self._bump("expect_client")
                             return None  # coordinator instruction handled
                     except _CtrlError:
                         pass
@@ -334,6 +387,7 @@ class RelayCallHandler:
                 except Exception:  # noqa: BLE001
                     pass
                 self._relay_state.transition(account_index, False, "probe-error")
+                self._bump("probe_error")
                 return None
         # Falling through means "EXPECT_CLIENT probe didn't trigger early
         # return; the caller should be a real VPN client". Promote the
@@ -360,6 +414,10 @@ class RelayCallHandler:
                 f"evicting {len(evicted)} stale session(s) and continuing",
                 file=self._log,
             )
+            try:
+                _EVICTIONS.inc(len(evicted))
+            except Exception:
+                pass
             for i in reversed(evicted):
                 ev_pid, ev_sess, _ = self._sessions.pop(i)
                 try: ev_sess.stop()
@@ -390,6 +448,7 @@ class RelayCallHandler:
             try: probe.stop()
             except Exception: pass  # noqa: BLE001
             self._relay_state.transition(account_index, False, "enable-audio-failed")
+            self._bump("enable_audio_failed")
             return None
 
         # Override peer_id with the ACTUAL caller user_id from the
@@ -436,6 +495,7 @@ class RelayCallHandler:
             try: probe.stop()
             except Exception: pass  # noqa: BLE001
             self._relay_state.transition(account_index, False, "no-expect-client")
+            self._bump("no_expect_client")
             return None
         with self._session_map_lock:
             self._session_map[f"sess:{peer_id}"] = expected_session
@@ -523,6 +583,7 @@ class RelayCallHandler:
             )
             self._sessions.append((peer_id, session, transport))
             state[1] = True  # outer finally checks this
+            self._bump("committed")
             # Probe + provisioning are done — release the per-account
             # probe-in-progress flag so a *different* peer (e.g. a
             # second device on the same Bale account) can also probe
@@ -539,6 +600,7 @@ class RelayCallHandler:
                 pass
             self._allocator.leave(peer_id)
             log.exception("failed to bring up client tunnel")
+            self._bump("provision_failed")
 
     def _make_on_drop(self, account_index: int) -> Callable[[int], None]:
         def _on_drop(dropped_peer_id: int) -> None:

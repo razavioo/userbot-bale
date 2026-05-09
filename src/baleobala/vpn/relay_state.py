@@ -29,6 +29,21 @@ import threading
 import time
 from typing import Callable
 
+from baleobala.runtime.metrics import counter, gauge
+
+
+_TRANSITIONS = counter(
+    "baleobala_relay_active_transitions_total",
+    "Per-account active-flag transitions, labelled by destination value and call site.",
+    labelnames=("account", "value", "where"),
+)
+_ACTIVE_AGE = gauge(
+    "baleobala_relay_active_flag_age_seconds",
+    "Seconds since the per-account active flag was set True; 0 when the flag is False. "
+    "Alert when this exceeds STALE_ACTIVE_FLAG_SECS to catch leaks.",
+    labelnames=("account",),
+)
+
 
 # Default age threshold beyond which a True flag with no allocated slot
 # is treated as leaked from a prior code path and force-cleared.
@@ -49,6 +64,14 @@ class RelayState:
         self._active_at: dict[int, float] = {i: 0.0 for i in range(num_accounts)}
         self._clock = clock
         self._log = log_stream
+        # Per-scrape gauge: register one callback per account so the
+        # gauge surfaces the *current* age at scrape time, not the age
+        # at last transition. This is the signal that catches leaked
+        # flags before they trip the auto-recovery path.
+        for idx in range(num_accounts):
+            _ACTIVE_AGE.set_function(
+                (lambda i=idx: self.age(i)), account=str(idx),
+            )
         # Transitions can be invoked from the listen-thread, the worker
         # thread that runs on_incoming_call, the reaper thread, and the
         # mesh.drop_client on_drop callback (which is itself thread-safe
@@ -108,3 +131,11 @@ class RelayState:
                 msg = None
         if msg is not None:
             print(msg, file=self._log)
+            # Only count *real* transitions (prev != value); same-value
+            # writes are no-ops in production and shouldn't inflate the
+            # counter.
+            try:
+                _TRANSITIONS.inc(account=str(idx), value=str(value), where=where)
+            except Exception:
+                # Metrics must never break the relay path.
+                pass
