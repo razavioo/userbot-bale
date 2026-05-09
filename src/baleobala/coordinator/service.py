@@ -39,9 +39,31 @@ from baleobala.coordinator.protocol import (
 )
 from baleobala.coordinator.registry import RelayRegistry, RelaySlot
 from baleobala.coordinator.transport import CoordinatorTransport, IncomingCall
+from baleobala.runtime.metrics import counter, gauge
 
 
 log = logging.getLogger(__name__)
+
+
+_ASSIGNS = counter(
+    "baleobala_coordinator_assigns_total",
+    "HELLO outcomes from the coordinator's point of view.",
+    labelnames=("result",),
+)
+_RELAY_EVENTS = counter(
+    "baleobala_coordinator_relay_events_total",
+    "Relay-originated control events received (ONLINE/HEARTBEAT/RELEASED/OFFLINE).",
+    labelnames=("kind",),
+)
+_RELAYS_ONLINE = gauge(
+    "baleobala_coordinator_relays_online",
+    "Number of relays currently registered.",
+)
+_RELAYS_CAPACITY = gauge(
+    "baleobala_coordinator_relays_capacity",
+    "Total in-use / total capacity, summed across all registered relays.",
+    labelnames=("kind",),
+)
 
 
 DEFAULT_HELLO_TIMEOUT = 15.0
@@ -72,6 +94,17 @@ class CoordinatorService:
         self._new_session_id = new_session_id
         self._lock = threading.Lock()
         self._stopped = False
+        # Per-scrape gauges sourced from the live registry.
+        try:
+            _RELAYS_ONLINE.set_function(lambda: float(len(self._registry.list_relays())))
+            _RELAYS_CAPACITY.set_function(
+                lambda: float(self._registry.total_capacity()), kind="capacity",
+            )
+            _RELAYS_CAPACITY.set_function(
+                lambda: float(self._registry.total_in_use()), kind="in_use",
+            )
+        except Exception:
+            pass
 
     def start(self) -> None:
         self._transport.listen(self._handle_incoming_call)
@@ -132,6 +165,7 @@ class CoordinatorService:
         if client_peer_id <= 0:
             log.warning("coordinator: HELLO missing client_peer_id and call has no peer_id")
             self._safe_send(call, make_deny(reason=DenyReason.INTERNAL, detail="missing client_peer_id"))
+            _ASSIGNS.inc(result="deny_missing_peer_id")
             return
         slot = pick_relay(self._registry, client_peer_id=client_peer_id)
         if slot is None:
@@ -142,6 +176,7 @@ class CoordinatorService:
                 self._registry.total_capacity(),
             )
             self._safe_send(call, make_deny(reason=DenyReason.NO_CAPACITY))
+            _ASSIGNS.inc(result="deny_no_capacity")
             return
 
         session_id = self._new_session_id()
@@ -155,6 +190,7 @@ class CoordinatorService:
         except Exception:  # noqa: BLE001
             log.exception("coordinator: reserve_session failed")
             self._safe_send(call, make_deny(reason=DenyReason.INTERNAL))
+            _ASSIGNS.inc(result="deny_reserve_failed")
             return
 
         # Instruct the relay BEFORE sending ASSIGN. The device dials the
@@ -182,6 +218,7 @@ class CoordinatorService:
                 ),
             )
             self._safe_hangup(call)
+            _ASSIGNS.inc(result="deny_no_ack")
             return
 
         self._safe_send(
@@ -193,6 +230,7 @@ class CoordinatorService:
             ),
         )
         self._safe_hangup(call)
+        _ASSIGNS.inc(result="ok")
 
     def _instruct_relay(self, *, slot: RelaySlot, client_peer_id: int, session_id: str) -> bool:
         """Send EXPECT_CLIENT to the relay and wait for EXPECT_ACK.
@@ -241,12 +279,14 @@ class CoordinatorService:
         slot = RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=[])
         self._registry.register(slot)
         log.info("coordinator: relay=%s online peer=%d capacity=%d", relay_id, peer_id, capacity)
+        _RELAY_EVENTS.inc(kind="online")
 
     def _handle_heartbeat(self, call: IncomingCall, msg: ControlMessage) -> None:
         relay_id = str(msg.get("relay_id", ""))
         in_use = [int(p) for p in msg.get("in_use", [])]
         if not relay_id:
             return
+        _RELAY_EVENTS.inc(kind="heartbeat")
         if self._registry.heartbeat(relay_id, in_use=in_use) is None:
             # `call.peer_id` is the callee's (coordinator's own) peer_id under
             # Bale's push semantics; prefer the explicit `peer_id` field from
@@ -267,6 +307,7 @@ class CoordinatorService:
         session_id = str(msg.get("session_id", ""))
         if not session_id:
             return
+        _RELAY_EVENTS.inc(kind="released")
         released = self._registry.release_session(session_id)
         if released is None:
             log.info("coordinator: RELEASED for unknown session=%s", session_id)
@@ -284,6 +325,7 @@ class CoordinatorService:
             return
         log.info("coordinator: relay=%s offline reason=%s", relay_id, msg.get("reason", ""))
         self._registry.mark_offline(relay_id)
+        _RELAY_EVENTS.inc(kind="offline")
 
     # ---- maintenance -----------------------------------------------------
 

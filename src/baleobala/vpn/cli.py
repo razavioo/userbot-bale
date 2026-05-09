@@ -96,6 +96,9 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
                     help="seconds between HEARTBEAT messages to coordinator (default: 60)")
     mx.add_argument("--standalone", action="store_true",
                     help="skip coordinator registration; accept any inbound call (legacy mode)")
+    mx.add_argument("--metrics-port", type=int, default=9201,
+                    help="bind a Prometheus /metrics + /healthz endpoint on "
+                         "127.0.0.1:<port>; pass 0 to disable (default: 9201)")
     mx.set_defaults(func=cmd_vpn_exit_node_mesh)
 
     co = vpn_sub.add_parser(
@@ -119,6 +122,9 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
                     help="seconds between stale-relay pruning passes")
     co.add_argument("--stale-timeout", type=float, default=90.0,
                     help="seconds since last heartbeat before a relay is dropped")
+    co.add_argument("--metrics-port", type=int, default=9202,
+                    help="bind a Prometheus /metrics + /healthz endpoint on "
+                         "127.0.0.1:<port>; pass 0 to disable (default: 9202)")
     co.set_defaults(func=cmd_vpn_coordinator)
 
     lb = vpn_sub.add_parser("loopback",
@@ -212,6 +218,14 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     mesh.start()
     control = ControlService()
 
+    # Metrics server is bound here but the relay-specific /healthz hook
+    # is registered later (after `relay_state` and `sessions` are
+    # defined) so the closure has stable references rather than relying
+    # on Python's late-binding of free variables.
+    metrics_server = _maybe_start_metrics_server(
+        getattr(args, "metrics_port", 0), tag="vpn-mesh",
+    )
+
     jwts = _resolve_bale_jwts(args)
     if not jwts:
         raise SystemExit("--bale-jwt(-file) required in mesh mode")
@@ -257,6 +271,24 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     # rationale, including the stale-flag auto-recovery.
     relay_state = RelayState(num_accounts=len(jwts))
     STALE_ACTIVE_FLAG_SECS = DEFAULT_STALE_ACTIVE_FLAG_SECS
+
+    if metrics_server is not None:
+        from baleobala.runtime.metrics import add_health_hook
+
+        def _relay_health() -> dict:
+            return {
+                "active_sessions": len(sessions),
+                "stale_active_flags": [
+                    idx for idx in range(len(jwts))
+                    if relay_state.is_stale(idx, threshold=STALE_ACTIVE_FLAG_SECS)
+                ],
+                "active_flag_ages": {
+                    str(idx): round(relay_state.age(idx), 2)
+                    for idx in range(len(jwts))
+                    if relay_state.is_active(idx)
+                },
+            }
+        add_health_hook(_relay_health)
 
     relay_handler = RelayCallHandler(
         use_coordinator=use_coordinator,
@@ -372,7 +404,36 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         for bale in bale_clients:
             bale.stop()
         tun.close()
+        if metrics_server is not None:
+            try:
+                metrics_server.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
     return 0
+
+
+def _maybe_start_metrics_server(port: int, *, tag: str):
+    """Bring up the Prometheus /metrics + /healthz HTTP server on
+    127.0.0.1:<port>. Returns the server (so the caller can shutdown())
+    or None if the port is 0 / disabled / fails to bind. A bind failure
+    is logged but never fatal — the relay must keep running."""
+    if not port:
+        return None
+    try:
+        from baleobala.runtime.metrics import start_http_server
+        server = start_http_server(port)
+        print(
+            f"[{tag}] metrics on http://127.0.0.1:{port}/metrics "
+            f"(healthz at /healthz)",
+            file=sys.stderr,
+        )
+        return server
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[{tag}] failed to bind metrics on port {port}: {exc} — continuing without metrics",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _resolve_bale_jwts(args: argparse.Namespace) -> list[str]:
@@ -463,6 +524,10 @@ def cmd_vpn_coordinator(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
 
+    metrics_server = _maybe_start_metrics_server(
+        getattr(args, "metrics_port", 0), tag="coordinator",
+    )
+
     stop_event = threading.Event()
 
     def prune_loop() -> None:
@@ -484,6 +549,11 @@ def cmd_vpn_coordinator(args: argparse.Namespace) -> int:
             service.stop()
         except Exception:  # noqa: BLE001
             log.exception("coordinator: service.stop failed")
+        if metrics_server is not None:
+            try:
+                metrics_server.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
     return 0
 
 
