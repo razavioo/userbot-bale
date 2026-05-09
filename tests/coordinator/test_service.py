@@ -299,3 +299,76 @@ def test_round_trip_through_encode_decode_in_handler(service, transport, registr
     call = FakeIncomingCall(peer_id=42, inbox=[msg])
     transport.deliver(call)
     assert call.sent[0].kind == Kind.ASSIGN
+
+
+def test_expect_client_dispatched_before_assign(service, transport, registry):
+    """Regression for c318c14 (dial-race fix).
+
+    The relay's EXPECT_CLIENT must be in flight BEFORE the client receives
+    ASSIGN. With the previous order, the device dialed the relay within
+    100-300 ms of receiving ASSIGN but the relay's probe set
+    `_account_active=True` and skip-probe'd the dispatch when it finally
+    arrived, so the device timed out as an unknown caller.
+
+    This test enforces the order at the point each side observes its
+    message: when `transport.quick_exchange` is invoked (relay-side
+    dispatch), the client must not yet have been sent ASSIGN."""
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+
+    sent_at_dispatch: list[list] = []
+
+    class OrderingTransport(FakeTransport):
+        def __init__(self, ack: ControlMessage, observed_call: "FakeIncomingCall") -> None:
+            super().__init__(ack_for_relay={200: ack})
+            self._observed = observed_call
+
+        def quick_exchange(self, *, peer_id, send, timeout):
+            # Snapshot what the client has been sent at the moment we
+            # invoke the relay-side dispatch.
+            sent_at_dispatch.append(list(self._observed.sent))
+            return super().quick_exchange(peer_id=peer_id, send=send, timeout=timeout)
+
+    call = FakeIncomingCall(peer_id=42, inbox=[make_hello(client_id="dev-1")])
+    ordering_transport = OrderingTransport(
+        ack=ControlMessage(kind=Kind.EXPECT_ACK, body={}),
+        observed_call=call,
+    )
+    ordering_service = CoordinatorService(
+        transport=ordering_transport,
+        registry=registry,
+        config=ServiceConfig(hello_timeout=1.0, expect_timeout=1.0),
+        new_session_id=lambda: "session-fixed",
+    )
+    ordering_service.start()
+    ordering_transport.deliver(call)
+
+    assert sent_at_dispatch, "quick_exchange was never invoked — EXPECT_CLIENT was not dispatched"
+    assert sent_at_dispatch[0] == [], (
+        "ASSIGN was sent to the client BEFORE EXPECT_CLIENT reached the relay; "
+        "this re-introduces the dial-race fixed in c318c14"
+    )
+    # And the final state is correct: client got ASSIGN, relay got EXPECT_CLIENT.
+    assert call.sent[0].kind == Kind.ASSIGN
+    assert ordering_transport.outbound[0][1].kind == Kind.EXPECT_CLIENT
+
+
+def test_relay_no_ack_results_in_deny_not_assign(service, transport, registry):
+    """Regression for c318c14 + the rollback half of _instruct_relay.
+
+    When the relay does not return EXPECT_ACK, the client must receive
+    DENY — never ASSIGN — otherwise the device would dial a relay that
+    has not registered it, hit the unknown-caller branch, and time out."""
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport.ack_for_relay = {}  # relay never acks
+
+    call = FakeIncomingCall(peer_id=42, inbox=[make_hello(client_id="dev-1")])
+    transport.deliver(call)
+
+    assert call.sent, "client received nothing"
+    assert call.sent[0].kind == Kind.DENY, (
+        f"expected DENY when relay does not ack, got {call.sent[0].kind}"
+    )
+    # And the session was rolled back (already covered by the existing
+    # rollback test, but keep the assertion local so this regression
+    # check stands alone).
+    assert registry.get_session("session-fixed") is None
