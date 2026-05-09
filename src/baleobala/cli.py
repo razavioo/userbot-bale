@@ -2468,6 +2468,75 @@ def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coordinator_enroll(args: argparse.Namespace) -> int:
+    """Generate and persist a per-relay HMAC secret (A6 relay auth)."""
+    from baleobala.coordinator.auth import generate_secret
+    from baleobala.control.paths import config_dir
+    import json
+
+    relay_id: str = args.relay_id
+    peer_id: int = args.peer_id
+    capacity: int = args.capacity
+
+    secrets_path = config_dir() / "coordinator-relay-secrets.json"
+    secrets: dict[str, dict] = {}
+    if secrets_path.exists():
+        try:
+            secrets = json.loads(secrets_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if relay_id in secrets and not args.force:
+        print(
+            f"relay_id={relay_id!r} is already enrolled. "
+            "Use --force to rotate the secret.",
+            file=sys.stderr,
+        )
+        return 1
+
+    secret = generate_secret()
+    secrets[relay_id] = {
+        "relay_id": relay_id,
+        "peer_id": peer_id,
+        "capacity": capacity,
+        "secret": secret,
+    }
+    secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    secrets_path.write_text(json.dumps(secrets, indent=2))
+    secrets_path.chmod(0o600)
+
+    print(f"Enrolled relay_id={relay_id!r} peer_id={peer_id} capacity={capacity}")
+    print(f"Secret (copy to relay host ~/.baleobala/relay-secret-{relay_id}.txt):")
+    print(f"  {secret}")
+    print()
+    print(f"Secrets file: {secrets_path}")
+    return 0
+
+
+def cmd_coordinator_list_relays(args: argparse.Namespace) -> int:
+    """List enrolled relays from the local secrets file."""
+    from baleobala.control.paths import config_dir
+    import json
+
+    secrets_path = config_dir() / "coordinator-relay-secrets.json"
+    if not secrets_path.exists():
+        print("No enrolled relays (secrets file not found).")
+        return 0
+    try:
+        secrets: dict = json.loads(secrets_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Failed to load secrets file: {exc}", file=sys.stderr)
+        return 1
+    if not secrets:
+        print("No enrolled relays.")
+        return 0
+    for relay_id, info in secrets.items():
+        peer_id = info.get("peer_id", "?")
+        capacity = info.get("capacity", "?")
+        print(f"  relay_id={relay_id!r}  peer_id={peer_id}  capacity={capacity}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     from baleobala.bale.protos import WEB_API_KEY, WEB_APP_ID
 
@@ -2864,6 +2933,25 @@ def build_parser() -> argparse.ArgumentParser:
     tl = sub.add_parser("tunnel-loopback", help="debug: in-process byte-tunnel self-test")
     tl.add_argument("messages", nargs="*")
     tl.set_defaults(func=cmd_tunnel_loopback)
+
+    coord = sub.add_parser("coordinator", help="manage coordinator relay enrollment and secrets")
+    coord_sub = coord.add_subparsers(dest="coord_cmd", required=True)
+
+    coord_enroll = coord_sub.add_parser(
+        "enroll",
+        help="generate a per-relay HMAC secret and persist it in the coordinator secrets file",
+    )
+    coord_enroll.add_argument("--relay-id", required=True, help="unique relay identifier (e.g. relay-ir-1)")
+    coord_enroll.add_argument("--peer-id", required=True, type=int, help="Bale user_id of the relay account")
+    coord_enroll.add_argument("--capacity", type=int, default=1, help="max concurrent sessions on this relay")
+    coord_enroll.add_argument("--force", action="store_true", help="overwrite existing secret (rotate)")
+    coord_enroll.set_defaults(func=cmd_coordinator_enroll)
+
+    coord_list = coord_sub.add_parser(
+        "list-relays",
+        help="list enrolled relays from the coordinator secrets file",
+    )
+    coord_list.set_defaults(func=cmd_coordinator_list_relays)
 
     bt = sub.add_parser(
         "bale-tunnel",
