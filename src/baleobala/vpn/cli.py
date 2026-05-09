@@ -19,6 +19,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .constants import DEFAULT_TUNNEL_SESS_ID
+from .relay_handler import RelayCallHandler
+from .relay_state import DEFAULT_STALE_ACTIVE_FLAG_SECS, RelayState
+from .session_reaper import SessionReaper
+
 log = logging.getLogger(__name__)
 
 
@@ -36,7 +41,7 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
                     help="carrier inside the Bale call (default: auto — "
                          "tries dc, then qr, then audio, then rpc, then mtproto_rpc)")
     up.add_argument("--identity", default="baleobala-vpn")
-    up.add_argument("--sess-id", type=lambda s: int(s, 0), default=0x1111)
+    up.add_argument("--sess-id", type=lambda s: int(s, 0), default=DEFAULT_TUNNEL_SESS_ID)
     up.add_argument("--psk", default=None,
                     help="pre-shared passphrase. Enables ChaCha20-Poly1305 "
                          "AEAD over the transport (28 B overhead per frame). "
@@ -59,7 +64,7 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
     ex.add_argument("--skip-nat-setup", action="store_true",
                     help="don't run scripts/vpn-exit-node.sh (already done)")
     ex.add_argument("--identity", default="baleobala-exit")
-    ex.add_argument("--sess-id", type=lambda s: int(s, 0), default=0x1111)
+    ex.add_argument("--sess-id", type=lambda s: int(s, 0), default=DEFAULT_TUNNEL_SESS_ID)
     ex.add_argument("--psk", default=None)
     ex.add_argument("--psk-file", default=None)
     ex.set_defaults(func=cmd_vpn_exit_node)
@@ -248,427 +253,41 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     # Track per-account active VPN sessions so a duplicate Bale push (the
     # SFU sometimes redelivers a call notification after AcceptCall) does
     # not start a second probe that overwrites the live tunnel via
-    # mesh.issue_client.  A second push arriving within the ~5 s window
-    # before allocator.join populates the slot would otherwise replace the
-    # live transport with a transport bound to a different LiveKit room,
-    # silently dropping every Android frame → tunnel_dead in 6 s.
-    _account_active: dict[int, bool] = {i: False for i in range(len(jwts))}
-    # Wall-clock timestamp at which `_account_active[idx]` was last set
-    # to True. The cell-pattern try/finally in `on_incoming_call` is
-    # supposed to guarantee the flag gets cleared on every exit, but in
-    # practice we still see leaks (e.g. probe.start() hanging, daemon
-    # thread killed mid-call, or some path we haven't identified). When
-    # the flag is found stuck True with no slot allocated and the age
-    # exceeds STALE_ACTIVE_FLAG_SECS, we force-clear it so a legitimate
-    # incoming call isn't blocked forever waiting for the next process
-    # restart (every 55-70 min via systemd RuntimeMaxSec). Without this
-    # auto-recovery, a single leaked flag turns into a permanent denial
-    # of service for that account until the daily restart cycle.
-    _account_active_at: dict[int, float] = {i: 0.0 for i in range(len(jwts))}
-    STALE_ACTIVE_FLAG_SECS = 60.0
+    # mesh.issue_client. See `RelayState` in relay_state.py for the full
+    # rationale, including the stale-flag auto-recovery.
+    relay_state = RelayState(num_accounts=len(jwts))
+    STALE_ACTIVE_FLAG_SECS = DEFAULT_STALE_ACTIVE_FLAG_SECS
 
-    def _set_active(idx: int, value: bool, where: str) -> None:
-        prev = _account_active.get(idx)
-        _account_active[idx] = value
-        if value:
-            _account_active_at[idx] = time.time()
-        else:
-            _account_active_at[idx] = 0.0
-        # Diagnostic: every transition is logged with the call-site tag
-        # so we can grep the log for "_active[" and reconstruct the full
-        # lifecycle of the flag — invaluable when chasing a leak that
-        # only reproduces under specific timing.
-        if prev != value:
-            print(
-                f"[vpn-mesh] _active[{idx}]: {prev}→{value} at {where} "
-                f"(thread={threading.current_thread().name})",
-                file=sys.stderr,
-            )
+    relay_handler = RelayCallHandler(
+        use_coordinator=use_coordinator,
+        identity_prefix=args.identity_prefix,
+        pool_cidr=args.pool_cidr,
+        tun_mtu=args.tun_mtu,
+        provision_timeout=args.provision_timeout,
+        psk_key=psk_key,
+        mesh=mesh,
+        allocator=allocator,
+        control=control,
+        expected_clients=expected_clients,
+        session_map=session_map,
+        session_map_lock=session_map_lock,
+        probe_locks=_probe_locks,
+        relay_state=relay_state,
+        stale_active_flag_secs=STALE_ACTIVE_FLAG_SECS,
+        sessions=sessions,
+        reporters=reporters,
+        livekit_session_factory=LiveKitSession,
+        keepalive_factory=LiveKitKeepalive,
+        datachannel_transport_factory=DataChannelTransport,
+        encrypted_transport_factory=EncryptedTransport,
+        provision_message_factory=MeshProvisionMessage,
+        recv_provision=recv_mesh_message,
+        provisioning_error_cls=ProvisioningError,
+    )
 
     def on_incoming_call(event, account_index: int = 0):  # type: ignore[no-untyped-def]
-        peer_id = event.peer_id
-        if peer_id is None:
-            print("[vpn-mesh] incoming call rejected: missing canonical peer_id",
-                  file=sys.stderr)
-            return
+        relay_handler.handle_call(event, account_index)
 
-        # cell[0] = "did this call set _account_active=True"
-        # cell[1] = "did this call reach sessions.append (long-lived)"
-        # On exit:
-        #   - If we set the flag and reached sessions.append → leave True
-        #     (the reaper / _on_drop will clear it when the session ends).
-        #   - If we set the flag but didn't reach sessions.append → MUST
-        #     clear the flag here, otherwise the account is locked out.
-        #   - If we didn't set the flag (skip-probe path) → DO NOT touch
-        #     it; another thread owns it.
-        _state = [False, False]
-        try:
-            _do_on_incoming(event, account_index, peer_id, _state)
-        finally:
-            if _state[0] and not _state[1]:
-                _set_active(account_index, False, "outer-finally")
-
-    def _do_on_incoming(event, account_index, peer_id, _state):  # type: ignore[no-untyped-def]
-        # _state[0] := we are the caller that set _account_active=True
-        # _state[1] := we reached sessions.append (commit)
-        # ── Coordinator mode: route by probing the control channel ────────
-        # parse_call_peer_id returns the CALLEE's peer_id (our own account),
-        # not the CALLER's. We cannot use peer_id to distinguish coordinator
-        # instruction calls (EXPECT_CLIENT) from VPN client calls. Instead we
-        # join the room and check if EXPECT_CLIENT arrives on "control" topic.
-        _session_pre_joined: "LiveKitSession | None" = None
-        if use_coordinator:
-            # If this relay account already hosts an active VPN session, skip
-            # the probe entirely. Starting a concurrent LiveKit session while
-            # a VPN session is running overloads the shared livekit-ffi Rust
-            # runtime, delaying on_data_received callbacks and causing
-            # WireGuard keepalive drops → tunnel_dead within 30 s.
-            # The coordinator will get no EXPECT_ACK and roll back, then
-            # retry via the other relay.
-            from baleobala.coordinator.protocol import (
-                CONTROL_TOPIC as _CTRL_TOPIC,
-                ControlMessage as _CM,
-                Kind as _Kind,
-                decode as _ctrl_decode,
-                encode as _ctrl_encode,
-                ControlError as _CtrlError,
-            )
-            with _probe_locks[account_index]:
-                # Re-check inside the lock: a duplicate Bale push (same call
-                # redelivered, or coordinator's EXPECT_CLIENT arriving while
-                # we still hold the lock for the client probe) must NOT
-                # start a second probe — it would overwrite the live VPN
-                # tunnel and silently drop every Android frame.
-                _slot = allocator.slots()[account_index]
-                if _slot.peer_ids or _account_active.get(account_index):
-                    # Fast-path: if any session on this account has lost
-                    # its peer (grace timer started or already terminal),
-                    # this incoming call is the user's reconnect attempt.
-                    # Force-cleanup the dead session immediately so the new
-                    # probe can proceed instead of waiting out the full
-                    # PEER_LOST_GRACE_SECS window.
-                    _evicted: list[int] = []
-                    for _i, (_pid, _sess, _) in list(enumerate(sessions)):
-                        try:
-                            _is_terminal = _sess.is_terminal()
-                            _peer_lost = getattr(_sess, "_peer_disconnect_at", None) is not None
-                        except Exception:  # noqa: BLE001
-                            _is_terminal, _peer_lost = True, True
-                        if _is_terminal or _peer_lost:
-                            _evicted.append(_i)
-                    if _evicted:
-                        print(
-                            f"[vpn-mesh] reconnect detected for account={account_index}; "
-                            f"evicting {len(_evicted)} stale session(s) and continuing",
-                            file=sys.stderr,
-                        )
-                        for _i in reversed(_evicted):
-                            _ev_pid, _ev_sess, _ = sessions.pop(_i)
-                            try: _ev_sess.stop()
-                            except Exception: pass  # noqa: BLE001
-                            try: mesh.drop_client(_ev_pid)
-                            except Exception: pass  # noqa: BLE001
-                            try: control.release_mesh_assignment(_ev_pid)
-                            except Exception: pass  # noqa: BLE001
-                            try: allocator.leave(_ev_pid)
-                            except Exception: pass  # noqa: BLE001
-                        # Re-read slot after eviction.
-                        _slot = allocator.slots()[account_index]
-                    # Stale-flag auto-recovery: if the active flag is set
-                    # but no slot is allocated AND it's been set longer
-                    # than STALE_ACTIVE_FLAG_SECS, the previous on_incoming
-                    # call leaked the flag (probe hung, daemon thread
-                    # killed, untracked code path). Force-clear so the
-                    # legitimate inbound call can proceed.
-                    if (not _slot.peer_ids
-                            and _account_active.get(account_index)
-                            and time.time() - _account_active_at.get(account_index, 0.0)
-                                > STALE_ACTIVE_FLAG_SECS):
-                        _age = time.time() - _account_active_at.get(account_index, 0.0)
-                        print(
-                            f"[vpn-mesh] _active[{account_index}] looks stale "
-                            f"({_age:.1f}s old, slot empty) — clearing & continuing",
-                            file=sys.stderr,
-                        )
-                        _set_active(account_index, False, "stale-recovery")
-                    if _slot.peer_ids or _account_active.get(account_index):
-                        # Only compute/print the age when the flag is actually
-                        # set; when active=False the timestamp is zero, so the
-                        # naive subtraction would print the entire Unix epoch
-                        # as "age" and look like a 56-year-old leaked flag.
-                        _age_str = (
-                            f" age={time.time() - _account_active_at.get(account_index, 0.0):.1f}s"
-                            if _account_active.get(account_index)
-                            else ""
-                        )
-                        print(
-                            f"[vpn-mesh] skipping probe for account={account_index}: "
-                            f"VPN session already active "
-                            f"(slot={_slot.peer_ids} active={_account_active.get(account_index)}{_age_str})",
-                            file=sys.stderr,
-                        )
-                        return
-                _set_active(account_index, True, "probe-start")
-                _state[0] = True  # we own the flag now
-                _became_vpn_session = False
-                _probe = LiveKitSession(
-                    url=event.credentials.url, token=event.credentials.token,
-                    identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
-                    publish_audio=False,
-                )
-                try:
-                    _probe.start()
-                    try:
-                        _probe.wait_for_remote_participant(timeout=5.0)
-                    except (TimeoutError, RuntimeError):
-                        pass
-                    _ctrl = _probe.data_channel(topic=_CTRL_TOPIC, reliable=True)
-                    # Wait long enough for the coordinator's EXPECT_CLIENT
-                    # message to arrive after both sides are in the room.
-                    # 1.5 s was previously too tight when the coordinator's
-                    # quick_exchange ran behind audio-track setup; bumping
-                    # to 5 s keeps real VPN-call latency acceptable while
-                    # giving EXPECT_CLIENT a reliable window.
-                    _ctrl_payload = _ctrl.recv_bytes(timeout=5.0)
-                    if _ctrl_payload is not None:
-                        try:
-                            _ctrl_msg = _ctrl_decode(_ctrl_payload)
-                            if _ctrl_msg.kind == _Kind.EXPECT_CLIENT:
-                                _cpid = int(_ctrl_msg.get("client_peer_id", 0))
-                                _csid = str(_ctrl_msg.get("session_id", ""))
-                                _cexp = int(_ctrl_msg.get("expires_in_secs", 30))
-                                if _cpid and _csid:
-                                    expected_clients.register(
-                                        client_peer_id=_cpid,
-                                        session_id=_csid,
-                                        expires_in_secs=_cexp,
-                                    )
-                                    _ctrl.send_bytes(_ctrl_encode(_CM(kind=_Kind.EXPECT_ACK, body={})))
-                                    print(
-                                        f"[vpn-mesh] EXPECT_CLIENT: registered client={_cpid} session={_csid}",
-                                        file=sys.stderr,
-                                    )
-                                # Brief flush before tearing down the room so
-                                # the queued EXPECT_ACK actually lands on the
-                                # SFU before room.disconnect() races it. Without
-                                # this, the coordinator's expect_timeout (5 s)
-                                # fires with ack=None and rolls back the
-                                # session — which then forces the Android
-                                # client to retry, looking like the relay
-                                # rejected its real call.
-                                import time as _tflush
-                                _tflush.sleep(0.5)
-                                try:
-                                    _probe.stop()
-                                except Exception:  # noqa: BLE001
-                                    pass
-                                # Not a VPN session — release the slot so the
-                                # next real client call can start a probe.
-                                _set_active(account_index, False, "expect-client-done")
-                                return  # coordinator instruction handled
-                        except _CtrlError:
-                            pass
-                except Exception:  # noqa: BLE001
-                    log.exception("relay: probe session error")
-                    try:
-                        _probe.stop()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    _set_active(account_index, False, "probe-error")
-                    return
-                _became_vpn_session = True
-            # VPN client call — reuse the already-joined probe session.
-            # Publish audio now so the Bale SFU keeps this long-lived
-            # session alive (without a media track the SFU closes it
-            # after ~20 s). The probe was created with publish_audio=False
-            # to avoid audio-track cleanup overhead on short EXPECT_CLIENT
-            # probes; we enable it here only when the session is promoted.
-            try:
-                _probe.enable_audio()
-            except Exception:  # noqa: BLE001
-                log.exception("relay: enable_audio failed; cleaning up")
-                try: _probe.stop()
-                except Exception: pass  # noqa: BLE001
-                _set_active(account_index, False, "enable-audio-failed")
-                return
-            _session_pre_joined = _probe
-            # Override peer_id with the ACTUAL caller user_id from the
-            # LiveKit participant identity. event.peer_id is the relay's
-            # own peer_id under Bale push semantics, so all clients on
-            # the same relay account would collide on mesh.issue_client.
-            # The Android/CLI clients join with identity = JWT `sub` =
-            # their own user_id; consume that here so each client gets
-            # its own /30 slot and tunnel.
-            try:
-                _identities = _probe.remote_participant_identities()
-            except Exception:  # noqa: BLE001
-                _identities = []
-            for _ident in _identities:
-                try:
-                    _caller_id = int(_ident)
-                except (TypeError, ValueError):
-                    continue
-                if _caller_id != peer_id and _caller_id > 0:
-                    print(
-                        f"[vpn-mesh] caller user_id resolved from LiveKit "
-                        f"identity: peer_id={peer_id} → {_caller_id}",
-                        file=sys.stderr,
-                    )
-                    peer_id = _caller_id
-                    break
-
-            # Verify the caller was pre-approved by the coordinator.
-            # The probe path falls through to "VPN call" when no
-            # EXPECT_CLIENT message arrives within 1.5 s, but the
-            # coordinator's own dispatch call also lands here when its
-            # message is lost or arrives late — and that dispatch peer
-            # then gets allocated a /30 and we try to provision it as if
-            # it were a real client (BBMESH1), which times out. Reject
-            # any caller user_id that the coordinator hasn't told us to
-            # expect; the dispatch call gets cleanly hung up and the
-            # coordinator's quick_exchange returns ack=None, rolling the
-            # session back so the real client retries via another relay.
-            #
-            # Race: the Android client typically dials the relay within
-            # 100-300 ms of receiving ASSIGN, but the coordinator's
-            # quick_exchange (which registers the EXPECT_CLIENT) can take
-            # 2-5 s if the relay has to publish its audio track first.
-            # Poll briefly so the legitimate client doesn't get rejected
-            # just because EXPECT_CLIENT was racing the inbound dial.
-            import time as _time
-            _expected_session = expected_clients.consume(peer_id)
-            _expect_deadline = _time.monotonic() + 5.0
-            while _expected_session is None and _time.monotonic() < _expect_deadline:
-                _time.sleep(0.25)
-                _expected_session = expected_clients.consume(peer_id)
-            if _expected_session is None:
-                print(
-                    f"[vpn-mesh] rejecting unknown caller={peer_id} on "
-                    f"account={account_index} (no EXPECT_CLIENT pre-approval; "
-                    f"likely the coordinator's dispatch call landed here)",
-                    file=sys.stderr,
-                )
-                try: _probe.stop()
-                except Exception: pass  # noqa: BLE001
-                _set_active(account_index, False, "no-expect-client")
-                return
-            with session_map_lock:
-                session_map[f"sess:{peer_id}"] = _expected_session
-        # ───────────────────────────────────────────────────────────────────
-
-        print(
-            f"[vpn-mesh] incoming call → peer_id={peer_id} account={account_index}",
-            file=sys.stderr,
-        )
-        slot = allocator.join(peer_id)
-        if slot is None:
-            print(
-                f"[vpn-mesh] incoming call rejected: no server JWT capacity "
-                f"peer_id={peer_id} active={len(allocator.assignment())} "
-                f"capacity={allocator.total_capacity}",
-                file=sys.stderr,
-            )
-            if _session_pre_joined is not None:
-                try:
-                    _session_pre_joined.stop()
-                except Exception:  # noqa: BLE001
-                    pass
-            _set_active(account_index, False, "no-jwt-capacity")
-            return
-        print(
-            f"[vpn-mesh] server_jwt_assignment={allocator.assignment()} "
-            f"slots={[slot.peer_ids for slot in allocator.slots()]}",
-            file=sys.stderr,
-        )
-
-        def _on_drop(dropped_peer_id: int) -> None:
-            # Slot freed — clear the per-account active flag so the next
-            # incoming Bale call can start a fresh probe.
-            _set_active(account_index, False, "on-drop")
-            if not use_coordinator or not reporters:
-                return
-            with session_map_lock:
-                sid = session_map.pop(f"sess:{dropped_peer_id}", None)
-            if sid is not None:
-                reporters[account_index].report_released(str(sid))
-
-        try:
-            if _session_pre_joined is not None:
-                session = _session_pre_joined
-            else:
-                session = LiveKitSession(
-                    url=event.credentials.url, token=event.credentials.token,
-                    identity=f"{args.identity_prefix}-{account_index}-{peer_id}",
-                )
-                session.start()
-            LiveKitKeepalive(session, interval=20.0).start()
-            dc = DataChannelTransport(session, topic="vpn", reliable=False)
-            transport = EncryptedTransport(dc, psk_key) if psk_key else dc
-            # Must match the Android client's hardcoded DEFAULT_TUNNEL_SESS_ID
-            # (0x1111). Per-peer offsets caused frames to be silently dropped
-            # by the receiving side's sess_id filter — see exit_node.py.
-            sess_id = 0x1111
-            record = control.issue_mesh_assignment(
-                peer_id,
-                pool_cidr=args.pool_cidr,
-                transport="dc",
-                session_id=sess_id,
-            )
-            assignment = record.assignment()
-            mesh.issue_client(
-                peer_id,
-                transport,
-                assignment=assignment,
-                on_drop=_on_drop,
-            )
-            print(
-                f"[vpn-mesh] peer={peer_id} status=assigned "
-                f"client={assignment.client} gateway={assignment.gateway}",
-                file=sys.stderr,
-            )
-            transport.send_bytes(MeshProvisionMessage(
-                version=1,
-                kind="assign",
-                peer_id=peer_id,
-                session_id=sess_id,
-                pool_cidr=assignment.pool_cidr,
-                prefix=assignment.prefix,
-                gateway_ip=assignment.gateway,
-                client_ip=assignment.client,
-                tun_mtu=args.tun_mtu,
-                transport="dc",
-            ).encode())
-            ack = recv_mesh_message(transport, timeout=args.provision_timeout)
-            if ack is None or ack.kind != "ack" or ack.session_id != sess_id:
-                raise ProvisioningError("client did not acknowledge provisioning")
-            print(f"[vpn-mesh] peer={peer_id} status=acknowledged", file=sys.stderr)
-            assignment = mesh.activate_client(
-                peer_id, mtu_override=transport.mtu,
-            )
-            control.activate_mesh_assignment(peer_id, transport="dc", session_id=sess_id)
-            print(
-                f"[vpn-mesh] peer={peer_id} status=active → assigned "
-                f"{assignment.client} (gateway={assignment.gateway})",
-                file=sys.stderr,
-            )
-            sessions.append((peer_id, session, transport))
-            _state[1] = True  # outer finally checks this
-            # Probe + provisioning are done — release the per-account
-            # probe-in-progress flag so a *different* peer (e.g. a
-            # second device on the same Bale account) can also probe
-            # this account. The reaper handles cleanup of the session
-            # itself when the LiveKit room ends; _on_drop also clears
-            # this flag, so the dual-clearing is safe.
-            _set_active(account_index, False, "after-commit")
-        except Exception:  # noqa: BLE001
-            control.release_mesh_assignment(peer_id, error="provisioning failed")
-            _on_drop(peer_id)
-            try:
-                mesh.drop_client(peer_id)
-            except Exception:
-                pass
-            allocator.leave(peer_id)
-            log.exception("failed to bring up client tunnel")
 
     for account_index, jwt in enumerate(jwts):
         bale = BaleApiClient(jwt=jwt)
@@ -712,92 +331,26 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
 
-    # Reaper thread: when a VPN session's underlying LiveKit room ends
+    # Reaper: when a VPN session's underlying LiveKit room ends
     # (client disconnects, network gone, room.disconnected fires), the
     # main loop never noticed and left the session in `sessions`, the
-    # allocator slot reserved, and `_account_active[idx]` set. The next
-    # connection from the same client then either failed the skip-probe
-    # check or reused the dead tunnel and dropped every frame. Walk the
-    # sessions list and reap anything whose session is terminal.
-    _reaper_stop = threading.Event()
-    def _session_reaper() -> None:
-        # Reap AT MOST ONE dead session per cycle. Earlier the reaper
-        # processed all terminal sessions in one batch, calling
-        # `sess.stop()` (→ `room.disconnect()`) back-to-back. With two
-        # devices dropping within ~10 s of each other, two
-        # `room.disconnect()` calls overlapped through the shared
-        # livekit-rtc FFI singleton and put the FFI's internal asyncio
-        # loop into a state where every subsequent event raised
-        # "Event loop is closed". From that point on the relay process
-        # was effectively dead — no probe could ACK an EXPECT_CLIENT and
-        # every dispatch failed until systemd restarted the service.
-        # Spreading reaps one-per-2-second-cycle (and skipping stop()
-        # for already-FAILED sessions, since their thread already ran
-        # `loop.close()` naturally) keeps the FFI singleton from being
-        # asked to tear down two rooms at the same instant.
-        while not _reaper_stop.wait(2.0):
-            dead_index: int | None = None
-            dead_was_failed = False
-            for i, (pid, sess, _tx) in enumerate(sessions):
-                try:
-                    if sess.is_terminal():
-                        dead_index = i
-                        try:
-                            from baleobala.bale.livekit_backend import (
-                                LiveKitSessionState,
-                            )
-                            dead_was_failed = (
-                                getattr(sess, "_state", None)
-                                == LiveKitSessionState.FAILED
-                            )
-                        except Exception:  # noqa: BLE001
-                            dead_was_failed = False
-                        break
-                except Exception:  # noqa: BLE001
-                    dead_index = i
-                    dead_was_failed = True
-                    break
-            if dead_index is None:
-                continue
-            pid, sess, _tx = sessions.pop(dead_index)
-            print(
-                f"[vpn-mesh] reaper: cleaning up dead session peer={pid} "
-                f"(failed={dead_was_failed})",
-                file=sys.stderr,
-            )
-            # Skip stop() if the session is already in FAILED state — its
-            # thread has already exited and closed its own loop. Calling
-            # stop() again would just join the already-dead thread, but
-            # the act of running `room.disconnect()` from a *concurrent*
-            # reap is what poisons the FFI singleton. STOPPED state means
-            # someone already called stop() cleanly so this is a no-op.
-            if not dead_was_failed:
-                try:
-                    sess.stop()
-                except Exception:  # noqa: BLE001
-                    pass
-            try:
-                mesh.drop_client(pid)  # invokes on_drop → clears _account_active
-            except Exception:  # noqa: BLE001
-                log.exception("reaper: drop_client failed for peer=%d", pid)
-            try:
-                control.release_mesh_assignment(pid)
-            except Exception:  # noqa: BLE001
-                log.exception("reaper: release_mesh_assignment failed for peer=%d", pid)
-            try:
-                allocator.leave(pid)
-            except Exception:  # noqa: BLE001
-                pass
-    _reaper_thread = threading.Thread(
-        target=_session_reaper, name="vpn-mesh-reaper", daemon=True,
+    # allocator slot reserved, and `_account_active[idx]` set. See
+    # `SessionReaper` in session_reaper.py for the full rationale,
+    # including the one-per-cycle invariant (commit 9fea7eb) and the
+    # FAILED-state skip (also 9fea7eb).
+    _reaper = SessionReaper(
+        sessions=sessions,
+        mesh=mesh,
+        control=control,
+        allocator=allocator,
     )
-    _reaper_thread.start()
+    _reaper.start()
 
     from .runner import wait_for_signal
     try:
         wait_for_signal()
     finally:
-        _reaper_stop.set()
+        _reaper.stop()
         print(f"[vpn-mesh] shutting down ({len(sessions)} active clients)",
               file=sys.stderr)
         for reporter in reporters:

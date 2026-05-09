@@ -35,6 +35,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from ..constants import DEFAULT_TUNNEL_SESS_ID
 from ..tun import TunDevice
 from ..tunnel import Tunnel
 from .allocator import Assignment, IpAllocator
@@ -60,7 +61,7 @@ class MeshExitNode:
         tun: TunDevice,
         *,
         pool_cidr: str = "10.77.0.0/16",
-        sess_id_base: int = 0x1111,
+        sess_id_base: int = DEFAULT_TUNNEL_SESS_ID,
     ) -> None:
         self._tun = tun
         self._alloc = IpAllocator(pool_cidr)

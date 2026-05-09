@@ -280,6 +280,81 @@ def test_livekit_data_channel_send_after_stop_fails_and_recv_unblocks(monkeypatc
         channel.send_bytes(b"late")
 
 
+def test_participant_disconnect_promotes_to_terminal_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for f80c59b (grace-then-terminal).
+
+    A `participant_disconnected` event must NOT immediately terminate the
+    session — earlier code did that, killing live VPN tunnels on a
+    transient SFU blip. The watchdog in `_run` waits PEER_LOST_GRACE_SECS
+    and only then promotes the disconnect to a terminal failure so the
+    relay's reaper can free the slot."""
+    _install_fake_rtc(monkeypatch)
+    monkeypatch.setattr(lk, "PEER_LOST_GRACE_SECS", 0.1)
+
+    session = lk.LiveKitSession(url="ws://fake", token="token", identity="alice")
+    session.start()
+    try:
+        room = _FakeRoom.instances[-1]
+        # Fire the participant_disconnected handler the same way the SFU would.
+        participant = SimpleNamespace(identity="bob")
+        room.handlers["participant_disconnected"][0](participant)
+
+        # Immediately after the event, session is still running — the grace
+        # window has not elapsed yet.
+        assert session.is_terminal() is False, (
+            "session terminated immediately on participant_disconnected; "
+            "grace window from f80c59b is gone"
+        )
+
+        # Wait past the grace window for the watchdog (which polls every
+        # 0.25s in real code) to promote to terminal.
+        deadline = time.time() + 2.0
+        while not session.is_terminal() and time.time() < deadline:
+            time.sleep(0.05)
+
+        assert session.is_terminal() is True, (
+            "session did not promote to terminal after grace window expired"
+        )
+        assert isinstance(session.terminal_error, RuntimeError)
+        assert "remote participant lost" in str(session.terminal_error)
+    finally:
+        session.stop()
+
+
+def test_participant_reconnect_within_grace_clears_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `participant_connected` arriving inside the grace window must clear
+    `_peer_disconnect_at` so the watchdog does not promote to terminal —
+    the blip-tolerant half of f80c59b."""
+    _install_fake_rtc(monkeypatch)
+    monkeypatch.setattr(lk, "PEER_LOST_GRACE_SECS", 0.5)
+
+    session = lk.LiveKitSession(url="ws://fake", token="token", identity="alice")
+    session.start()
+    try:
+        room = _FakeRoom.instances[-1]
+        participant = SimpleNamespace(identity="bob")
+        room.handlers["participant_disconnected"][0](participant)
+        assert session._peer_disconnect_at is not None
+
+        # Reconnect arrives well inside the grace window.
+        time.sleep(0.05)
+        room.handlers["participant_connected"][0](participant)
+
+        # The disconnect timestamp is cleared and the session stays alive
+        # past the grace window.
+        assert session._peer_disconnect_at is None
+        time.sleep(0.6)  # well past PEER_LOST_GRACE_SECS=0.5
+        assert session.is_terminal() is False, (
+            "session marked terminal despite participant returning within grace"
+        )
+    finally:
+        session.stop()
+
+
 def test_livekit_audio_subscription_task_drains_on_stop(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_rtc(monkeypatch)
 
