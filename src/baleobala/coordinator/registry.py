@@ -77,10 +77,12 @@ class RelayRegistry:
         *,
         snapshot_path: Path | None = None,
         clock: Callable[[], float] = time.time,
+        relay_secrets: dict[str, str] | None = None,
     ) -> None:
         self._lock = threading.RLock()
         self._relays: dict[str, RelaySlot] = {}
         self._sessions: dict[str, Session] = {}
+        self._secrets: dict[str, str] = dict(relay_secrets) if relay_secrets else {}
         self._clock = clock
         self._store: JsonStore | None
         if snapshot_path is None:
@@ -228,6 +230,23 @@ class RelayRegistry:
     def list_sessions(self) -> list[Session]:
         with self._lock:
             return [Session(**asdict(s)) for s in self._sessions.values()]
+
+    # ---- relay secrets (A6 auth) -----------------------------------------
+
+    def get_secret(self, relay_id: str) -> str | None:
+        """Return the HMAC secret for a relay, or None if not enrolled."""
+        with self._lock:
+            return self._secrets.get(relay_id)
+
+    def set_secret(self, relay_id: str, secret_hex: str) -> None:
+        """Register or update the HMAC secret for a relay."""
+        with self._lock:
+            self._secrets[relay_id] = secret_hex
+
+    def known_relay_ids(self) -> set[str]:
+        """Return relay_ids that have a registered secret."""
+        with self._lock:
+            return set(self._secrets.keys())
 
     def total_capacity(self) -> int:
         with self._lock:
