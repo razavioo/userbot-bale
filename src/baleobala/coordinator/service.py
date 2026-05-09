@@ -168,7 +168,8 @@ class CoordinatorService:
             self._safe_send(call, make_deny(reason=DenyReason.INTERNAL, detail="missing client_peer_id"))
             _ASSIGNS.inc(result="deny_missing_peer_id")
             return
-        slot = pick_relay(self._registry, client_peer_id=client_peer_id)
+        client_region = str(msg.get("client_region", ""))
+        slot = pick_relay(self._registry, client_peer_id=client_peer_id, client_region=client_region or None)
         if slot is None:
             log.info(
                 "coordinator: deny client=%d capacity=%d/%d",
@@ -320,14 +321,15 @@ class CoordinatorService:
         relay_id = str(msg.get("relay_id", ""))
         peer_id = int(msg.get("peer_id", call.peer_id))
         capacity = int(msg.get("capacity", 1))
+        region = str(msg.get("region", ""))
         if not relay_id:
             log.warning("coordinator: ONLINE missing relay_id from peer=%d", call.peer_id)
             return
         if not self._check_relay_auth(relay_id, msg):
             return
-        slot = RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=[])
+        slot = RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=[], region=region)
         self._registry.register(slot)
-        log.info("coordinator: relay=%s online peer=%d capacity=%d", relay_id, peer_id, capacity)
+        log.info("coordinator: relay=%s online peer=%d capacity=%d region=%s", relay_id, peer_id, capacity, region or "any")
         _RELAY_EVENTS.inc(kind="online")
 
     def _handle_heartbeat(self, call: IncomingCall, msg: ControlMessage) -> None:
@@ -350,8 +352,9 @@ class CoordinatorService:
                 "coordinator: heartbeat from unknown relay=%s — re-registering peer=%d capacity=%d",
                 relay_id, peer_id, capacity,
             )
+            region = str(msg.get("region", ""))
             self._registry.register(
-                RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=in_use)
+                RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=in_use, region=region)
             )
 
     def _handle_released(self, call: IncomingCall, msg: ControlMessage) -> None:

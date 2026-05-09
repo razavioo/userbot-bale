@@ -76,10 +76,13 @@ def make_hello(
     client_id: str,
     app_version: str = "",
     client_peer_id: int | None = None,
+    client_region: str = "",
 ) -> ControlMessage:
     body: dict[str, Any] = {"client_id": client_id, "app_version": app_version}
     if client_peer_id is not None:
         body["client_peer_id"] = int(client_peer_id)
+    if client_region:
+        body["client_region"] = client_region
     return ControlMessage(kind=Kind.HELLO, body=body)
 
 
@@ -110,13 +113,15 @@ def make_expect_client(*, client_peer_id: int, session_id: str, expires_in_secs:
 
 
 def make_online(
-    *, relay_id: str, peer_id: int, capacity: int = 1, secret: str = ""
+    *, relay_id: str, peer_id: int, capacity: int = 1, secret: str = "", region: str = ""
 ) -> ControlMessage:
     body: dict[str, Any] = {
         "relay_id": relay_id,
         "peer_id": int(peer_id),
         "capacity": int(capacity),
     }
+    if region:
+        body["region"] = region
     if secret:
         from baleobala.coordinator.auth import sign
         body["sig"] = sign(secret, relay_id, Kind.ONLINE)
