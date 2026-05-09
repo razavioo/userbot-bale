@@ -7,12 +7,29 @@ android {
     namespace = "com.baleobala.vpn"
     compileSdk = 35
 
+    signingConfigs {
+        create("release") {
+            // Populated from environment variables injected by CI (GitHub Actions secret).
+            // Local release builds: set these in ~/.gradle/gradle.properties or local.properties.
+            val keyStorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: ""
+            val keyStorePass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+            val keyAlias    = System.getenv("ANDROID_KEY_ALIAS") ?: "baleobala"
+            val keyPass     = System.getenv("ANDROID_KEY_PASSWORD") ?: keyStorePass
+            if (keyStorePath.isNotEmpty()) {
+                storeFile = file(keyStorePath)
+                storePassword = keyStorePass
+                this.keyAlias = keyAlias
+                keyPassword = keyPass
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.baleobala.vpn"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Override via local.properties: coordinatorPeerId=<long>
@@ -25,8 +42,16 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            val releaseSigning = signingConfigs.getByName("release")
+            // Fall back to debug signing only when no keystore is configured (local dev).
+            signingConfig = if (System.getenv("ANDROID_KEYSTORE_PATH")?.isNotEmpty() == true)
+                releaseSigning else signingConfigs.getByName("debug")
         }
     }
     compileOptions {
