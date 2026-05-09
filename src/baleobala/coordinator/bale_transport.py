@@ -179,8 +179,9 @@ class BaleCoordinatorTransport(CoordinatorTransport):
                 session.stop()
             except Exception:
                 pass
-            import time as _time
-            _time.sleep(2.0)
+            # session.stop() is synchronous: it calls fut.result(timeout=6)
+            # then thread.join(timeout=8), so the Rust tokio runtime is fully
+            # torn down before we return. No sleep needed.
 
         if payload is None:
             return None
