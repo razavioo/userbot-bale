@@ -203,8 +203,10 @@ class CoordinatorReporter:
 
             ch = session.data_channel(topic=CONTROL_TOPIC, reliable=True)
             ch.send_bytes(encode(msg))
-            # Give LiveKit a moment to flush the data frame before we stop.
-            _time.sleep(0.5)
+            # close() joins the sender thread, ensuring publish_data completes
+            # before we disconnect the room. This replaces the old sleep(0.5)
+            # guess with a deterministic drain.
+            ch.close()
             log.info("coord-reporter: sent kind=%s for relay=%s", msg.kind, self._relay_id)
         except Exception:  # noqa: BLE001
             log.exception(
@@ -216,12 +218,10 @@ class CoordinatorReporter:
                 session.stop()
             except Exception:  # noqa: BLE001
                 pass
-            # Give the livekit-ffi Rust runtime time to flush pending
-            # cleanup tasks before we return. Without this sleep, starting
-            # the next session immediately races with the previous session's
-            # async teardown in the Rust tokio runtime, eventually causing
-            # "LiveKit room did not become ready within 45s" timeouts.
-            _time.sleep(2.0)
+            # session.stop() calls fut.result(timeout=6) + thread.join(timeout=8),
+            # so the Rust tokio runtime is fully torn down before we return.
+            # The old sleep(2.0) here was a conservative workaround added before
+            # the thread join was in place; it is no longer needed.
 
 
 class ExpectedClientSet:
