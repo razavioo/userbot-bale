@@ -210,7 +210,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     try:
         tun = TunDevice.open(args.tun)
     except (PermissionError, RuntimeError, OSError) as e:
-        print(f"[vpn-mesh] cannot open TUN {args.tun}: {e}", file=sys.stderr)
+        log.error("vpn-mesh: cannot open TUN %s: %s", args.tun, e)
         return 3
 
     psk_key = _resolve_psk(args)
@@ -354,13 +354,10 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
             reporters.append(reporter)
 
     mode_tag = "coordinator" if use_coordinator else "standalone"
-    print(
-        f"[vpn-mesh] up — mode={mode_tag} tun={args.tun} pool={args.pool_cidr} "
-        f"accounts={len(bale_clients)} "
-        f"max_peers_per_server_jwt={args.max_peers_per_server_jwt} "
-        f"total_peer_capacity={allocator.total_capacity}. "
-        f"Waiting for incoming Bale calls. Ctrl-C to stop.",
-        file=sys.stderr,
+    log.info(
+        "vpn-mesh: up mode=%s tun=%s pool=%s accounts=%d max_peers=%d capacity=%d",
+        mode_tag, args.tun, args.pool_cidr, len(bale_clients),
+        args.max_peers_per_server_jwt, allocator.total_capacity,
     )
 
     # Reaper: when a VPN session's underlying LiveKit room ends
@@ -383,8 +380,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         wait_for_signal()
     finally:
         _reaper.stop()
-        print(f"[vpn-mesh] shutting down ({len(sessions)} active clients)",
-              file=sys.stderr)
+        log.info("vpn-mesh: shutting down active_clients=%d", len(sessions))
         for reporter in reporters:
             try:
                 reporter.report_offline()
@@ -422,17 +418,10 @@ def _maybe_start_metrics_server(port: int, *, tag: str):
     try:
         from baleobala.runtime.metrics import start_http_server
         server = start_http_server(port)
-        print(
-            f"[{tag}] metrics on http://127.0.0.1:{port}/metrics "
-            f"(healthz at /healthz)",
-            file=sys.stderr,
-        )
+        log.info("%s: metrics on http://127.0.0.1:%d/metrics (healthz at /healthz)", tag, port)
         return server
     except Exception as exc:  # noqa: BLE001
-        print(
-            f"[{tag}] failed to bind metrics on port {port}: {exc} — continuing without metrics",
-            file=sys.stderr,
-        )
+        log.warning("%s: failed to bind metrics on port %d: %s — continuing without metrics", tag, port, exc)
         return None
 
 
@@ -496,7 +485,7 @@ def cmd_vpn_coordinator(args: argparse.Namespace) -> int:
     snapshot_path = (
         Path(args.snapshot_path).expanduser() if args.snapshot_path else default_snapshot_path()
     )
-    print(f"[coordinator] state snapshot at {snapshot_path}", file=sys.stderr)
+    log.info("coordinator: state snapshot at %s", snapshot_path)
 
     ws_tls_config = WsTlsConfig.from_sources(
         ca_file=getattr(args, "ws_ca_file", None),
@@ -518,10 +507,9 @@ def cmd_vpn_coordinator(args: argparse.Namespace) -> int:
         config=ServiceConfig(stale_relay_timeout_secs=args.stale_timeout),
     )
     service.start()
-    print(
-        f"[coordinator] listening — total_relays={len(registry.list_relays())} "
-        f"capacity={registry.total_capacity()} in_use={registry.total_in_use()}",
-        file=sys.stderr,
+    log.info(
+        "coordinator: listening total_relays=%d capacity=%d in_use=%d",
+        len(registry.list_relays()), registry.total_capacity(), registry.total_in_use(),
     )
 
     metrics_server = _maybe_start_metrics_server(
@@ -608,11 +596,11 @@ def cmd_vpn_loopback(args: argparse.Namespace) -> int:
 def _run_nat_setup(tun: str, wan: str) -> None:
     script = _repo_root() / "scripts" / "vpn-exit-node.sh"
     if not script.exists():
-        print(f"[tunnel] missing {script}; skipping NAT setup", file=sys.stderr)
+        log.warning("tunnel: NAT setup script missing at %s; skipping", script)
         return
     sudo = shutil.which("sudo")
     cmd = [sudo, str(script), tun, wan] if (sudo and os.geteuid() != 0) else [str(script), tun, wan]
-    print(f"[tunnel] running NAT setup: {' '.join(cmd)}", file=sys.stderr)
+    log.info("tunnel: running NAT setup: %s", " ".join(cmd))
     subprocess.check_call(cmd)
 
 
@@ -645,7 +633,7 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
     try:
         tun = _open_tun_with_fallback(args.tun)
     except (PermissionError, RuntimeError, OSError) as e:
-        print(f"[tunnel] cannot open TUN {args.tun}: {e}", file=sys.stderr)
+        log.error("tunnel: cannot open TUN %s: %s", args.tun, e)
         prompt_tun_setup_hint(args.tun, args.tun_addr, args.tun_mtu)
         return 3
     args.tun = tun.name
@@ -717,10 +705,9 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
         def _on_runner_event(event: str, payload: dict) -> None:  # type: ignore[no-untyped-def]
             if event == "tunnel_dead" and not carrier_dead.is_set():
                 carrier_dead.set()
-                print(
-                    f"[tunnel] carrier dead (consecutive_drops="
-                    f"{payload.get('consecutive_drops', '?')}); exiting for restart",
-                    file=sys.stderr, flush=True,
+                log.warning(
+                    "tunnel: carrier dead consecutive_drops=%s; exiting for restart",
+                    payload.get("consecutive_drops", "?"),
                 )
 
         runner.add_event_handler(_on_runner_event)
@@ -733,23 +720,19 @@ def _run_tunnel_session(args: argparse.Namespace, *, is_exit_node: bool) -> int:
         )
         controller.start(transport_name)
 
-        print("call_established", file=sys.stderr)
-        print(f"transport_selected={transport_name}", file=sys.stderr)
-        print(f"tunnel_up={args.tun}", file=sys.stderr)
-
         role = "exit-node" if is_exit_node else "client"
-        print(f"[tunnel] up ({role}, transport={transport_name}, "
-              f"tun={args.tun}, sess=0x{(provision.session_id if provision is not None else args.sess_id):x}, "
-              f"mtu_floor={mtu_floor}). "
-              f"Ctrl-C to stop; transport failover is automatic.",
-              file=sys.stderr)
+        sess_id = provision.session_id if provision is not None else args.sess_id
+        log.info(
+            "tunnel: up role=%s transport=%s tun=%s sess=0x%x mtu_floor=%d",
+            role, transport_name, args.tun, sess_id, mtu_floor,
+        )
         try:
             _wait_for_signal_or_carrier_dead(session, extra_event=carrier_dead)
         finally:
             controller.stop()
             runner.stop()
     finally:
-        print("teardown_done", file=sys.stderr)
+        log.info("tunnel: teardown_done")
         keepalive.stop()
         try:
             chain.close()
@@ -793,7 +776,7 @@ def _wait_for_signal_or_carrier_dead(session, *, extra_event=None) -> None:  # t
             pass
 
     def _terminal_observer(_exc) -> None:  # type: ignore[no-untyped-def]
-        print("[tunnel] carrier session terminated; exiting for restart", file=sys.stderr, flush=True)
+        log.warning("tunnel: carrier session terminated; exiting for restart")
         ev.set()
 
     add_observer = getattr(session, "add_terminal_observer", None)
@@ -806,7 +789,7 @@ def _wait_for_signal_or_carrier_dead(session, *, extra_event=None) -> None:  # t
         if callable(is_terminal):
             try:
                 if is_terminal():
-                    print("[tunnel] carrier session no longer running; exiting for restart", file=sys.stderr, flush=True)
+                    log.warning("tunnel: carrier session no longer running; exiting for restart")
                     return
             except Exception:
                 pass
@@ -822,7 +805,7 @@ def _maybe_receive_mesh_provisioning(args, tun, transport, transport_name):  # t
         recv_mesh_message,
     )
 
-    print("[tunnel] waiting for mesh assignment", file=sys.stderr)
+    log.info("tunnel: waiting for mesh assignment from relay")
     msg = recv_mesh_message(transport, timeout=args.provision_timeout)
     if msg is None:
         return None
@@ -845,10 +828,9 @@ def _maybe_receive_mesh_provisioning(args, tun, transport, transport_name):  # t
         transport=transport_name,
     ).encode())
     args.tun_addr = client_cidr
-    print(
-        f"[tunnel] mesh assignment acknowledged: client={msg.client_ip} "
-        f"gateway={msg.gateway_ip} prefix={msg.prefix}",
-        file=sys.stderr,
+    log.info(
+        "tunnel: mesh assignment acknowledged client=%s gateway=%s prefix=%d",
+        msg.client_ip, msg.gateway_ip, msg.prefix,
     )
     return msg
 
@@ -888,14 +870,14 @@ def _install_swap_handler(runner, chain) -> None:  # type: ignore[no-untyped-def
         try:
             name, new_tx = chain.advance()
         except RuntimeError as e:
-            print(f"[tunnel] swap failed: {e}", file=sys.stderr)
+            log.warning("tunnel: transport swap failed: %s", e)
             return
         old = runner._tunnel.swap_transport(new_tx)  # type: ignore[attr-defined]
         try:
             old.close()
         except Exception:  # noqa: BLE001
             pass
-        print(f"[tunnel] swapped to transport {name}", file=sys.stderr)
+        log.info("tunnel: swapped to transport %s", name)
 
     try:
         signal.signal(signal.SIGUSR1, handler)
