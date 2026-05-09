@@ -109,11 +109,18 @@ def make_expect_client(*, client_peer_id: int, session_id: str, expires_in_secs:
     )
 
 
-def make_online(*, relay_id: str, peer_id: int, capacity: int = 1) -> ControlMessage:
-    return ControlMessage(
-        kind=Kind.ONLINE,
-        body={"relay_id": relay_id, "peer_id": int(peer_id), "capacity": int(capacity)},
-    )
+def make_online(
+    *, relay_id: str, peer_id: int, capacity: int = 1, secret: str = ""
+) -> ControlMessage:
+    body: dict[str, Any] = {
+        "relay_id": relay_id,
+        "peer_id": int(peer_id),
+        "capacity": int(capacity),
+    }
+    if secret:
+        from baleobala.coordinator.auth import sign
+        body["sig"] = sign(secret, relay_id, Kind.ONLINE)
+    return ControlMessage(kind=Kind.ONLINE, body=body)
 
 
 def make_heartbeat(
@@ -122,6 +129,7 @@ def make_heartbeat(
     in_use: list[int],
     peer_id: int | None = None,
     capacity: int | None = None,
+    secret: str = "",
 ) -> ControlMessage:
     body: dict[str, Any] = {
         "relay_id": relay_id,
@@ -131,15 +139,23 @@ def make_heartbeat(
         body["peer_id"] = int(peer_id)
     if capacity is not None:
         body["capacity"] = int(capacity)
+    if secret:
+        from baleobala.coordinator.auth import sign
+        body["sig"] = sign(secret, relay_id, Kind.HEARTBEAT)
     return ControlMessage(kind=Kind.HEARTBEAT, body=body)
 
 
-def make_released(*, relay_id: str, session_id: str) -> ControlMessage:
-    return ControlMessage(
-        kind=Kind.RELEASED,
-        body={"relay_id": relay_id, "session_id": session_id},
-    )
+def make_released(*, relay_id: str, session_id: str, secret: str = "") -> ControlMessage:
+    body: dict[str, Any] = {"relay_id": relay_id, "session_id": session_id}
+    if secret:
+        from baleobala.coordinator.auth import sign
+        body["sig"] = sign(secret, relay_id, Kind.RELEASED)
+    return ControlMessage(kind=Kind.RELEASED, body=body)
 
 
-def make_offline(*, relay_id: str, reason: str = "") -> ControlMessage:
-    return ControlMessage(kind=Kind.OFFLINE, body={"relay_id": relay_id, "reason": reason})
+def make_offline(*, relay_id: str, reason: str = "", secret: str = "") -> ControlMessage:
+    body: dict[str, Any] = {"relay_id": relay_id, "reason": reason}
+    if secret:
+        from baleobala.coordinator.auth import sign
+        body["sig"] = sign(secret, relay_id, Kind.OFFLINE)
+    return ControlMessage(kind=Kind.OFFLINE, body=body)

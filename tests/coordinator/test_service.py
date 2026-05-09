@@ -19,6 +19,7 @@ from baleobala.coordinator.protocol import (
     make_online,
     make_released,
 )
+from baleobala.coordinator.auth import generate_secret, sign
 from baleobala.coordinator.registry import RelayRegistry, RelaySlot
 from baleobala.coordinator.service import CoordinatorService, ServiceConfig
 from baleobala.coordinator.transport import IncomingCall
@@ -372,3 +373,140 @@ def test_relay_no_ack_results_in_deny_not_assign(service, transport, registry):
     # rollback test, but keep the assertion local so this regression
     # check stands alone).
     assert registry.get_session("session-fixed") is None
+
+
+# ---- A6: relay authentication -----------------------------------------------
+
+
+def _authed_registry(*relay_ids_with_secrets: tuple[str, str]) -> RelayRegistry:
+    """Build a registry pre-loaded with relay secrets."""
+    secrets = {rid: sec for rid, sec in relay_ids_with_secrets}
+    return RelayRegistry(relay_secrets=secrets)
+
+
+def test_online_with_valid_sig_is_accepted():
+    secret = generate_secret()
+    registry = _authed_registry(("r1", secret))
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    msg = make_online(relay_id="r1", peer_id=200, capacity=1, secret=secret)
+    call = FakeIncomingCall(peer_id=200, inbox=[msg])
+    transport.deliver(call)
+    assert registry.get_relay("r1") is not None
+
+
+def test_online_with_wrong_sig_is_rejected():
+    real_secret = generate_secret()
+    wrong_secret = generate_secret()
+    registry = _authed_registry(("r1", real_secret))
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    msg = make_online(relay_id="r1", peer_id=200, capacity=1, secret=wrong_secret)
+    call = FakeIncomingCall(peer_id=200, inbox=[msg])
+    transport.deliver(call)
+    # Message dropped — relay not registered.
+    assert registry.get_relay("r1") is None
+
+
+def test_heartbeat_with_valid_sig_is_accepted():
+    secret = generate_secret()
+    registry = _authed_registry(("r1", secret))
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=2))
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    msg = make_heartbeat(relay_id="r1", in_use=[42], secret=secret)
+    call = FakeIncomingCall(peer_id=200, inbox=[msg])
+    transport.deliver(call)
+    relay = registry.get_relay("r1")
+    assert relay is not None and relay.in_use == [42]
+
+
+def test_heartbeat_with_missing_sig_is_rejected_when_enrolled():
+    secret = generate_secret()
+    registry = _authed_registry(("r1", secret))
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=2))
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    # No secret → no sig field
+    msg = make_heartbeat(relay_id="r1", in_use=[42])
+    call = FakeIncomingCall(peer_id=200, inbox=[msg])
+    transport.deliver(call)
+    relay = registry.get_relay("r1")
+    # in_use should NOT have been updated
+    assert relay is not None and relay.in_use == []
+
+
+def test_offline_with_valid_sig_removes_relay():
+    secret = generate_secret()
+    registry = _authed_registry(("r1", secret))
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    msg = make_offline(relay_id="r1", reason="shutdown", secret=secret)
+    call = FakeIncomingCall(peer_id=200, inbox=[msg])
+    transport.deliver(call)
+    assert registry.get_relay("r1") is None
+
+
+def test_offline_with_wrong_sig_does_not_remove_relay():
+    real_secret = generate_secret()
+    wrong_secret = generate_secret()
+    registry = _authed_registry(("r1", real_secret))
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    msg = make_offline(relay_id="r1", reason="shutdown", secret=wrong_secret)
+    call = FakeIncomingCall(peer_id=200, inbox=[msg])
+    transport.deliver(call)
+    assert registry.get_relay("r1") is not None, "relay was removed despite bad sig"
+
+
+def test_unenrolled_relay_is_accepted_with_warning(caplog):
+    """Relays without a registered secret are still accepted for backwards
+    compat; a WARNING is emitted so the gap is visible in the journal."""
+    import logging
+    registry = RelayRegistry()  # no secrets loaded
+    transport = FakeTransport()
+    svc = CoordinatorService(transport=transport, registry=registry)
+    svc.start()
+
+    msg = make_online(relay_id="legacy-r", peer_id=300, capacity=1)
+    call = FakeIncomingCall(peer_id=300, inbox=[msg])
+    with caplog.at_level(logging.WARNING):
+        transport.deliver(call)
+    assert registry.get_relay("legacy-r") is not None
+    assert any("no enrolled secret" in r.message for r in caplog.records)
+
+
+def test_auth_sign_verify_round_trip():
+    """sign() + verify() round-trip at the same minute."""
+    secret = generate_secret()
+    sig = sign(secret, "r1", Kind.ONLINE)
+    from baleobala.coordinator.auth import verify
+    assert verify(secret, "r1", Kind.ONLINE, sig)
+
+
+def test_auth_verify_rejects_different_relay_id():
+    secret = generate_secret()
+    sig = sign(secret, "r1", Kind.ONLINE)
+    from baleobala.coordinator.auth import verify
+    assert not verify(secret, "r2", Kind.ONLINE, sig)
+
+
+def test_auth_verify_rejects_wrong_kind():
+    secret = generate_secret()
+    sig = sign(secret, "r1", Kind.ONLINE)
+    from baleobala.coordinator.auth import verify
+    assert not verify(secret, "r1", Kind.HEARTBEAT, sig)

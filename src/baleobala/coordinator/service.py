@@ -27,6 +27,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
+from baleobala.coordinator.auth import verify as verify_relay_sig
 from baleobala.coordinator.policy import pick_relay
 from baleobala.coordinator.protocol import (
     ControlError,
@@ -290,12 +291,39 @@ class CoordinatorService:
 
     # ---- relay-side events -----------------------------------------------
 
+    def _check_relay_auth(self, relay_id: str, msg: ControlMessage) -> bool:
+        """Verify HMAC sig on relay control messages (A6).
+
+        Returns True (auth ok or relay not enrolled — legacy compat).
+        Returns False and logs a warning if the relay IS enrolled but the
+        sig is missing or wrong — the caller must drop the message.
+        """
+        secret = self._registry.get_secret(relay_id)
+        if secret is None:
+            # Not enrolled: accept but warn so operators know.
+            log.warning(
+                "coordinator: relay=%s has no enrolled secret — accepting without auth "
+                "(run 'baleobala coordinator enroll' to fix)",
+                relay_id,
+            )
+            return True
+        sig = str(msg.get("sig", ""))
+        if not verify_relay_sig(secret, relay_id, msg.kind, sig):
+            log.warning(
+                "coordinator: relay=%s FAILED auth for kind=%s sig=%r — dropping message",
+                relay_id, msg.kind, sig,
+            )
+            return False
+        return True
+
     def _handle_online(self, call: IncomingCall, msg: ControlMessage) -> None:
         relay_id = str(msg.get("relay_id", ""))
         peer_id = int(msg.get("peer_id", call.peer_id))
         capacity = int(msg.get("capacity", 1))
         if not relay_id:
             log.warning("coordinator: ONLINE missing relay_id from peer=%d", call.peer_id)
+            return
+        if not self._check_relay_auth(relay_id, msg):
             return
         slot = RelaySlot(relay_id=relay_id, peer_id=peer_id, capacity=capacity, in_use=[])
         self._registry.register(slot)
@@ -306,6 +334,8 @@ class CoordinatorService:
         relay_id = str(msg.get("relay_id", ""))
         in_use = [int(p) for p in msg.get("in_use", [])]
         if not relay_id:
+            return
+        if not self._check_relay_auth(relay_id, msg):
             return
         _RELAY_EVENTS.inc(kind="heartbeat")
         if self._registry.heartbeat(relay_id, in_use=in_use) is None:
@@ -328,6 +358,9 @@ class CoordinatorService:
         session_id = str(msg.get("session_id", ""))
         if not session_id:
             return
+        relay_id = str(msg.get("relay_id", ""))
+        if relay_id and not self._check_relay_auth(relay_id, msg):
+            return
         _RELAY_EVENTS.inc(kind="released")
         released = self._registry.release_session(session_id)
         cid = session_id[:8]
@@ -344,6 +377,8 @@ class CoordinatorService:
     def _handle_offline(self, call: IncomingCall, msg: ControlMessage) -> None:
         relay_id = str(msg.get("relay_id", ""))
         if not relay_id:
+            return
+        if not self._check_relay_auth(relay_id, msg):
             return
         log.info("coordinator: relay=%s offline reason=%s", relay_id, msg.get("reason", ""))
         self._registry.mark_offline(relay_id)
