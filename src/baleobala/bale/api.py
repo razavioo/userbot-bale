@@ -39,15 +39,24 @@ from typing import Callable, List, Optional
 
 from baleobala.bale.endpoints import Endpoint, fetch_endpoints
 from baleobala.bale.protos import (
-    ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials, InboundMessage,
+    ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials,
+    DialogInfo, HistoryMessage, InboundMessage,
     IncomingCallEvent,
+    GET_WSS_URL_METHOD, JOIN_GROUP_CALL_METHOD, LEAVE_GROUP_CALL_METHOD,
+    LOAD_DIALOGS_METHOD, LOAD_HISTORY_METHOD, MESSAGE_READ_METHOD,
     MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PhoneToImport,
-    RequestImportContacts, RequestSearchContacts, RequestSendMessage,
+    RECEIVE_CALL_METHOD,
+    RequestGetWssURL, RequestImportContacts, RequestJoinGroupCall,
+    RequestLeaveGroupCall, RequestLoadDialogs, RequestLoadHistory,
+    RequestMessageRead, RequestReceiveCall,
+    RequestSearchContacts, RequestSendMessage,
     RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
     ResolvedContact, ResponseAuth, encode_accept_call,
     find_inbound_messages, parse_call_credentials,
+    parse_get_wss_url_response,
     parse_incoming_call_offer,
-    parse_import_contacts_response, parse_response_auth,
+    parse_import_contacts_response, parse_load_dialogs_response,
+    parse_load_history_response, parse_response_auth,
     parse_search_contacts_response, parse_transaction_hash,
     parse_update_call_received,
 )
@@ -458,6 +467,100 @@ class BaleApiClient:
         callback fires with the message body (UTF-8 bytes) for every
         unique inbound rid."""
         self._message_subs[peer_id] = callback
+
+    # ------------------------------------------------------------------ call helpers
+
+    def receive_call(self, call_id: int) -> None:
+        """bale.meet.v1.Meet/ReceiveCall — signal to the server that
+        the call has been received. Suppresses repeated ring pushes."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestReceiveCall(call_id=call_id).encode()
+        log.info("sending ReceiveCall callId=%d", call_id)
+        self._ws.rpc(MEET_SERVICE, RECEIVE_CALL_METHOD, payload, timeout=10.0)
+
+    def get_wss_url(self, call_id: int) -> str | None:
+        """bale.meet.v1.Meet/GetWssURL — retrieve the signalling WSS URL
+        for an in-progress call. Returns None if the server response
+        contains no recognisable URL."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestGetWssURL(call_id=call_id).encode()
+        log.info("sending GetWssURL callId=%d", call_id)
+        resp = self._ws.rpc(MEET_SERVICE, GET_WSS_URL_METHOD, payload, timeout=10.0)
+        return parse_get_wss_url_response(resp.payload or resp.raw)
+
+    def join_group_call(self, call_id: int, name: str = "") -> None:
+        """bale.meet.v1.Meet/JoinGroupCall — join an existing group call room."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestJoinGroupCall(call_id=call_id, name=name).encode()
+        log.info("sending JoinGroupCall callId=%d name=%r", call_id, name)
+        self._ws.rpc(MEET_SERVICE, JOIN_GROUP_CALL_METHOD, payload, timeout=15.0)
+
+    def leave_group_call(self, call_id: int, *, end: bool = False) -> None:
+        """bale.meet.v1.Meet/LeaveGroupCall — leave a group call.
+        Pass end=True to terminate the call for all participants."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestLeaveGroupCall(call_id=call_id, end=end).encode()
+        log.info("sending LeaveGroupCall callId=%d end=%s", call_id, end)
+        self._ws.rpc(MEET_SERVICE, LEAVE_GROUP_CALL_METHOD, payload, timeout=10.0)
+
+    # ------------------------------------------------------------------ messaging helpers
+
+    def load_history(
+        self,
+        peer_id: int,
+        *,
+        limit: int = 20,
+        date: int = 0,
+        peer_type: int = 1,
+    ) -> list[HistoryMessage]:
+        """bale.messaging.v2.Messaging/LoadHistory — fetch recent messages
+        from a peer. Useful for RPC-transport recovery after reconnect.
+
+        `date` is a server timestamp; 0 means start from the newest message.
+        Returns messages in server order (newest first for date=0)."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestLoadHistory(
+            peer=OutPeer(user_id=peer_id, type=peer_type),
+            date=date,
+            limit=limit,
+        ).encode()
+        log.info("sending LoadHistory peer=%d limit=%d", peer_id, limit)
+        resp = self._ws.rpc(MESSAGING_SERVICE, LOAD_HISTORY_METHOD, payload, timeout=15.0)
+        return parse_load_history_response(resp.payload or resp.raw)
+
+    def load_dialogs(
+        self, *, limit: int = 20, min_date: int = 0,
+    ) -> list[DialogInfo]:
+        """bale.messaging.v2.Messaging/LoadDialogs — list active conversations.
+
+        Returns up to `limit` dialogs, optionally filtered by `min_date`.
+        Useful for discovering the right peer_id for the RPC transport."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestLoadDialogs(min_date=min_date, limit=limit).encode()
+        log.info("sending LoadDialogs limit=%d", limit)
+        resp = self._ws.rpc(MESSAGING_SERVICE, LOAD_DIALOGS_METHOD, payload, timeout=15.0)
+        return parse_load_dialogs_response(resp.payload or resp.raw)
+
+    def mark_read(
+        self, peer_id: int, date: int, *, peer_type: int = 1,
+    ) -> None:
+        """bale.messaging.v2.Messaging/MessageRead — mark messages read up
+        to `date` (server timestamp). Prevents re-delivery of RPC-transport
+        messages on the next GetDiff subscription."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestMessageRead(
+            peer=OutPeer(user_id=peer_id, type=peer_type),
+            date=date,
+        ).encode()
+        log.info("sending MessageRead peer=%d date=%d", peer_id, date)
+        self._ws.rpc(MESSAGING_SERVICE, MESSAGE_READ_METHOD, payload, timeout=10.0)
 
     def listen_incoming_calls(
         self,
