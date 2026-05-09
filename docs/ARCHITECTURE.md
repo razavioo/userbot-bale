@@ -170,9 +170,69 @@ The tunnel only sees opaque byte frames. It does not know whether the bytes came
 
 The tunnel consumes IP packets from the kernel TUN device and writes reassembled packets back to it. This is the only place where kernel packet handling appears in the main user-space runtime.
 
+## Coordinator and Multi-Relay Topology
+
+In production the system runs as three tiers communicating through short-lived LiveKit rooms:
+
+```text
+Client ──HELLO──► Coordinator ──EXPECT_CLIENT──► Relay
+                   └──ASSIGN──► Client ◄──────────────┘ (relay calls back)
+```
+
+### Coordinator (`src/baleobala/coordinator/`)
+
+A single Bale account that listens for inbound calls, runs the control-message protocol defined in `coordinator/protocol.py`, and assigns clients to relays.
+
+**HELLO → ASSIGN flow:**
+
+1. Client dials coordinator, sends `HELLO` with its `client_peer_id` and optional `client_region`.
+2. Coordinator calls `pick_relay()` (`coordinator/policy.py`) — region-affinity first, then lowest load fraction, tie-break by `relay_id`.
+3. Coordinator generates a 64-char hex ephemeral PSK (`session_psk`) for the session.
+4. Coordinator dials the chosen relay, sends `EXPECT_CLIENT` (carrying `client_peer_id`, `session_id`, `session_psk`, TTL). Relay sends `EXPECT_ACK`.
+5. Only after `EXPECT_ACK` does the coordinator send `ASSIGN` to the client (carrying `relay_peer_id`, `session_psk`). This ordering prevents the dial-race where the client arrives at the relay before the relay knows to expect it.
+6. Client dials relay directly. Relay's `ExpectedClientSet` (TTL-gated) approves the call.
+
+**Relay lifecycle messages** (sent from relay → coordinator via `CoordinatorReporter`):
+
+| Kind          | When                                          |
+| ------------- | --------------------------------------------- |
+| `ONLINE`      | relay startup, per JWT slot                   |
+| `HEARTBEAT`   | every 60 s (default); updates `in_use` list   |
+| `RELEASED`    | VPN session ends                              |
+| `OFFLINE`     | relay shutdown                                |
+
+Each message carries an HMAC-SHA256 signature (`coordinator/auth.py`) keyed to a per-relay secret stored in the `RelayRegistry`. Unenrolled relays are accepted with a WARNING to allow incremental migration.
+
+**Registry snapshot** (`coordinator/registry.py`) is written to disk after every state change so coordinator restarts don't lose relay enrollments or in-use counts.
+
+### Relay (`src/baleobala/vpn/relay_handler.py`)
+
+Each relay JWT maps to one `RelayCallHandler` instance. The handler is a state machine with a correlation ID (`cid`, 8-char hex UUID prefix) threaded through every log call for tracing.
+
+**Per-call lifecycle:**
+
+1. Inbound Bale call arrives → handler picks the least-loaded JWT slot.
+2. Probe phase: joins the LiveKit room, reads the control channel. If the coordinator's `EXPECT_CLIENT` was pre-sent, reads a direct VPN call and promotes to tunnel. If the call is from the coordinator itself, registers the expected client and hangs up (probe-only).
+3. Tunnel phase: issues a mesh assignment (`MeshExitNode.issue_client()`), starts the `EncryptedTransport` with the session PSK, sends provisioning ACK.
+4. Session reaper (`SessionReaper`) runs one teardown per cycle to avoid FFI contention in the livekit-rtc Rust runtime.
+
+### Metrics and observability
+
+- Relay: `http://127.0.0.1:9201/metrics` and `/healthz`
+- Coordinator: `http://127.0.0.1:9202/metrics` and `/healthz`
+- Prometheus counters: `baleobala_relay_calls_total{result}`, `baleobala_relay_evictions_total`, `baleobala_relay_stale_recovery_total`, `baleobala_coordinator_assigns_total{result}`, `baleobala_coordinator_relay_events_total{kind}`
+- Gauges: `baleobala_relay_sessions_active`, `baleobala_coordinator_relays_online`, `baleobala_coordinator_relays_capacity`
+- Log format: `BALEOBALA_LOG_FORMAT=text` (default) or `json` for journald / log aggregators.
+
+### Wire protocol
+
+All coordinator control messages use the format defined in `coordinator/protocol.py`: a JSON-encoded dict with a `kind` field (one of `ONLINE`, `HEARTBEAT`, `RELEASED`, `OFFLINE`, `HELLO`, `ASSIGN`, `DENY`, `EXPECT_CLIENT`, `EXPECT_ACK`) transmitted over a LiveKit DataChannel with topic `"control"`.
+
 ## Operational Notes
 
 - Transport hot-swap keeps tunnel state alive across bearer changes.
 - The failover controller can rebuild the carrier when the current session becomes terminal.
 - Credential epochs are short-lived by design, so operator workflows should expect rotation and renewal.
 - The packet-tunnel scaffold stores state locally and is intentionally narrow so the future native extension can stay simple.
+- Correlation IDs (`cid=xxxxxxxx`) in relay logs span probe → VPN session → reap; `grep cid=<id>` on the relay journal returns the full call lifecycle.
+- All `time.sleep()` FFI workarounds after `session.stop()` have been removed; the Rust tokio runtime is fully torn down synchronously before the call returns.
