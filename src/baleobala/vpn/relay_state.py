@@ -107,10 +107,12 @@ class RelayState:
             age = self._clock() - self._active_at.get(idx, 0.0)
             return age > threshold
 
-    def transition(self, idx: int, value: bool, where: str) -> None:
+    def transition(self, idx: int, value: bool, where: str, *, cid: str | None = None) -> None:
         """Set the flag, update the timestamp, and emit the audit log
         line that the original `_set_active` produced. The line format
-        is preserved verbatim because production triage greps for it."""
+        is preserved verbatim with one optional addition: when `cid`
+        is supplied, a `cid=<id>` field is appended so operators can
+        grep one correlation ID and reconstruct the full call trace."""
         with self._lock:
             prev = self._active.get(idx)
             self._active[idx] = value
@@ -119,13 +121,15 @@ class RelayState:
             else:
                 self._active_at[idx] = 0.0
             if prev != value:
-                # Reproduces the original print exactly so journalctl
-                # greps continue to match. The thread name is captured
-                # outside the lock-held branch wouldn't matter — it's a
-                # cheap call.
+                # Reproduces the original print exactly when no cid is
+                # supplied (preserves the existing journalctl greps);
+                # appends ` cid=<id>` when threaded through a real call
+                # so per-call tracing works. The thread name is still
+                # captured for backward-compat.
+                cid_suffix = f" cid={cid}" if cid else ""
                 msg = (
                     f"[vpn-mesh] _active[{idx}]: {prev}→{value} at {where} "
-                    f"(thread={threading.current_thread().name})"
+                    f"(thread={threading.current_thread().name}){cid_suffix}"
                 )
             else:
                 msg = None
