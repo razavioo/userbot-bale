@@ -28,9 +28,16 @@ class RelaySlot:
     capacity: int = 1
     in_use: list[int] = field(default_factory=list)
     last_heartbeat: float = field(default_factory=time.time)
+    region: str = ""
 
     def is_free(self) -> bool:
         return len(self.in_use) < self.capacity
+
+    def load_fraction(self) -> float:
+        """Fraction of capacity in use (0.0–1.0). Used for weighted routing."""
+        if self.capacity <= 0:
+            return 1.0
+        return len(self.in_use) / self.capacity
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -43,6 +50,7 @@ class RelaySlot:
             capacity=int(data.get("capacity", 1)),
             in_use=[int(p) for p in data.get("in_use", [])],
             last_heartbeat=float(data.get("last_heartbeat", time.time())),
+            region=str(data.get("region", "")),
         )
 
 
@@ -99,13 +107,14 @@ class RelayRegistry:
         with self._lock:
             existing = self._relays.get(slot.relay_id)
             if existing is not None:
-                # preserve in_use bindings; trust new capacity/peer_id
+                # preserve in_use bindings; trust new capacity/peer_id/region
                 slot = RelaySlot(
                     relay_id=slot.relay_id,
                     peer_id=slot.peer_id,
                     capacity=slot.capacity,
                     in_use=list(existing.in_use),
                     last_heartbeat=self._clock(),
+                    region=slot.region,
                 )
             else:
                 slot = RelaySlot(
@@ -114,6 +123,7 @@ class RelayRegistry:
                     capacity=slot.capacity,
                     in_use=list(slot.in_use),
                     last_heartbeat=self._clock(),
+                    region=slot.region,
                 )
             self._relays[slot.relay_id] = slot
             self._save()
@@ -266,6 +276,7 @@ class RelayRegistry:
             capacity=slot.capacity,
             in_use=list(slot.in_use),
             last_heartbeat=slot.last_heartbeat,
+            region=slot.region,
         )
 
     def _save(self) -> None:
