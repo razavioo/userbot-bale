@@ -880,6 +880,286 @@ def parse_transaction_hash(buf: bytes) -> str | None:
     return m.group(1).decode("ascii")
 
 
+# ============================================================
+# Meet: ReceiveCall, GetWssURL, JoinGroupCall, LeaveGroupCall
+# ============================================================
+# Field numbers from:
+#   re/jadx-out/sources/ai/bale/proto/MeetOuterClass$RequestReceiveCall.java
+#   re/jadx-out/sources/ai/bale/proto/MeetOuterClass$RequestGetWssURL.java
+#   re/jadx-out/sources/ai/bale/proto/MeetOuterClass$ResponseGetWssURL.java
+#   re/jadx-out/sources/ai/bale/proto/MeetOuterClass$RequestJoinGroupCall.java
+#   re/jadx-out/sources/ai/bale/proto/MeetOuterClass$RequestLeaveGroupCall.java
+# Service: bale.meet.v1.Meet
+# NOTE: outer RPC tag wrapping unverified for these methods — no outer wrapper
+# sent (same as AcceptCall). Probe live and add _enc_len_delim wrapper if
+# the server rejects with "unknown method".
+
+RECEIVE_CALL_METHOD = "ReceiveCall"
+GET_WSS_URL_METHOD = "GetWssURL"
+JOIN_GROUP_CALL_METHOD = "JoinGroupCall"
+LEAVE_GROUP_CALL_METHOD = "LeaveGroupCall"
+
+
+@dataclass(frozen=True)
+class RequestReceiveCall:
+    """MeetOuterClass.RequestReceiveCall — field 1: callId (int64)."""
+    call_id: int
+
+    def encode(self) -> bytes:
+        return _enc_tag(1, 0) + _enc_varint(self.call_id)
+
+
+@dataclass(frozen=True)
+class RequestGetWssURL:
+    """MeetOuterClass.RequestGetWssURL — field 1: callId (int64)."""
+    call_id: int
+
+    def encode(self) -> bytes:
+        return _enc_tag(1, 0) + _enc_varint(self.call_id)
+
+
+def parse_get_wss_url_response(buf: bytes) -> str | None:
+    """ResponseGetWssURL — field 1: url (string).
+
+    Uses structural field-1 scan first; falls back to wss:// regex."""
+    import re
+    pos = 0
+    while pos < len(buf):
+        try:
+            fn, wt, pos = _dec_tag(buf, pos)
+            if wt == 2:
+                ln, pos = _dec_varint(buf, pos)
+                val = buf[pos:pos + ln]
+                pos += ln
+                if fn == 1:
+                    try:
+                        s = val.decode("utf-8")
+                        if s.startswith("wss://"):
+                            return s
+                    except UnicodeDecodeError:
+                        pass
+            elif wt == 0:
+                _, pos = _dec_varint(buf, pos)
+            else:
+                break
+        except (IndexError, ValueError):
+            break
+    m = re.search(rb'(wss://[a-zA-Z0-9./\-]+\.(?:ir|ai))', buf)
+    return m.group(0).decode("ascii") if m else None
+
+
+@dataclass(frozen=True)
+class RequestJoinGroupCall:
+    """MeetOuterClass.RequestJoinGroupCall
+        field 1: callId (int64)
+        field 2: name   (StringValue { field 1: string })
+    """
+    call_id: int
+    name: str = ""
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_tag(1, 0) + _enc_varint(self.call_id)
+        if self.name:
+            name_sv = _enc_len_delim(1, self.name.encode("utf-8"))
+            out += _enc_len_delim(2, bytes(name_sv))
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestLeaveGroupCall:
+    """MeetOuterClass.RequestLeaveGroupCall
+        field 1: callId (int64)
+        field 2: end    (bool) — True terminates the call for everyone
+    """
+    call_id: int
+    end: bool = False
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_tag(1, 0) + _enc_varint(self.call_id)
+        if self.end:
+            out += _enc_tag(2, 0) + _enc_varint(1)
+        return bytes(out)
+
+
+# ============================================================
+# Messaging: LoadHistory, LoadDialogs, MessageRead
+# ============================================================
+# Field numbers from:
+#   re/jadx-out/sources/ai/bale/proto/MessagingOuterClass$RequestLoadHistory.java
+#   re/jadx-out/sources/ai/bale/proto/MessagingOuterClass$RequestLoadDialogs.java
+#   re/jadx-out/sources/ai/bale/proto/MessagingOuterClass$RequestMessageRead.java
+# Service: bale.messaging.v2.Messaging
+# NOTE: outer RPC tag unverified — no wrapper used; correct if server rejects.
+
+LOAD_HISTORY_METHOD = "LoadHistory"
+LOAD_DIALOGS_METHOD = "LoadDialogs"
+MESSAGE_READ_METHOD = "MessageRead"
+
+
+@dataclass(frozen=True)
+class RequestLoadHistory:
+    """MessagingOuterClass.RequestLoadHistory
+        field 1: peer     (OutPeer)
+        field 2: date     (int64; 0 = from newest)
+        field 4: loadMode (varint enum; 0=FORWARD)
+        field 5: limit    (int32)
+    """
+    peer: OutPeer
+    date: int = 0
+    load_mode: int = 0
+    limit: int = 20
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        if self.date:
+            out += _enc_tag(2, 0) + _enc_varint(self.date)
+        if self.load_mode:
+            out += _enc_tag(4, 0) + _enc_varint(self.load_mode)
+        out += _enc_tag(5, 0) + _enc_varint(self.limit)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class HistoryMessage:
+    rid: int
+    sender_uid: int
+    date: int
+    text: str | None
+
+
+def parse_load_history_response(buf: bytes) -> list[HistoryMessage]:
+    """Parse ResponseLoadHistory — repeated Message entries.
+
+    The response carries a list of Message sub-messages. Each contains
+    at least: rid (field 4), sender_uid (field 2), date (field 3),
+    message body (field 5, same shape as UpdateMessage). We walk the
+    top-level buffer collecting every sub-message that looks like a
+    Message and has a text body.
+    """
+    out: list[HistoryMessage] = []
+
+    def _try_message(b: bytes) -> HistoryMessage | None:
+        rid = sender_uid = date = 0
+        text: str | None = None
+        for fn, val, wt in _walk_len_delim(b):
+            if wt == 0:
+                if fn == 2:
+                    sender_uid = val
+                elif fn == 3:
+                    date = val
+                elif fn == 4:
+                    rid = val
+            elif wt == 2 and fn == 5:
+                text = _parse_text_from_message(val)
+        if rid and text is not None:
+            return HistoryMessage(rid=rid, sender_uid=sender_uid, date=date, text=text)
+        return None
+
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 2 and isinstance(val, (bytes, bytearray)):
+            msg = _try_message(val)
+            if msg is not None:
+                out.append(msg)
+            else:
+                # one level of unwrapping for server envelope
+                for fn2, val2, wt2 in _walk_len_delim(val):
+                    if wt2 == 2 and isinstance(val2, (bytes, bytearray)):
+                        msg2 = _try_message(val2)
+                        if msg2 is not None:
+                            out.append(msg2)
+    return out
+
+
+@dataclass(frozen=True)
+class RequestLoadDialogs:
+    """MessagingOuterClass.RequestLoadDialogs
+        field 1: minDate (int64; 0 = all)
+        field 2: limit   (int32)
+    Remaining fields (dialogType, excludePinnedDialogs, archiveFilter)
+    omitted — server defaults are fine for peer discovery.
+    """
+    min_date: int = 0
+    limit: int = 20
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        if self.min_date:
+            out += _enc_tag(1, 0) + _enc_varint(self.min_date)
+        out += _enc_tag(2, 0) + _enc_varint(self.limit)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class DialogInfo:
+    peer_id: int
+    peer_type: int
+    unread_count: int
+    last_message_date: int
+
+
+def parse_load_dialogs_response(buf: bytes) -> list[DialogInfo]:
+    """Parse ResponseLoadDialogs — repeated Dialog entries.
+
+    Each Dialog sub-message carries at minimum:
+        field 1: peer (OutPeer { type, id })
+        field 3: unreadCount (varint)
+        field 5: date / lastMessageDate (varint)
+    We collect every sub-message that has a non-zero peer_id.
+    """
+    out: list[DialogInfo] = []
+
+    def _try_dialog(b: bytes) -> DialogInfo | None:
+        peer_type = peer_id = unread = date = 0
+        for fn, val, wt in _walk_len_delim(b):
+            if wt == 2 and fn == 1:
+                pt, pid = _parse_out_peer(val)
+                peer_type, peer_id = pt, pid
+            elif wt == 0:
+                if fn == 3:
+                    unread = val
+                elif fn == 5:
+                    date = val
+        if peer_id:
+            return DialogInfo(
+                peer_id=peer_id, peer_type=peer_type,
+                unread_count=unread, last_message_date=date,
+            )
+        return None
+
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 2 and isinstance(val, (bytes, bytearray)):
+            d = _try_dialog(val)
+            if d is not None:
+                out.append(d)
+            else:
+                for fn2, val2, wt2 in _walk_len_delim(val):
+                    if wt2 == 2 and isinstance(val2, (bytes, bytearray)):
+                        d2 = _try_dialog(val2)
+                        if d2 is not None:
+                            out.append(d2)
+    return out
+
+
+@dataclass(frozen=True)
+class RequestMessageRead:
+    """MessagingOuterClass.RequestMessageRead
+        field 1: peer (OutPeer) — deprecated but still accepted
+        field 2: date (int64)   — timestamp of newest message to mark read
+    field 3 (ExPeer) omitted; server accepts without it.
+    """
+    peer: OutPeer
+    date: int
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(2, 0) + _enc_varint(self.date)
+        return bytes(out)
+
+
 def find_inbound_messages(buf: bytes, *, max_depth: int = 6) -> list[InboundMessage]:
     """Recursively scan an update payload for UpdateMessage-shaped sub-trees.
 
