@@ -29,7 +29,10 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 4
-        versionName = "0.3.0"
+        // Read from the repo-root VERSION file so Python, Android, and macOS share one source of truth.
+        // Falls back to "0.0.0" if the file isn't present (e.g. in a stripped archive build).
+        val versionFile = rootProject.file("../../VERSION")
+        versionName = if (versionFile.exists()) versionFile.readText().trim() else "0.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Override via local.properties: coordinatorPeerId=<long>
