@@ -235,8 +235,8 @@ class ExpectedClientSet:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # peer_id → (session_id, expires_at)
-        self._entries: dict[int, tuple[str, float]] = {}
+        # peer_id → (session_id, session_psk, expires_at)
+        self._entries: dict[int, tuple[str, str, float]] = {}
 
     def register(
         self,
@@ -244,28 +244,35 @@ class ExpectedClientSet:
         client_peer_id: int,
         session_id: str,
         expires_in_secs: int,
+        session_psk: str = "",
     ) -> None:
         with self._lock:
             self._entries[int(client_peer_id)] = (
                 session_id,
+                session_psk,
                 time.monotonic() + float(expires_in_secs),
             )
 
-    def consume(self, client_peer_id: int) -> str | None:
-        """Remove and return the session_id if peer_id is expected and not expired."""
+    def consume(self, client_peer_id: int) -> tuple[str, str] | None:
+        """Remove and return (session_id, session_psk) if expected and not expired.
+
+        Returns None if the peer is unknown or the TTL has passed.
+        session_psk is an empty string when the coordinator did not send one
+        (legacy relay path without B3).
+        """
         with self._lock:
             self._prune()
             entry = self._entries.pop(int(client_peer_id), None)
         if entry is None:
             return None
-        session_id, expires_at = entry
+        session_id, session_psk, expires_at = entry
         if time.monotonic() > expires_at:
             return None
-        return session_id
+        return session_id, session_psk
 
     def _prune(self) -> None:
         now = time.monotonic()
-        stale = [pid for pid, (_, exp) in self._entries.items() if exp < now]
+        stale = [pid for pid, (_, _psk, exp) in self._entries.items() if exp < now]
         for pid in stale:
             self._entries.pop(pid, None)
 
@@ -307,6 +314,7 @@ def handle_coordinator_instruction(
         client_peer_id = int(msg.get("client_peer_id", 0))
         session_id = str(msg.get("session_id", ""))
         expires_in = int(msg.get("expires_in_secs", 30))
+        session_psk = str(msg.get("session_psk", ""))
 
         if not client_peer_id or not session_id:
             log.warning("relay: EXPECT_CLIENT missing fields; ignoring")
@@ -316,10 +324,11 @@ def handle_coordinator_instruction(
             client_peer_id=client_peer_id,
             session_id=session_id,
             expires_in_secs=expires_in,
+            session_psk=session_psk,
         )
         log.info(
-            "relay: registered expected client=%d session=%s expires_in=%ds",
-            client_peer_id, session_id, expires_in,
+            "relay: registered expected client=%d session=%s expires_in=%ds psk=%s",
+            client_peer_id, session_id, expires_in, "yes" if session_psk else "no",
         )
 
         # Send EXPECT_ACK back

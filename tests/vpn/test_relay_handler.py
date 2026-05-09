@@ -429,7 +429,7 @@ def test_expect_client_message_registers_and_acks_then_exits():
     assert h.allocator.assignment() == {}
     assert h.sessions == []
     # The EXPECT_CLIENT was registered for the real client.
-    assert h.expected_clients.consume(42) == "s-abc"
+    assert h.expected_clients.consume(42) == ("s-abc", "")
     # And the active flag is back to False (probe-only scope, a08072a).
     assert h.relay_state.is_active(0) is False
 

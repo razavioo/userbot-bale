@@ -224,6 +224,7 @@ class RelayCallHandler:
         # instruction calls (EXPECT_CLIENT) from VPN client calls. Instead we
         # join the room and check if EXPECT_CLIENT arrives on "control" topic.
         session_pre_joined: Any = None
+        session_psk: str = ""  # per-session ephemeral PSK from coordinator (B3)
         if self._use_coordinator:
             session_pre_joined = self._coordinator_probe(
                 event, account_index, peer_id, state, cid,
@@ -233,11 +234,12 @@ class RelayCallHandler:
             # Caller-identity override + EXPECT_CLIENT verification both
             # mutate `peer_id`; keep the result here for the rest of the
             # flow.
-            peer_id = self._resolve_and_verify_caller(
+            resolved = self._resolve_and_verify_caller(
                 event, account_index, peer_id, session_pre_joined, cid,
             )
-            if peer_id is None:
+            if resolved is None:
                 return
+            peer_id, session_psk = resolved
 
         # ───────────────────────────────────────────────────────────────────
 
@@ -269,7 +271,7 @@ class RelayCallHandler:
             file=self._log,
         )
 
-        self._provision_tunnel(event, account_index, peer_id, session_pre_joined, state, cid)
+        self._provision_tunnel(event, account_index, peer_id, session_pre_joined, state, cid, session_psk=session_psk)
 
     # ---- coordinator-path probe -------------------------------------
 
@@ -449,12 +451,13 @@ class RelayCallHandler:
 
     def _resolve_and_verify_caller(
         self, event: Any, account_index: int, peer_id: int, probe: Any, cid: str,
-    ) -> int | None:
+    ) -> tuple[int, str] | None:
         """Promote the probe to a VPN session and resolve the actual
         caller user_id from the LiveKit participant identity (commit
-        36a8579). Returns the resolved peer_id, or None if the call was
-        rejected (audio publish failed, or no EXPECT_CLIENT pre-approval
-        within the 5 s polling window)."""
+        36a8579). Returns (resolved_peer_id, session_psk), or None if
+        the call was rejected (audio publish failed, or no EXPECT_CLIENT
+        pre-approval within the 5 s polling window).
+        session_psk is empty string when coordinator did not send one."""
         # VPN client call — reuse the already-joined probe session.
         # Publish audio now so the Bale SFU keeps this long-lived
         # session alive (without a media track the SFU closes it
@@ -500,12 +503,12 @@ class RelayCallHandler:
         # 2-5 s if the relay has to publish its audio track first.
         # Poll briefly so the legitimate client doesn't get rejected
         # just because EXPECT_CLIENT was racing the inbound dial.
-        expected_session = self._expected_clients.consume(peer_id)
+        expected_entry = self._expected_clients.consume(peer_id)
         deadline = _time.monotonic() + 5.0
-        while expected_session is None and _time.monotonic() < deadline:
+        while expected_entry is None and _time.monotonic() < deadline:
             _time.sleep(0.25)
-            expected_session = self._expected_clients.consume(peer_id)
-        if expected_session is None:
+            expected_entry = self._expected_clients.consume(peer_id)
+        if expected_entry is None:
             print(
                 f"[vpn-mesh] cid={cid} rejecting unknown caller={peer_id} on "
                 f"account={account_index} (no EXPECT_CLIENT pre-approval; "
@@ -519,9 +522,10 @@ class RelayCallHandler:
             )
             self._bump("no_expect_client")
             return None
+        session_id, session_psk = expected_entry
         with self._session_map_lock:
-            self._session_map[f"sess:{peer_id}"] = expected_session
-        return peer_id
+            self._session_map[f"sess:{peer_id}"] = session_id
+        return peer_id, session_psk
 
     # ---- post-coordinator: actually bring up the tunnel -------------
 
@@ -533,6 +537,8 @@ class RelayCallHandler:
         session_pre_joined: Any,
         state: list,
         cid: str,
+        *,
+        session_psk: str = "",
     ) -> None:
         on_drop = self._make_on_drop(account_index, cid)
         try:
@@ -547,8 +553,16 @@ class RelayCallHandler:
                 session.start()
             self._Keepalive(session, interval=20.0).start()
             dc = self._DataChannelTransport(session, topic="vpn", reliable=False)
+            # B3: prefer per-session PSK from coordinator over the global PSK.
+            # The global PSK remains as a fallback for legacy relays not yet
+            # enrolled with a coordinator that sends session_psk.
+            if session_psk:
+                from baleobala.vpn.crypto import derive_key as _derive_key
+                effective_key = _derive_key(session_psk)
+            else:
+                effective_key = self._psk_key
             transport = (
-                self._EncryptedTransport(dc, self._psk_key) if self._psk_key else dc
+                self._EncryptedTransport(dc, effective_key) if effective_key else dc
             )
             # Must match the Android client's hardcoded DEFAULT_TUNNEL_SESS_ID.
             # Per-peer offsets caused frames to be silently dropped by the

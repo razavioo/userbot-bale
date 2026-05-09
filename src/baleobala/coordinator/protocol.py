@@ -86,30 +86,34 @@ def make_hello(
     return ControlMessage(kind=Kind.HELLO, body=body)
 
 
-def make_assign(*, relay_peer_id: int, session_id: str, expires_in_secs: int) -> ControlMessage:
-    return ControlMessage(
-        kind=Kind.ASSIGN,
-        body={
-            "relay_peer_id": int(relay_peer_id),
-            "session_id": str(session_id),
-            "expires_in_secs": int(expires_in_secs),
-        },
-    )
+def make_assign(
+    *, relay_peer_id: int, session_id: str, expires_in_secs: int, session_psk: str = ""
+) -> ControlMessage:
+    body: dict[str, Any] = {
+        "relay_peer_id": int(relay_peer_id),
+        "session_id": str(session_id),
+        "expires_in_secs": int(expires_in_secs),
+    }
+    if session_psk:
+        body["session_psk"] = session_psk
+    return ControlMessage(kind=Kind.ASSIGN, body=body)
 
 
 def make_deny(*, reason: str, detail: str = "") -> ControlMessage:
     return ControlMessage(kind=Kind.DENY, body={"reason": reason, "detail": detail})
 
 
-def make_expect_client(*, client_peer_id: int, session_id: str, expires_in_secs: int) -> ControlMessage:
-    return ControlMessage(
-        kind=Kind.EXPECT_CLIENT,
-        body={
-            "client_peer_id": int(client_peer_id),
-            "session_id": str(session_id),
-            "expires_in_secs": int(expires_in_secs),
-        },
-    )
+def make_expect_client(
+    *, client_peer_id: int, session_id: str, expires_in_secs: int, session_psk: str = ""
+) -> ControlMessage:
+    body: dict[str, Any] = {
+        "client_peer_id": int(client_peer_id),
+        "session_id": str(session_id),
+        "expires_in_secs": int(expires_in_secs),
+    }
+    if session_psk:
+        body["session_psk"] = session_psk
+    return ControlMessage(kind=Kind.EXPECT_CLIENT, body=body)
 
 
 def make_online(

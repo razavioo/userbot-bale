@@ -188,6 +188,11 @@ class CoordinatorService:
         # session=<sid>, and a future protocol bump can put the cid
         # directly into the body).
         cid = session_id[:8] if isinstance(session_id, str) else uuid.uuid4().hex[:8]
+        # Per-session ephemeral PSK (B3): 32 random bytes, hex-encoded.
+        # Sent to both the client (in ASSIGN) and the relay (in EXPECT_CLIENT)
+        # so each session gets a unique AEAD key independent of the global PSK.
+        # A leaked global PSK no longer exposes past or future sessions.
+        session_psk = uuid.uuid4().hex + uuid.uuid4().hex  # 64 hex chars = 32 bytes
         try:
             self._registry.reserve_session(
                 session_id=session_id,
@@ -217,6 +222,7 @@ class CoordinatorService:
             slot=slot,
             client_peer_id=client_peer_id,
             session_id=session_id,
+            session_psk=session_psk,
             cid=cid,
         ):
             self._safe_send(
@@ -236,6 +242,7 @@ class CoordinatorService:
                 relay_peer_id=slot.peer_id,
                 session_id=session_id,
                 expires_in_secs=self._config.session_expires_secs,
+                session_psk=session_psk,
             ),
         )
         self._safe_hangup(call)
@@ -251,6 +258,7 @@ class CoordinatorService:
         slot: RelaySlot,
         client_peer_id: int,
         session_id: str,
+        session_psk: str = "",
         cid: str = "",
     ) -> bool:
         """Send EXPECT_CLIENT to the relay and wait for EXPECT_ACK.
@@ -264,6 +272,7 @@ class CoordinatorService:
             client_peer_id=client_peer_id,
             session_id=session_id,
             expires_in_secs=self._config.session_expires_secs,
+            session_psk=session_psk,
         )
         try:
             ack = self._transport.quick_exchange(

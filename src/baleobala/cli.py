@@ -1638,7 +1638,7 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
                     client_peer_id = int(stored)
             except Exception:  # noqa: BLE001
                 client_peer_id = None
-        return resolve_via_coordinator(
+        creds = resolve_via_coordinator(
             coordinator_peer_id=coordinator_peer_id,
             jwt=jwt,
             ws_tls_config=ws_tls_config,
@@ -1646,6 +1646,16 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
             answer_timeout=float(getattr(args, "answer_timeout", 60.0)),
             client_peer_id=client_peer_id,
         )
+        # B3: if the coordinator provided a per-session PSK, inject it into
+        # args.psk so _build_transport_chain → _resolve_psk picks it up,
+        # overriding any --psk / --psk-file argument.
+        session_psk = getattr(creds, "session_psk", "") or (
+            creds.__dict__.get("session_psk", "") if hasattr(creds, "__dict__") else ""
+        )
+        if session_psk:
+            args.psk = session_psk
+            args.psk_file = None
+        return creds
     # ─────────────────────────────────────────────────────────────────────
 
     controller = BaleCarrierController(client=BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config))
