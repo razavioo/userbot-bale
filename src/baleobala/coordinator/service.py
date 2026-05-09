@@ -180,6 +180,12 @@ class CoordinatorService:
             return
 
         session_id = self._new_session_id()
+        # 8-char cid derived from session_id so operators can grep the
+        # same id across coordinator + relay (EXPECT_CLIENT carries
+        # session_id, the relay's EXPECT_CLIENT log line includes
+        # session=<sid>, and a future protocol bump can put the cid
+        # directly into the body).
+        cid = session_id[:8] if isinstance(session_id, str) else uuid.uuid4().hex[:8]
         try:
             self._registry.reserve_session(
                 session_id=session_id,
@@ -188,7 +194,7 @@ class CoordinatorService:
                 expires_in_secs=self._config.session_expires_secs,
             )
         except Exception:  # noqa: BLE001
-            log.exception("coordinator: reserve_session failed")
+            log.exception("coordinator: cid=%s reserve_session failed", cid)
             self._safe_send(call, make_deny(reason=DenyReason.INTERNAL))
             _ASSIGNS.inc(result="deny_reserve_failed")
             return
@@ -209,6 +215,7 @@ class CoordinatorService:
             slot=slot,
             client_peer_id=client_peer_id,
             session_id=session_id,
+            cid=cid,
         ):
             self._safe_send(
                 call,
@@ -230,9 +237,20 @@ class CoordinatorService:
             ),
         )
         self._safe_hangup(call)
+        log.info(
+            "coordinator: cid=%s assigned client=%d → relay=%s session=%s",
+            cid, client_peer_id, slot.relay_id, session_id,
+        )
         _ASSIGNS.inc(result="ok")
 
-    def _instruct_relay(self, *, slot: RelaySlot, client_peer_id: int, session_id: str) -> bool:
+    def _instruct_relay(
+        self,
+        *,
+        slot: RelaySlot,
+        client_peer_id: int,
+        session_id: str,
+        cid: str = "",
+    ) -> bool:
         """Send EXPECT_CLIENT to the relay and wait for EXPECT_ACK.
 
         Returns True if the relay acknowledged so the caller can safely
@@ -252,14 +270,17 @@ class CoordinatorService:
                 timeout=self._config.expect_timeout,
             )
         except Exception:  # noqa: BLE001
-            log.exception("coordinator: quick_exchange to relay=%s failed", slot.relay_id)
+            log.exception(
+                "coordinator: cid=%s quick_exchange to relay=%s failed",
+                cid, slot.relay_id,
+            )
             self._registry.release_session(session_id)
             return False
 
         if ack is None or ack.kind != Kind.EXPECT_ACK:
             log.warning(
-                "coordinator: relay=%s did not ack EXPECT_CLIENT (got %r); rolling back session=%s",
-                slot.relay_id,
+                "coordinator: cid=%s relay=%s did not ack EXPECT_CLIENT (got %r); rolling back session=%s",
+                cid, slot.relay_id,
                 ack.kind if ack else None,
                 session_id,
             )
@@ -309,12 +330,13 @@ class CoordinatorService:
             return
         _RELAY_EVENTS.inc(kind="released")
         released = self._registry.release_session(session_id)
+        cid = session_id[:8]
         if released is None:
-            log.info("coordinator: RELEASED for unknown session=%s", session_id)
+            log.info("coordinator: cid=%s RELEASED for unknown session=%s", cid, session_id)
         else:
             log.info(
-                "coordinator: released session=%s relay=%s client=%d",
-                session_id,
+                "coordinator: cid=%s released session=%s relay=%s client=%d",
+                cid, session_id,
                 released.relay_id,
                 released.client_peer_id,
             )

@@ -24,6 +24,7 @@ import logging
 import sys
 import threading
 import time as _time
+import uuid
 from typing import Any, Callable, Protocol
 
 from baleobala.runtime.metrics import counter, gauge
@@ -173,10 +174,17 @@ class RelayCallHandler:
     # ------------------------------------------------------------------
 
     def handle_call(self, event: Any, account_index: int = 0) -> None:
+        # 8-char hex correlation ID — short enough to read in a journal
+        # tail, wide enough (~4 billion) that two concurrent calls
+        # collide one in a million. Operators grep `cid=<id>` to pull
+        # the full lifecycle of a single call from probe → assign →
+        # tunnel → reap.
+        cid = uuid.uuid4().hex[:8]
+
         peer_id = event.peer_id
         if peer_id is None:
             print(
-                "[vpn-mesh] incoming call rejected: missing canonical peer_id",
+                f"[vpn-mesh] cid={cid} incoming call rejected: missing canonical peer_id",
                 file=self._log,
             )
             self._bump("missing_peer_id")
@@ -193,17 +201,21 @@ class RelayCallHandler:
         #     it; another thread owns it.
         state = [False, False]
         try:
-            self._do_handle(event, account_index, peer_id, state)
+            self._do_handle(event, account_index, peer_id, state, cid)
         finally:
             if state[0] and not state[1]:
-                self._relay_state.transition(account_index, False, "outer-finally")
+                self._relay_state.transition(
+                    account_index, False, "outer-finally", cid=cid,
+                )
 
     # ------------------------------------------------------------------
     # Internal flow — split out for readability but preserves the exact
     # control flow (and stderr lines) of the original closure.
     # ------------------------------------------------------------------
 
-    def _do_handle(self, event: Any, account_index: int, peer_id: int, state: list) -> None:
+    def _do_handle(
+        self, event: Any, account_index: int, peer_id: int, state: list, cid: str,
+    ) -> None:
         # _state[0] := we are the caller that set _account_active=True
         # _state[1] := we reached sessions.append (commit)
         # ── Coordinator mode: route by probing the control channel ────────
@@ -213,14 +225,16 @@ class RelayCallHandler:
         # join the room and check if EXPECT_CLIENT arrives on "control" topic.
         session_pre_joined: Any = None
         if self._use_coordinator:
-            session_pre_joined = self._coordinator_probe(event, account_index, peer_id, state)
+            session_pre_joined = self._coordinator_probe(
+                event, account_index, peer_id, state, cid,
+            )
             if session_pre_joined is None:
                 return  # coordinator branch handled the call (or rejected it)
             # Caller-identity override + EXPECT_CLIENT verification both
             # mutate `peer_id`; keep the result here for the rest of the
             # flow.
             peer_id = self._resolve_and_verify_caller(
-                event, account_index, peer_id, session_pre_joined
+                event, account_index, peer_id, session_pre_joined, cid,
             )
             if peer_id is None:
                 return
@@ -228,13 +242,13 @@ class RelayCallHandler:
         # ───────────────────────────────────────────────────────────────────
 
         print(
-            f"[vpn-mesh] incoming call → peer_id={peer_id} account={account_index}",
+            f"[vpn-mesh] cid={cid} incoming call → peer_id={peer_id} account={account_index}",
             file=self._log,
         )
         slot = self._allocator.join(peer_id)
         if slot is None:
             print(
-                f"[vpn-mesh] incoming call rejected: no server JWT capacity "
+                f"[vpn-mesh] cid={cid} incoming call rejected: no server JWT capacity "
                 f"peer_id={peer_id} active={len(self._allocator.assignment())} "
                 f"capacity={self._allocator.total_capacity}",
                 file=self._log,
@@ -244,21 +258,23 @@ class RelayCallHandler:
                     session_pre_joined.stop()
                 except Exception:  # noqa: BLE001
                     pass
-            self._relay_state.transition(account_index, False, "no-jwt-capacity")
+            self._relay_state.transition(
+                account_index, False, "no-jwt-capacity", cid=cid,
+            )
             self._bump("no_capacity")
             return
         print(
-            f"[vpn-mesh] server_jwt_assignment={self._allocator.assignment()} "
+            f"[vpn-mesh] cid={cid} server_jwt_assignment={self._allocator.assignment()} "
             f"slots={[s.peer_ids for s in self._allocator.slots()]}",
             file=self._log,
         )
 
-        self._provision_tunnel(event, account_index, peer_id, session_pre_joined, state)
+        self._provision_tunnel(event, account_index, peer_id, session_pre_joined, state, cid)
 
     # ---- coordinator-path probe -------------------------------------
 
     def _coordinator_probe(
-        self, event: Any, account_index: int, peer_id: int, state: list
+        self, event: Any, account_index: int, peer_id: int, state: list, cid: str,
     ) -> Any:
         """Run the EXPECT_CLIENT probe. Returns the joined LiveKitSession
         if the call should be promoted to a VPN session, or None if the
@@ -288,7 +304,7 @@ class RelayCallHandler:
             # tunnel and silently drop every Android frame.
             slot = self._allocator.slots()[account_index]
             if slot.peer_ids or self._relay_state.is_active(account_index):
-                self._maybe_evict_stale_sessions(account_index)
+                self._maybe_evict_stale_sessions(account_index, cid)
                 slot = self._allocator.slots()[account_index]
                 # Stale-flag auto-recovery
                 if not slot.peer_ids and self._relay_state.is_stale(
@@ -296,12 +312,12 @@ class RelayCallHandler:
                 ):
                     age = self._relay_state.age(account_index)
                     print(
-                        f"[vpn-mesh] _active[{account_index}] looks stale "
+                        f"[vpn-mesh] cid={cid} _active[{account_index}] looks stale "
                         f"({age:.1f}s old, slot empty) — clearing & continuing",
                         file=self._log,
                     )
                     self._relay_state.transition(
-                        account_index, False, "stale-recovery"
+                        account_index, False, "stale-recovery", cid=cid,
                     )
                     try:
                         _STALE_RECOVERY.inc()
@@ -314,7 +330,7 @@ class RelayCallHandler:
                         else ""
                     )
                     print(
-                        f"[vpn-mesh] skipping probe for account={account_index}: "
+                        f"[vpn-mesh] cid={cid} skipping probe for account={account_index}: "
                         f"VPN session already active "
                         f"(slot={slot.peer_ids} active={self._relay_state.is_active(account_index)}{age_str})",
                         file=self._log,
@@ -322,7 +338,7 @@ class RelayCallHandler:
                     self._bump("skip_probe")
                     return None
 
-            self._relay_state.transition(account_index, True, "probe-start")
+            self._relay_state.transition(account_index, True, "probe-start", cid=cid)
             state[0] = True  # we own the flag now
             probe = self._LiveKitSession(
                 url=event.credentials.url,
@@ -361,7 +377,7 @@ class RelayCallHandler:
                                     _ctrl_encode(_CM(kind=_Kind.EXPECT_ACK, body={}))
                                 )
                                 print(
-                                    f"[vpn-mesh] EXPECT_CLIENT: registered "
+                                    f"[vpn-mesh] cid={cid} EXPECT_CLIENT: registered "
                                     f"client={cpid} session={csid}",
                                     file=self._log,
                                 )
@@ -374,19 +390,21 @@ class RelayCallHandler:
                             except Exception:  # noqa: BLE001
                                 pass
                             self._relay_state.transition(
-                                account_index, False, "expect-client-done"
+                                account_index, False, "expect-client-done", cid=cid,
                             )
                             self._bump("expect_client")
                             return None  # coordinator instruction handled
                     except _CtrlError:
                         pass
             except Exception:  # noqa: BLE001
-                log.exception("relay: probe session error")
+                log.exception("relay: cid=%s probe session error", cid)
                 try:
                     probe.stop()
                 except Exception:  # noqa: BLE001
                     pass
-                self._relay_state.transition(account_index, False, "probe-error")
+                self._relay_state.transition(
+                    account_index, False, "probe-error", cid=cid,
+                )
                 self._bump("probe_error")
                 return None
         # Falling through means "EXPECT_CLIENT probe didn't trigger early
@@ -394,7 +412,7 @@ class RelayCallHandler:
         # already-joined probe session.
         return probe
 
-    def _maybe_evict_stale_sessions(self, account_index: int) -> None:
+    def _maybe_evict_stale_sessions(self, account_index: int, cid: str) -> None:
         """Reconnect-evict (commit 2215aee). When a fresh inbound call
         arrives and the existing session has lost its peer or is
         terminal, force-cleanup immediately rather than waiting out
@@ -410,7 +428,7 @@ class RelayCallHandler:
                 evicted.append(i)
         if evicted:
             print(
-                f"[vpn-mesh] reconnect detected for account={account_index}; "
+                f"[vpn-mesh] cid={cid} reconnect detected for account={account_index}; "
                 f"evicting {len(evicted)} stale session(s) and continuing",
                 file=self._log,
             )
@@ -430,7 +448,7 @@ class RelayCallHandler:
                 except Exception: pass  # noqa: BLE001
 
     def _resolve_and_verify_caller(
-        self, event: Any, account_index: int, peer_id: int, probe: Any
+        self, event: Any, account_index: int, peer_id: int, probe: Any, cid: str,
     ) -> int | None:
         """Promote the probe to a VPN session and resolve the actual
         caller user_id from the LiveKit participant identity (commit
@@ -444,10 +462,12 @@ class RelayCallHandler:
         try:
             probe.enable_audio()
         except Exception:  # noqa: BLE001
-            log.exception("relay: enable_audio failed; cleaning up")
+            log.exception("relay: cid=%s enable_audio failed; cleaning up", cid)
             try: probe.stop()
             except Exception: pass  # noqa: BLE001
-            self._relay_state.transition(account_index, False, "enable-audio-failed")
+            self._relay_state.transition(
+                account_index, False, "enable-audio-failed", cid=cid,
+            )
             self._bump("enable_audio_failed")
             return None
 
@@ -466,7 +486,7 @@ class RelayCallHandler:
                 continue
             if caller_id != peer_id and caller_id > 0:
                 print(
-                    f"[vpn-mesh] caller user_id resolved from LiveKit "
+                    f"[vpn-mesh] cid={cid} caller user_id resolved from LiveKit "
                     f"identity: peer_id={peer_id} → {caller_id}",
                     file=self._log,
                 )
@@ -487,14 +507,16 @@ class RelayCallHandler:
             expected_session = self._expected_clients.consume(peer_id)
         if expected_session is None:
             print(
-                f"[vpn-mesh] rejecting unknown caller={peer_id} on "
+                f"[vpn-mesh] cid={cid} rejecting unknown caller={peer_id} on "
                 f"account={account_index} (no EXPECT_CLIENT pre-approval; "
                 f"likely the coordinator's dispatch call landed here)",
                 file=self._log,
             )
             try: probe.stop()
             except Exception: pass  # noqa: BLE001
-            self._relay_state.transition(account_index, False, "no-expect-client")
+            self._relay_state.transition(
+                account_index, False, "no-expect-client", cid=cid,
+            )
             self._bump("no_expect_client")
             return None
         with self._session_map_lock:
@@ -510,8 +532,9 @@ class RelayCallHandler:
         peer_id: int,
         session_pre_joined: Any,
         state: list,
+        cid: str,
     ) -> None:
-        on_drop = self._make_on_drop(account_index)
+        on_drop = self._make_on_drop(account_index, cid)
         try:
             if session_pre_joined is not None:
                 session = session_pre_joined
@@ -543,7 +566,7 @@ class RelayCallHandler:
                 peer_id, transport, assignment=assignment, on_drop=on_drop,
             )
             print(
-                f"[vpn-mesh] peer={peer_id} status=assigned "
+                f"[vpn-mesh] cid={cid} peer={peer_id} status=assigned "
                 f"client={assignment.client} gateway={assignment.gateway}",
                 file=self._log,
             )
@@ -567,7 +590,7 @@ class RelayCallHandler:
                     "client did not acknowledge provisioning"
                 )
             print(
-                f"[vpn-mesh] peer={peer_id} status=acknowledged",
+                f"[vpn-mesh] cid={cid} peer={peer_id} status=acknowledged",
                 file=self._log,
             )
             assignment = self._mesh.activate_client(
@@ -577,7 +600,7 @@ class RelayCallHandler:
                 peer_id, transport="dc", session_id=sess_id,
             )
             print(
-                f"[vpn-mesh] peer={peer_id} status=active → assigned "
+                f"[vpn-mesh] cid={cid} peer={peer_id} status=active → assigned "
                 f"{assignment.client} (gateway={assignment.gateway})",
                 file=self._log,
             )
@@ -590,7 +613,9 @@ class RelayCallHandler:
             # this account. The reaper handles cleanup of the session
             # itself when the LiveKit room ends; _on_drop also clears
             # this flag, so the dual-clearing is safe.
-            self._relay_state.transition(account_index, False, "after-commit")
+            self._relay_state.transition(
+                account_index, False, "after-commit", cid=cid,
+            )
         except Exception:  # noqa: BLE001
             self._control.release_mesh_assignment(peer_id, error="provisioning failed")
             on_drop(peer_id)
@@ -599,14 +624,18 @@ class RelayCallHandler:
             except Exception:
                 pass
             self._allocator.leave(peer_id)
-            log.exception("failed to bring up client tunnel")
+            log.exception("relay: cid=%s failed to bring up client tunnel", cid)
             self._bump("provision_failed")
 
-    def _make_on_drop(self, account_index: int) -> Callable[[int], None]:
+    def _make_on_drop(self, account_index: int, cid: str) -> Callable[[int], None]:
         def _on_drop(dropped_peer_id: int) -> None:
             # Slot freed — clear the per-account active flag so the next
-            # incoming Bale call can start a fresh probe.
-            self._relay_state.transition(account_index, False, "on-drop")
+            # incoming Bale call can start a fresh probe. cid threads
+            # through so the journal links the drop back to the call
+            # that originally created the session.
+            self._relay_state.transition(
+                account_index, False, "on-drop", cid=cid,
+            )
             if not self._use_coordinator or not self._reporters:
                 return
             with self._session_map_lock:
