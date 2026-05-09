@@ -1,0 +1,88 @@
+name: refresh-bale-evidence
+
+on:
+  schedule:
+    # Every Sunday at 03:00 UTC. Bale ships roughly weekly; this catches
+    # protocol bumps within a day of release.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: "Direct HTTPS URL to the Bale APK (leave blank to use BALE_APK_URL secret)"
+        required: false
+        default: ""
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install jadx
+        run: |
+          JADX_VERSION="1.5.2"
+          curl -fsSL \
+            "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
+            -o /tmp/jadx.zip
+          unzip -q /tmp/jadx.zip -d /opt/jadx
+          echo "/opt/jadx/bin" >> "$GITHUB_PATH"
+
+      - name: Install aapt
+        run: sudo apt-get install -y aapt 2>/dev/null || true
+
+      - name: Run refresh script
+        env:
+          BALE_APK_URL: ${{ inputs.apk_url || secrets.BALE_APK_URL }}
+        run: |
+          if [[ -z "$BALE_APK_URL" ]]; then
+            echo "No APK URL configured. Set the BALE_APK_URL secret or pass --apk to the script."
+            echo "Skipping refresh (nothing to fetch)."
+            exit 0
+          fi
+          ./scripts/refresh-bale-evidence.sh
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --quiet && echo "changed=false" >> "$GITHUB_OUTPUT" || echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR with updated evidence
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE="$(date +%Y-%m-%d)"
+          BRANCH="chore/bale-evidence-refresh-${DATE}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add bale.apk re/ docs/BALE_RE_NOTES.md
+          git commit -m "chore(re): refresh Bale APK evidence ${DATE}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore(re): Bale APK evidence refresh ${DATE}" \
+            --body "$(cat <<'EOF'
+## Automated Bale APK evidence refresh
+
+This PR was opened automatically by the **refresh-bale-evidence** workflow.
+
+### What changed
+- \`bale.apk\` updated to the latest version.
+- \`re/jadx-out-<version>/\` new decompile added.
+- \`docs/BALE_RE_NOTES.md\` has a new dated section with the proto/RPC diff.
+
+### Review checklist
+- [ ] Check \`BALE_RE_NOTES.md\` for changed proto descriptors or new RPC names.
+- [ ] If any field names or service names changed, update \`src/baleobala/bale/protos.py\` and the decoder accordingly.
+- [ ] Run \`pytest tests/\` to confirm nothing broke.
+EOF
+)" \
+            --base main \
+            --head "$BRANCH"
