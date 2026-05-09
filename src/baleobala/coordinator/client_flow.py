@@ -99,8 +99,10 @@ def resolve_via_coordinator(
     relay_peer_id = int(assign_msg.get("relay_peer_id", 0))
     if relay_peer_id <= 0:
         raise SystemExit("coordinator returned invalid relay_peer_id")
+    # B3: per-session ephemeral PSK sent by the coordinator.
+    session_psk: str = str(assign_msg.get("session_psk", ""))
     print(
-        f"[bale-call] assigned relay={relay_peer_id} — calling relay directly",
+        f"[bale-call] assigned relay={relay_peer_id} psk={'ephemeral' if session_psk else 'global'} — calling relay directly",
         file=sys.stderr,
     )
 
@@ -114,4 +116,14 @@ def resolve_via_coordinator(
         relay_client.stop()
 
     print(f"[bale-call] relay connected — room={creds.url}", file=sys.stderr)
+    # Attach session_psk so callers can use it for EncryptedTransport instead
+    # of the global PSK file. Empty string means no ephemeral PSK (legacy relay).
+    try:
+        object.__setattr__(creds, "session_psk", session_psk)
+    except (AttributeError, TypeError):
+        # creds may be a frozen dataclass or similar; attach via __dict__ fallback
+        try:
+            creds.__dict__["session_psk"] = session_psk
+        except AttributeError:
+            pass
     return creds

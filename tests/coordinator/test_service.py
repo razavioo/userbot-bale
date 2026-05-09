@@ -510,3 +510,85 @@ def test_auth_verify_rejects_wrong_kind():
     sig = sign(secret, "r1", Kind.ONLINE)
     from baleobala.coordinator.auth import verify
     assert not verify(secret, "r1", Kind.HEARTBEAT, sig)
+
+
+# ---- B3: per-session ephemeral PSK ------------------------------------------
+
+
+def test_assign_carries_session_psk():
+    """ASSIGN sent to the client must contain a non-empty session_psk field."""
+    registry = RelayRegistry()
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport = FakeTransport(ack_for_relay={200: ControlMessage(kind=Kind.EXPECT_ACK, body={})})
+    svc = CoordinatorService(
+        transport=transport,
+        registry=registry,
+        config=ServiceConfig(hello_timeout=1.0, expect_timeout=1.0),
+        new_session_id=lambda: "s-psk-test",
+    )
+    svc.start()
+
+    call = FakeIncomingCall(peer_id=42, inbox=[make_hello(client_id="dev-1")])
+    transport.deliver(call)
+
+    assert call.sent, "client received nothing"
+    assign = call.sent[0]
+    assert assign.kind == Kind.ASSIGN
+    psk = assign.get("session_psk")
+    assert psk and len(psk) == 64, f"expected 64-char hex PSK, got {psk!r}"
+
+
+def test_expect_client_carries_same_psk_as_assign():
+    """The PSK in EXPECT_CLIENT (relay-bound) must match the one in ASSIGN
+    (client-bound) — both sides must derive the same AEAD key."""
+    registry = RelayRegistry()
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    transport = FakeTransport(ack_for_relay={200: ControlMessage(kind=Kind.EXPECT_ACK, body={})})
+    svc = CoordinatorService(
+        transport=transport,
+        registry=registry,
+        config=ServiceConfig(hello_timeout=1.0, expect_timeout=1.0),
+        new_session_id=lambda: "s-psk-test",
+    )
+    svc.start()
+
+    call = FakeIncomingCall(peer_id=42, inbox=[make_hello(client_id="dev-1")])
+    transport.deliver(call)
+
+    assign_psk = call.sent[0].get("session_psk")
+    _, expect_client_msg = transport.outbound[0]
+    expect_psk = expect_client_msg.get("session_psk")
+
+    assert assign_psk and expect_psk, "both messages must carry a session_psk"
+    assert assign_psk == expect_psk, (
+        f"PSK mismatch: ASSIGN has {assign_psk!r}, EXPECT_CLIENT has {expect_psk!r}; "
+        "client and relay would use different AEAD keys"
+    )
+
+
+def test_each_session_gets_distinct_psk():
+    """Two consecutive sessions must get distinct PSKs — no reuse."""
+    registry = RelayRegistry()
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=2))
+    transport = FakeTransport(ack_for_relay={200: ControlMessage(kind=Kind.EXPECT_ACK, body={})})
+    counter = {"n": 0}
+
+    def new_sid():
+        counter["n"] += 1
+        return f"s-{counter['n']}"
+
+    svc = CoordinatorService(
+        transport=transport,
+        registry=registry,
+        config=ServiceConfig(hello_timeout=1.0, expect_timeout=1.0),
+        new_session_id=new_sid,
+    )
+    svc.start()
+
+    psks = []
+    for client in (42, 43):
+        call = FakeIncomingCall(peer_id=client, inbox=[make_hello(client_id=str(client))])
+        transport.deliver(call)
+        psks.append(call.sent[0].get("session_psk"))
+
+    assert len(set(psks)) == 2, f"PSKs were reused across sessions: {psks}"

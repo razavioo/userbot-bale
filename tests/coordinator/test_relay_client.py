@@ -82,7 +82,7 @@ def test_consume_returns_session_id_when_expected():
     s = ExpectedClientSet()
     s.register(client_peer_id=42, session_id="s1", expires_in_secs=30)
     result = s.consume(42)
-    assert result == "s1"
+    assert result == ("s1", "")
 
 
 def test_consume_removes_entry():
@@ -108,7 +108,7 @@ def test_register_overrides_previous():
     s = ExpectedClientSet()
     s.register(client_peer_id=42, session_id="old", expires_in_secs=30)
     s.register(client_peer_id=42, session_id="new", expires_in_secs=30)
-    assert s.consume(42) == "new"
+    assert s.consume(42) == ("new", "")
 
 
 # ---- CoordinatorReporter tests -------------------------------------------
@@ -267,7 +267,7 @@ def test_handle_coordinator_instruction_registers_expected(monkeypatch):
         identity="relay-test",
     )
 
-    assert expected.consume(42) == "s1"
+    assert expected.consume(42) == ("s1", "")
 
 
 def test_handle_coordinator_instruction_sends_ack(monkeypatch):
