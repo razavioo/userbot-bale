@@ -49,6 +49,9 @@ class _FakeSession:
         if q is not None:
             q.put(None)
 
+    def is_terminal(self) -> bool:
+        return False
+
 
 def _pair() -> tuple[_FakeSession, _FakeSession]:
     a, b = _FakeSession(), _FakeSession()
