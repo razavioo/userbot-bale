@@ -687,6 +687,8 @@ def _print_health_block(fields: dict[str, str]) -> None:
         ("dns_ready", "dns"),
         ("carrier_bypass_ready", "carrier_bypass"),
         ("egress_ready", "egress"),
+        ("kill_switch", "kill_switch"),
+        ("kill_switch_backend", "kill_switch_backend"),
     ]
     print("path_health:")
     for key, label in labels:

@@ -31,6 +31,163 @@ from baleobala.control.store import JsonStore
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
+_NFT_TABLE = "baleobala_ks"
+
+
+class LinuxKillSwitch:
+    """Block all outbound traffic that does not exit through the VPN interface.
+
+    Uses nftables when available, falls back to iptables.  The kill switch is
+    installed after the TUN interface is up so that the carrier bypass IPs
+    (already resolved to numeric addresses by the resolver) can be whitelisted
+    before the drop rule fires.
+
+    The class is designed to be injected into :class:`LinuxTunSession` for
+    testing — callers can pass a fake ``runner`` and ``nft_runner`` to drive it
+    without real kernel access.
+    """
+
+    def __init__(
+        self,
+        *,
+        runner: Runner | None = None,
+        nft_runner: Runner | None = None,
+    ) -> None:
+        self._runner = runner or subprocess.run
+        self._nft_runner = nft_runner or subprocess.run
+        self._backend: str | None = None  # "nftables" | "iptables" | None
+        self._tun: str | None = None
+        self._bypass_ips: tuple[str, ...] = ()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def apply(self, tun: str, bypass_ips: tuple[str, ...] = ()) -> None:
+        """Install kill-switch rules for *tun*, whitelisting *bypass_ips*."""
+        self._tun = tun
+        self._bypass_ips = bypass_ips
+        if self._has_nftables():
+            self._apply_nftables(tun, bypass_ips)
+            self._backend = "nftables"
+        elif self._has_iptables():
+            self._apply_iptables(tun, bypass_ips)
+            self._backend = "iptables"
+
+    def remove(self) -> None:
+        """Remove all kill-switch rules installed by :meth:`apply`."""
+        if self._backend == "nftables":
+            self._remove_nftables()
+        elif self._backend == "iptables":
+            self._remove_iptables(self._tun or "", self._bypass_ips)
+        self._backend = None
+        self._tun = None
+        self._bypass_ips = ()
+
+    @property
+    def active(self) -> bool:
+        return self._backend is not None
+
+    @property
+    def backend(self) -> str | None:
+        return self._backend
+
+    # ------------------------------------------------------------------
+    # nftables implementation
+    # ------------------------------------------------------------------
+
+    def _has_nftables(self) -> bool:
+        r = self._runner(["which", "nft"], check=False, capture_output=True, text=True)
+        return r.returncode == 0
+
+    def _apply_nftables(self, tun: str, bypass_ips: tuple[str, ...]) -> None:
+        # Flush any previous baleobala table, then recreate.
+        self._nft_runner(
+            ["nft", "delete", "table", "inet", _NFT_TABLE],
+            check=False, capture_output=True, text=True,
+        )
+        bypass_set = ""
+        if bypass_ips:
+            elems = ", ".join(bypass_ips)
+            bypass_set = (
+                f"  set bypass4 {{\n"
+                f"    type ipv4_addr\n"
+                f"    flags interval\n"
+                f"    elements = {{ {elems} }}\n"
+                f"  }}\n"
+            )
+        bypass_rule = "    ip daddr @bypass4 accept\n" if bypass_ips else ""
+        ruleset = (
+            f"table inet {_NFT_TABLE} {{\n"
+            f"{bypass_set}"
+            f"  chain output {{\n"
+            f"    type filter hook output priority -100; policy accept;\n"
+            f"    oif lo accept\n"
+            f"    oif \"{tun}\" accept\n"
+            f"{bypass_rule}"
+            f"    drop\n"
+            f"  }}\n"
+            f"}}"
+        )
+        self._nft_runner(
+            ["nft", "-f", "-"],
+            input=ruleset, check=False, capture_output=True, text=True,
+        )
+
+    def _remove_nftables(self) -> None:
+        self._nft_runner(
+            ["nft", "delete", "table", "inet", _NFT_TABLE],
+            check=False, capture_output=True, text=True,
+        )
+
+    # ------------------------------------------------------------------
+    # iptables fallback
+    # ------------------------------------------------------------------
+
+    def _has_iptables(self) -> bool:
+        r = self._runner(["which", "iptables"], check=False, capture_output=True, text=True)
+        return r.returncode == 0
+
+    def _apply_iptables(self, tun: str, bypass_ips: tuple[str, ...]) -> None:
+        # Insert at the top of OUTPUT so they take precedence.
+        for ip in reversed(bypass_ips):
+            self._runner(
+                ["iptables", "-I", "OUTPUT", "-d", ip, "-j", "ACCEPT"],
+                check=False, capture_output=True, text=True,
+            )
+        self._runner(
+            ["iptables", "-I", "OUTPUT", "-o", tun, "-j", "ACCEPT"],
+            check=False, capture_output=True, text=True,
+        )
+        self._runner(
+            ["iptables", "-I", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
+            check=False, capture_output=True, text=True,
+        )
+        self._runner(
+            ["iptables", "-A", "OUTPUT", "-j", "DROP"],
+            check=False, capture_output=True, text=True,
+        )
+
+    def _remove_iptables(self, tun: str, bypass_ips: tuple[str, ...]) -> None:
+        self._runner(
+            ["iptables", "-D", "OUTPUT", "-j", "DROP"],
+            check=False, capture_output=True, text=True,
+        )
+        if tun:
+            self._runner(
+                ["iptables", "-D", "OUTPUT", "-o", tun, "-j", "ACCEPT"],
+                check=False, capture_output=True, text=True,
+            )
+        self._runner(
+            ["iptables", "-D", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
+            check=False, capture_output=True, text=True,
+        )
+        for ip in bypass_ips:
+            self._runner(
+                ["iptables", "-D", "OUTPUT", "-d", ip, "-j", "ACCEPT"],
+                check=False, capture_output=True, text=True,
+            )
+
 
 @dataclass(frozen=True)
 class TunPlan:
@@ -46,6 +203,7 @@ class TunPlan:
     # promote this into a full-system VPN.
     routes: tuple[str, ...] = ()
     dns_servers: tuple[str, ...] = ()
+    kill_switch: bool = False
 
     @classmethod
     def full_tunnel(
@@ -55,6 +213,7 @@ class TunPlan:
         address: str = "10.77.0.2/24",
         mtu: int = 1400,
         dns_servers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9"),
+        kill_switch: bool = False,
     ) -> "TunPlan":
         return cls(
             name=name,
@@ -62,6 +221,7 @@ class TunPlan:
             mtu=mtu,
             routes=("0.0.0.0/1", "128.0.0.0/1"),
             dns_servers=dns_servers,
+            kill_switch=kill_switch,
         )
 
 
@@ -109,6 +269,7 @@ class LinuxTunSession:
         runner: Runner | None = None,
         resolver: SystemResolver | None = None,
         tun_opener: Callable[[str], object] | None = None,
+        kill_switch: LinuxKillSwitch | None = None,
     ) -> None:
         self.plan = plan or TunPlan()
         self._state_store = JsonStore(
@@ -117,6 +278,9 @@ class LinuxTunSession:
         self._runner = runner or subprocess.run
         self._resolver = resolver if resolver is not None else LinuxResolver()
         self._tun_opener = tun_opener
+        self._kill_switch = kill_switch if kill_switch is not None else (
+            LinuxKillSwitch(runner=runner or subprocess.run) if self.plan.kill_switch else None
+        )
         self._snapshot = _LinuxSnapshot()
         self._atexit_registered = False
         self._tun = None
@@ -186,7 +350,19 @@ class LinuxTunSession:
                     # have actually installed split-default routes.
                     if self.plan.routes:
                         self._add_uid_bypass_rule()
+                    # Kill switch: block all outbound traffic not exiting
+                    # through the TUN. Applied after bypass hosts are
+                    # resolved so their IPs can be whitelisted before the
+                    # drop rule fires.
+                    if self._kill_switch is not None and self.plan.kill_switch:
+                        bypass_ips = self._resolver.resolved_bypass_ips()
+                        self._kill_switch.apply(name, bypass_ips)
                 except Exception:
+                    if self._kill_switch is not None:
+                        try:
+                            self._kill_switch.remove()
+                        except Exception:
+                            pass
                     try:
                         self._resolver.restore()
                     except Exception:
@@ -236,6 +412,11 @@ class LinuxTunSession:
     def stop(self) -> None:
         if not self._snapshot.active:
             return
+        if self._kill_switch is not None:
+            try:
+                self._kill_switch.remove()
+            except Exception:
+                pass
         self._remove_uid_bypass_rule()
         try:
             self._resolver.restore()
@@ -257,6 +438,7 @@ class LinuxTunSession:
             pass
 
     def status(self) -> dict[str, str]:
+        ks = self._kill_switch
         return {
             "active": "yes" if self._snapshot.active else "no",
             "tun": self._snapshot.tun_name or self.plan.name,
@@ -266,6 +448,8 @@ class LinuxTunSession:
             "dns_servers": ",".join(self.plan.dns_servers),
             "routing_policy": "full-tunnel" if self.plan.routes else "link-local",
             "full_tunnel": "yes" if self.plan.routes else "no",
+            "kill_switch": "yes" if (ks is not None and ks.active) else ("configured" if self.plan.kill_switch else "no"),
+            "kill_switch_backend": ks.backend or "" if ks is not None else "",
             "state": "running" if self._snapshot.active else "stopped",
         }
 
@@ -605,12 +789,23 @@ class LinuxTunBackend:
         runtime_state_path: Path | None = None,
     ) -> None:
         if plan is None:
-            plan = TunPlan()
-            if os.environ.get("BALEOBALA_FULL_TUNNEL") in {"1", "yes", "true"}:
+            full_tunnel = os.environ.get("BALEOBALA_FULL_TUNNEL") in {"1", "yes", "true"}
+            kill_switch = os.environ.get("BALEOBALA_KILL_SWITCH") in {"1", "yes", "true"}
+            if not kill_switch:
+                try:
+                    from baleobala.control.app_control import load_network_policy
+                    policy = load_network_policy()
+                    kill_switch = getattr(policy, "kill_switch_mode", "off") not in {"off", "", None}
+                except Exception:
+                    pass
+            if full_tunnel:
                 plan = TunPlan(
                     routes=("0.0.0.0/1", "128.0.0.0/1"),
                     dns_servers=("1.1.1.1", "9.9.9.9"),
+                    kill_switch=kill_switch,
                 )
+            else:
+                plan = TunPlan(kill_switch=kill_switch)
         self._plan = plan
         self._session = session or LinuxTunSession(plan=self._plan)
         self._state_store = JsonStore(state_path or (config_dir() / "linux_backend.json"))
@@ -693,6 +888,8 @@ class LinuxTunBackend:
         payload["routes"] = session.get("routes", "")
         payload["routing_policy"] = session.get("routing_policy", "")
         payload["full_tunnel"] = session.get("full_tunnel", "no")
+        payload["kill_switch"] = session.get("kill_switch", "no")
+        payload["kill_switch_backend"] = session.get("kill_switch_backend", "")
         for key in (
             "transport_selected",
             "transport_previous",

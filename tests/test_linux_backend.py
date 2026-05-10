@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from baleobala.control.linux import LinuxTunBackend, LinuxTunSession, TunPlan
+from baleobala.control.linux import LinuxKillSwitch, LinuxTunBackend, LinuxTunSession, TunPlan
 from baleobala.control.resolver import (
     LinuxResolver,
     MacOSResolver,
@@ -226,3 +226,151 @@ def test_macos_resolver_configure_restore(tmp_path: Path) -> None:
     assert ["networksetup", "-setdnsservers", "Wi-Fi", "8.8.8.8"] in runner.calls
     r.restore()
     assert not r.active()
+
+
+# ---------------------------------------------------------------------------
+# LinuxKillSwitch tests
+# ---------------------------------------------------------------------------
+
+class FakeKsRunner:
+    """Records calls and controls which tools are 'installed'."""
+
+    def __init__(self, *, has_nft: bool = False, has_iptables: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self._has_nft = has_nft
+        self._has_iptables = has_iptables
+        self._nft_ruleset: str | None = None
+
+    def __call__(self, cmd, check=False, capture_output=True, text=True, input=None):  # noqa: ARG002, A002
+        self.calls.append(list(cmd))
+        if input is not None:
+            self._nft_ruleset = input
+        rc = 0
+        if cmd[:1] == ["which"]:
+            if cmd[1] == "nft" and self._has_nft:
+                return subprocess.CompletedProcess(cmd, 0, stdout="/usr/sbin/nft\n", stderr="")
+            if cmd[1] == "iptables" and self._has_iptables:
+                return subprocess.CompletedProcess(cmd, 0, stdout="/sbin/iptables\n", stderr="")
+            rc = 1
+        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="")
+
+
+def test_kill_switch_nftables_apply_remove() -> None:
+    runner = FakeKsRunner(has_nft=True)
+    ks = LinuxKillSwitch(runner=runner, nft_runner=runner)
+    ks.apply("vpn0", bypass_ips=("1.2.3.4", "5.6.7.8"))
+    assert ks.active
+    assert ks.backend == "nftables"
+    assert any("nft" in " ".join(c) and "-f" in c for c in runner.calls)
+    assert runner._nft_ruleset is not None
+    assert "vpn0" in runner._nft_ruleset
+    assert "1.2.3.4" in runner._nft_ruleset
+    assert "5.6.7.8" in runner._nft_ruleset
+    assert "drop" in runner._nft_ruleset
+
+    ks.remove()
+    assert not ks.active
+    assert ks.backend is None
+    assert any(c[:4] == ["nft", "delete", "table", "inet"] for c in runner.calls)
+
+
+def test_kill_switch_nftables_no_bypass_ips() -> None:
+    runner = FakeKsRunner(has_nft=True)
+    ks = LinuxKillSwitch(runner=runner, nft_runner=runner)
+    ks.apply("vpn0", bypass_ips=())
+    assert runner._nft_ruleset is not None
+    assert "bypass4" not in runner._nft_ruleset
+    assert "drop" in runner._nft_ruleset
+
+
+def test_kill_switch_iptables_fallback() -> None:
+    runner = FakeKsRunner(has_nft=False, has_iptables=True)
+    ks = LinuxKillSwitch(runner=runner, nft_runner=runner)
+    ks.apply("vpn0", bypass_ips=("10.0.0.1",))
+    assert ks.active
+    assert ks.backend == "iptables"
+    assert any(c == ["iptables", "-I", "OUTPUT", "-o", "vpn0", "-j", "ACCEPT"] for c in runner.calls)
+    assert any(c == ["iptables", "-I", "OUTPUT", "-d", "10.0.0.1", "-j", "ACCEPT"] for c in runner.calls)
+    assert any(c == ["iptables", "-A", "OUTPUT", "-j", "DROP"] for c in runner.calls)
+
+    ks.remove()
+    assert not ks.active
+    assert any(c == ["iptables", "-D", "OUTPUT", "-j", "DROP"] for c in runner.calls)
+
+
+def test_kill_switch_no_tool_available() -> None:
+    runner = FakeKsRunner(has_nft=False, has_iptables=False)
+    ks = LinuxKillSwitch(runner=runner, nft_runner=runner)
+    ks.apply("vpn0")
+    assert not ks.active
+    assert ks.backend is None
+
+
+def test_tun_session_applies_kill_switch_on_start(tmp_path: Path) -> None:
+    ks_runner = FakeKsRunner(has_nft=True)
+    ks = LinuxKillSwitch(runner=ks_runner, nft_runner=ks_runner)
+    session = LinuxTunSession(
+        plan=TunPlan(name="vpn0", routes=("0.0.0.0/1",), kill_switch=True),
+        state_path=tmp_path / "s.json",
+        runner=FakeRunner(existing_devices=("vpn0",), has_resolvectl=False),
+        resolver=NullResolver(),
+        tun_opener=lambda name: object(),
+        kill_switch=ks,
+    )
+    session.start()
+    assert ks.active
+    assert session.status()["kill_switch"] == "yes"
+    assert session.status()["kill_switch_backend"] == "nftables"
+    session.stop()
+    assert not ks.active
+    assert session.status()["kill_switch"] == "configured"
+
+
+def test_tun_session_removes_kill_switch_on_stop(tmp_path: Path) -> None:
+    ks_runner = FakeKsRunner(has_nft=True)
+    ks = LinuxKillSwitch(runner=ks_runner, nft_runner=ks_runner)
+    session = LinuxTunSession(
+        plan=TunPlan(name="vpn0", kill_switch=True),
+        state_path=tmp_path / "s.json",
+        runner=FakeRunner(existing_devices=("vpn0",)),
+        resolver=NullResolver(),
+        tun_opener=lambda name: object(),
+        kill_switch=ks,
+    )
+    session.start()
+    session.stop()
+    assert not ks.active
+    # Removal command was issued
+    assert any(c[:4] == ["nft", "delete", "table", "inet"] for c in ks_runner.calls)
+
+
+def test_tun_plan_kill_switch_propagates_to_session(tmp_path: Path) -> None:
+    session = LinuxTunSession(
+        plan=TunPlan(name="vpn0", kill_switch=False),
+        state_path=tmp_path / "s.json",
+        runner=FakeRunner(existing_devices=("vpn0",)),
+        resolver=NullResolver(),
+        tun_opener=lambda name: object(),
+    )
+    assert session.status()["kill_switch"] == "no"
+
+
+def test_linux_tun_backend_status_includes_kill_switch(tmp_path: Path) -> None:
+    ks_runner = FakeKsRunner(has_nft=True)
+    ks = LinuxKillSwitch(runner=ks_runner, nft_runner=ks_runner)
+    session = LinuxTunSession(
+        plan=TunPlan(name="vpn0", kill_switch=True),
+        state_path=tmp_path / "s.json",
+        runner=FakeRunner(existing_devices=("vpn0",)),
+        resolver=NullResolver(),
+        tun_opener=lambda name: object(),
+        kill_switch=ks,
+    )
+    backend = LinuxTunBackend(session=session, state_path=tmp_path / "b.json")
+    profile = VpnProfile(profile_id="p", name="p", backend="linux-tun")
+    backend.up(profile)
+    status = backend.status()
+    assert status["kill_switch"] == "yes"
+    assert status["kill_switch_backend"] == "nftables"
+    backend.down()
+    assert not ks.active
