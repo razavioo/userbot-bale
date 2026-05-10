@@ -45,6 +45,5 @@ native/macos/*.xcodeproj/xcuserdata/
 /web_js/
 /search_js.py
 
-# macOS Xcode project build + local config
-/native/macos/Config/
-/native/Config/
+# macOS Xcode project build + local config (per-machine overrides only)
+# Base.xcconfig and PacketTunnel.xcconfig are tracked — only local overrides go here
