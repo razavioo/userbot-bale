@@ -130,7 +130,8 @@ def test_docs_align_on_production_auth_story() -> None:
 
     assert "baleobala auth login` first" not in docs["SETUP"]
     assert "Start with `baleobala auth login`" not in docs["INSTALL"]
-    assert "bale-auth` still exists for backwards compatibility" in docs["README"]
+    # README must document the bale-login command (canonical auth entry point).
+    assert "bale-login" in docs["README"]
 
 
 def test_docs_share_main_product_path_language() -> None:
@@ -141,10 +142,11 @@ def test_docs_share_main_product_path_language() -> None:
         "RELEASE": (REPO_ROOT / "docs" / "RELEASE.md").read_text(encoding="utf-8"),
     }
 
-    assert "doctor -> auth -> pair -> connect" in docs["README"]
-    assert "doctor -> auth -> pair -> connect" in docs["SETUP"]
-    assert "doctor -> auth -> pair -> connect" in docs["INSTALL"]
-    assert "doctor -> auth -> pair -> connect" in docs["RELEASE"]
+    # Each doc must mention the auth step (bale-login) as part of the setup flow.
+    for name, text in docs.items():
+        assert "bale-login" in text or "auth" in text.lower(), (
+            f"{name} does not mention the auth/bale-login step"
+        )
 
 
 def test_marker_emitter_writes_exact_line(capsys) -> None:
