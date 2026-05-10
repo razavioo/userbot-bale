@@ -190,6 +190,35 @@ Each epoch carries `issued_at`, `refresh_after`, and `expires_at`. Clients shoul
 
 ---
 
+## Client matrix
+
+| Client | Status | Notes |
+|--------|--------|-------|
+| Android | **Production** | Signed release builds via `android-release.yml` on tag push |
+| macOS (`BaleobalaApp` + `BaleobalaPacketTunnel`) | **Production** | System VPN via `NEPacketTunnelProvider` |
+| macOS (`BaleobalaProxyApp`) | **Fallback** | SOCKS5 proxy when system extension unavailable |
+| PyQt GUI (`baleobala gui`) | **Maintained** | Canonical Linux desktop client; sign-out + reconnect parity with native apps |
+| CLI (`baleobala vpn …`) | **Maintained** | Power-user / scripting; reference flow for Linux |
+
+The PyQt GUI is **not** sunset — it remains the canonical Linux desktop client. Recent commits (sign-out confirmation in `55f1738`, ConnectView simplification in `aaff578`) show active maintenance.
+
+The reconnect policy for all clients is defined in [`src/baleobala/control/reconnect_policy.py`](../src/baleobala/control/reconnect_policy.py) and exposed via `baleobala coordinator describe`. Native clients should match these constants; the Android values in `BaleVpnService.kt` are the canonical reference.
+
+---
+
+## Coordinator HA (B5 — stretch)
+
+The current production deployment runs a single coordinator (SPOF). For HA:
+
+1. **Snapshot replication** — `RelayRegistry` already persists to `coordinator-state.json` ([registry.py](../src/baleobala/coordinator/registry.py)). Mount the state file on shared storage (NFS, S3 + s3fs) or rsync it to a standby host every 30 s.
+2. **Standby coordinator** — run a second `baleobala coordinator` process pointed at the same state file with `--standby` (TBD flag). It loads the snapshot but does not respond to HELLO until promoted.
+3. **Promotion** — DNS failover or a watchdog sets `--standby=false` on the standby and stops the primary.
+4. **Client retry** — clients that get no ASSIGN within `assign_timeout_secs` should retry with a secondary coordinator peer_id baked into the app build.
+
+This is explicitly **out of scope for v0.3** — single-coordinator operation is acceptable while relay enrollment and metrics give us > 99 % uptime in practice. Revisit when sustained > 100 concurrent users put real load on the coordinator process.
+
+---
+
 ## Version
 
 The canonical version string is in `VERSION` at the repo root. It is read by:

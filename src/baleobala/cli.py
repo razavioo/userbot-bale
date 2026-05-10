@@ -2576,9 +2576,12 @@ def cmd_coordinator_describe(args: argparse.Namespace) -> int:
         except (OSError, _json.JSONDecodeError) as exc:
             print(f"Warning: could not read relay secrets: {exc}", file=sys.stderr)
 
+    from baleobala.control.reconnect_policy import DEFAULT_RECONNECT_POLICY
+
     result = {
         "coordinator_peer_id": coordinator_peer_id,
         "relays": relays,
+        "reconnect_policy": DEFAULT_RECONNECT_POLICY.to_dict(),
     }
     print(_json.dumps(result, indent=2))
     return 0
