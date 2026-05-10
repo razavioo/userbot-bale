@@ -1,0 +1,30 @@
+# baleobala production topology
+# Edit this file to add, remove, or reconfigure nodes.
+# Run  scripts/deploy.py [--node <name>] [--dry-run]  to apply.
+
+coordinator:
+  host: 68.183.118.171
+  user: root
+  remote_path: /opt/baleobala
+  jwt_dir: /root/.baleobala/accounts
+  etc_dir: /etc/baleobala
+  # JWT file inside jwt_dir used for the coordinator identity
+  coordinator_jwt: account-1.jwt
+  install_script: scripts/install-systemd-relay.sh
+  role: coordinator
+
+relays:
+  - name: relay-ir-1
+    host: 68.183.118.171
+    user: root
+    remote_path: /opt/baleobala
+    jwt_dir: /root/.baleobala/accounts
+    etc_dir: /etc/baleobala
+    region: ir
+    wan_interface: eth0
+    # JWT files inside jwt_dir used for relay accounts (one per concurrent client slot)
+    relay_jwts:
+      - account-2.jwt
+      - account-3.jwt
+    install_script: scripts/install-systemd-relay.sh
+    role: relay
