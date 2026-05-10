@@ -2,6 +2,17 @@
 
 This directory holds the native macOS companion app and packet-tunnel extension scaffold, plus the shared configuration and transport contract that the Python control plane depends on.
 
+## Which app ships
+
+**`Baleobala.xcodeproj`** is the canonical production project. It contains two targets:
+
+- `BaleobalaApp` — the user-facing app that installs the VPN profile into System Settings and drives the tunnel lifecycle.
+- `BaleobalaPacketTunnel` — the `NEPacketTunnelProvider` system extension that owns kernel-level routing, DNS, and packet bridging to the Python carrier socket.
+
+**`BaleobalaProxy.xcodeproj`** (`BaleobalaProxyApp` target) is the SOCKS5 proxy fallback for environments where a full-device system VPN extension is not available (e.g., missing system-extension entitlement, enterprise MDM restriction). It wraps the Python `bale-proxy system` flow instead of using `NEPacketTunnelProvider`. Use it only when the main app cannot obtain system-extension approval.
+
+The rest of this document describes `Baleobala.xcodeproj` / `BaleobalaApp` unless noted.
+
 The native app is the system-control companion: it installs the packet-tunnel profile into System Settings, shows tunnel readiness, and starts or stops the macOS tunnel after sign-in and pairing are already handled in the shared CLI/Qt flow.
 
 ## Shape
@@ -9,6 +20,7 @@ The native app is the system-control companion: it installs the packet-tunnel pr
 - `BaleobalaApp/` is the user-facing macOS app that installs and controls the VPN profile.
 - `BaleobalaPacketTunnel/` is the `NEPacketTunnelProvider` extension that owns system networking.
 - `Shared/` contains the app-group constants, keychain helpers, tunnel manager, and Unix-socket client used by both targets.
+- `BaleobalaProxyApp/` is the SOCKS5 proxy fallback target (see "Which app ships" above).
 
 ## Design Notes
 
