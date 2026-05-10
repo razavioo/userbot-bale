@@ -80,6 +80,7 @@ class SystemResolver(Protocol):
     def configure(self, plan: RoutePlan) -> None: ...
     def restore(self) -> None: ...
     def active(self) -> bool: ...
+    def resolved_bypass_ips(self) -> tuple[str, ...]: ...
 
 
 class NullResolver:
@@ -103,6 +104,9 @@ class NullResolver:
     def remove_bypass_host(self, hostname: str) -> None:  # noqa: ARG002
         self._applied = False
 
+    def resolved_bypass_ips(self) -> tuple[str, ...]:
+        return ()
+
 
 class _BaseResolver:
     def __init__(
@@ -124,6 +128,14 @@ class _BaseResolver:
 
     def active(self) -> bool:
         return self._snapshot.applied
+
+    def resolved_bypass_ips(self) -> tuple[str, ...]:
+        seen: list[str] = []
+        for ips in self._snapshot.bypass_hosts.values():
+            for ip in ips:
+                if ip not in seen:
+                    seen.append(ip)
+        return tuple(seen)
 
     def _persist(self) -> None:
         self._state_store.save(self._snapshot.to_dict())
