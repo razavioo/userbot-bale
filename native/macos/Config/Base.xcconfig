@@ -1,0 +1,9 @@
+// Base configuration shared by all baleobala macOS targets.
+
+BALEOBALA_APP_BUNDLE_ID = com.baleobala.vpn
+BALEOBALA_APP_GROUP_IDENTIFIER = group.com.baleobala.vpn
+BALEOBALA_PACKET_TUNNEL_BUNDLE_ID = $(BALEOBALA_APP_BUNDLE_ID).packet-tunnel
+
+SWIFT_VERSION = 5.9
+MACOSX_DEPLOYMENT_TARGET = 13.0
+ENABLE_HARDENED_RUNTIME = YES

@@ -2549,6 +2549,41 @@ def cmd_coordinator_list_relays(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coordinator_describe(args: argparse.Namespace) -> int:
+    """Print coordinator peer_id and enrolled relays as JSON.
+
+    Used by clients during onboarding to discover the coordinator peer_id and
+    the list of relay peer_ids without any manual configuration.
+    """
+    from baleobala.control.paths import config_dir
+    from baleobala.control.coordinator_config import load_coordinator_peer_id
+    import json as _json
+
+    coordinator_peer_id = load_coordinator_peer_id()
+
+    secrets_path = config_dir() / "coordinator-relay-secrets.json"
+    relays: list[dict] = []
+    if secrets_path.exists():
+        try:
+            secrets: dict = _json.loads(secrets_path.read_text())
+            for relay_id, info in secrets.items():
+                relays.append({
+                    "relay_id": relay_id,
+                    "peer_id": info.get("peer_id"),
+                    "capacity": info.get("capacity", 1),
+                    "region": info.get("region", ""),
+                })
+        except (OSError, _json.JSONDecodeError) as exc:
+            print(f"Warning: could not read relay secrets: {exc}", file=sys.stderr)
+
+    result = {
+        "coordinator_peer_id": coordinator_peer_id,
+        "relays": relays,
+    }
+    print(_json.dumps(result, indent=2))
+    return 0
+
+
 def cmd_bench_tunnel(args: argparse.Namespace) -> int:
     """Run the UDP tunnel throughput benchmark."""
     from baleobala.bench.tunnel import run_bench
@@ -3020,6 +3055,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="list enrolled relays from the coordinator secrets file",
     )
     coord_list.set_defaults(func=cmd_coordinator_list_relays)
+
+    coord_describe = coord_sub.add_parser(
+        "describe",
+        help="print coordinator peer_id and enrolled relay list as JSON (used by client onboarding)",
+    )
+    coord_describe.set_defaults(func=cmd_coordinator_describe)
 
     bt = sub.add_parser(
         "bale-tunnel",

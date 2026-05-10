@@ -1,0 +1,6 @@
+#include "Base.xcconfig"
+
+PRODUCT_NAME = BaleobalaPacketTunnel
+PRODUCT_BUNDLE_IDENTIFIER = $(BALEOBALA_PACKET_TUNNEL_BUNDLE_ID)
+INFOPLIST_FILE = ../macos/BaleobalaPacketTunnel/Info.plist
+CODE_SIGN_ENTITLEMENTS = ../macos/BaleobalaPacketTunnel/BaleobalaPacketTunnel.entitlements
