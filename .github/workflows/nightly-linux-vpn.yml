@@ -74,3 +74,14 @@ jobs:
         with:
           name: vpn-netns-artifacts-tunnel-pair
           path: ${{ runner.temp }}/netns-artifacts
+
+      - name: Bench tunnel (unit — loopback, no VPN)
+        run: python3 -m pytest tests/test_bench_tunnel.py -q
+
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: ${{ runner.temp }}/bench-*.json
+          if-no-files-found: ignore

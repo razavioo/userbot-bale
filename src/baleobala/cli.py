@@ -2547,6 +2547,62 @@ def cmd_coordinator_list_relays(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bench_tunnel(args: argparse.Namespace) -> int:
+    """Run the UDP tunnel throughput benchmark."""
+    from baleobala.bench.tunnel import run_bench
+
+    baseline_kbps: float | None = None
+    if args.baseline_file:
+        try:
+            prev = json.loads(Path(args.baseline_file).read_text())
+            baseline_kbps = float(prev.get("throughput_kbps", 0) or 0) or None
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bench: could not read baseline file %s: %s", args.baseline_file, exc)
+
+    log.info(
+        "bench: starting tunnel benchmark target=%s port=%d duration=%.0fs "
+        "concurrency=%d frame=%dB",
+        args.target, args.port, args.duration, args.concurrency, args.frame_size,
+    )
+    result = run_bench(
+        target=args.target,
+        port=args.port,
+        duration=args.duration,
+        concurrency=args.concurrency,
+        frame_size=args.frame_size,
+        baseline_kbps=baseline_kbps,
+    )
+    body = json.dumps(result, indent=2)
+    if args.out:
+        Path(args.out).write_text(body)
+        log.info("bench: results written to %s", args.out)
+    else:
+        print(body)
+
+    if result.get("regression"):
+        log.warning(
+            "bench: REGRESSION — throughput %.1f kB/s is below 80 %% of baseline %.1f kB/s",
+            result["throughput_kbps"], baseline_kbps,
+        )
+        return 1
+    log.info(
+        "bench: done throughput=%.1f kB/s loss=%.1f%% rtt_p50=%.1f ms rtt_p95=%.1f ms",
+        result["throughput_kbps"],
+        result["loss_fraction"] * 100,
+        result["rtt_p50_ms"],
+        result["rtt_p95_ms"],
+    )
+    return 0
+
+
+def cmd_bench_echo_server(args: argparse.Namespace) -> int:
+    """Run a UDP echo server (relay/exit-node side of the benchmark)."""
+    from baleobala.bench.tunnel import run_echo_server
+    log.info("bench: echo server listening on %s:%d", args.bind, args.port)
+    run_echo_server(port=args.port, bind=args.bind)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     from baleobala.bale.protos import WEB_API_KEY, WEB_APP_ID
 
@@ -3190,6 +3246,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     from baleobala.vpn.cli import add_tunnel_subparser
     add_tunnel_subparser(sub)
+
+    bench = sub.add_parser("bench", help="measure tunnel throughput and latency")
+    bench_sub = bench.add_subparsers(dest="bench_cmd", required=True)
+
+    bt = bench_sub.add_parser(
+        "tunnel",
+        help="send UDP probes through the active VPN tunnel and report throughput/RTT",
+    )
+    bt.add_argument("--target", required=True,
+                    help="IP reachable through the VPN (e.g. relay gateway 10.77.0.1)")
+    bt.add_argument("--port", type=int, default=4444,
+                    help="UDP port of the echo server on the target (default: 4444)")
+    bt.add_argument("--duration", type=float, default=30.0,
+                    help="benchmark duration in seconds (default: 30)")
+    bt.add_argument("--concurrency", type=int, default=1,
+                    help="parallel sender threads (default: 1)")
+    bt.add_argument("--frame-size", type=int, default=1024,
+                    help="UDP payload size in bytes (default: 1024)")
+    bt.add_argument("--baseline-file", default=None,
+                    help="JSON file with a prior result; regression flagged if "
+                         "throughput drops below 80 %% of baseline")
+    bt.add_argument("--out", default=None,
+                    help="write JSON result to this file (default: print to stdout)")
+    bt.set_defaults(func=cmd_bench_tunnel)
+
+    echo = bench_sub.add_parser(
+        "echo-server",
+        help="run a UDP echo server on the relay/exit-node side",
+    )
+    echo.add_argument("--port", type=int, default=4444)
+    echo.add_argument("--bind", default="0.0.0.0")
+    echo.set_defaults(func=cmd_bench_echo_server)
 
     return p
 
