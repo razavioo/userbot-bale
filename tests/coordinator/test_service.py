@@ -592,3 +592,140 @@ def test_each_session_gets_distinct_psk():
         psks.append(call.sent[0].get("session_psk"))
 
     assert len(set(psks)) == 2, f"PSKs were reused across sessions: {psks}"
+
+
+# --- B5: dispatch serialization + region affinity scenarios ----------------
+
+
+def test_concurrent_hellos_serialize_through_dispatch_lock():
+    """The coordinator runs each HELLO on the transport's caller thread,
+    so two clients arriving simultaneously would otherwise produce two
+    concurrent outbound LiveKit rooms — overloading the shared ffi
+    runtime. `_dispatch_lock` enforces one-at-a-time outbound dispatch.
+
+    The test injects a transport whose `quick_exchange` blocks just long
+    enough to expose any overlap, and asserts the observed concurrency
+    never exceeded 1."""
+    import threading
+    import time as _time
+
+    registry = RelayRegistry()
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=4))
+
+    in_flight = {"current": 0, "max": 0}
+    lock = threading.Lock()
+
+    class SerializingTransport(FakeTransport):
+        def quick_exchange(self, *, peer_id, send, timeout):
+            with lock:
+                in_flight["current"] += 1
+                in_flight["max"] = max(in_flight["max"], in_flight["current"])
+            try:
+                # Long enough that overlapping calls would clearly stack.
+                _time.sleep(0.1)
+                self.outbound.append((peer_id, send))
+                return ControlMessage(kind=Kind.EXPECT_ACK, body={})
+            finally:
+                with lock:
+                    in_flight["current"] -= 1
+
+    transport = SerializingTransport()
+    counter = {"n": 0}
+
+    def new_sid():
+        counter["n"] += 1
+        return f"s-{counter['n']}"
+
+    svc = CoordinatorService(
+        transport=transport,
+        registry=registry,
+        config=ServiceConfig(hello_timeout=2.0, expect_timeout=2.0),
+        new_session_id=new_sid,
+    )
+    svc.start()
+
+    threads = []
+    calls = []
+    for client in (42, 43, 44):
+        call = FakeIncomingCall(peer_id=client, inbox=[make_hello(client_id=str(client))])
+        calls.append(call)
+        threads.append(threading.Thread(target=transport.deliver, args=(call,)))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+
+    assert in_flight["max"] == 1, (
+        f"dispatch_lock did not serialize outbound exchanges; "
+        f"max concurrent = {in_flight['max']}"
+    )
+    # All three clients got assignments.
+    for call in calls:
+        assert call.sent and call.sent[0].kind == Kind.ASSIGN
+
+
+def test_pick_relay_falls_back_when_no_same_region_relay_is_free():
+    """Region affinity is a preference, not a requirement: if no
+    same-region relay has capacity, an any-region relay is chosen
+    rather than DENYing the client."""
+    from baleobala.coordinator.policy import pick_relay
+
+    registry = RelayRegistry()
+    # us-east is full, eu-west is free
+    registry.register(
+        RelaySlot(relay_id="r-east", peer_id=200, capacity=1, region="us-east")
+    )
+    registry.reserve_session(
+        session_id="s-full", client_peer_id=99, relay_id="r-east",
+        expires_in_secs=30,
+    )
+    registry.register(
+        RelaySlot(relay_id="r-west", peer_id=201, capacity=1, region="eu-west")
+    )
+
+    chosen = pick_relay(registry, client_region="us-east")
+    assert chosen is not None
+    assert chosen.relay_id == "r-west", (
+        "us-east was full; coordinator should have fallen back to eu-west"
+    )
+
+
+def test_pick_relay_uses_load_fraction_not_raw_in_use():
+    """A larger relay with the same in_use count must be preferred over
+    a smaller one, because load_fraction (in_use / capacity) is the
+    fairness metric, not the absolute count."""
+    from baleobala.coordinator.policy import pick_relay
+
+    registry = RelayRegistry()
+    # r-big has 3/10 = 0.3; r-small has 3/4 = 0.75 → r-big wins.
+    registry.register(RelaySlot(relay_id="r-big", peer_id=200, capacity=10))
+    for cid in (1, 2, 3):
+        registry.reserve_session(
+            session_id=f"big-{cid}", client_peer_id=cid, relay_id="r-big",
+            expires_in_secs=30,
+        )
+    registry.register(RelaySlot(relay_id="r-small", peer_id=201, capacity=4))
+    for cid in (11, 12, 13):
+        registry.reserve_session(
+            session_id=f"small-{cid}", client_peer_id=cid, relay_id="r-small",
+            expires_in_secs=30,
+        )
+
+    chosen = pick_relay(registry)
+    assert chosen is not None
+    assert chosen.relay_id == "r-big", (
+        "policy should prefer the less-loaded relay by fraction, "
+        "not the one with smaller absolute in_use"
+    )
+
+
+def test_pick_relay_returns_none_when_every_slot_is_full():
+    """All relays at capacity → no candidate → caller must DENY."""
+    from baleobala.coordinator.policy import pick_relay
+
+    registry = RelayRegistry()
+    registry.register(RelaySlot(relay_id="r1", peer_id=200, capacity=1))
+    registry.reserve_session(
+        session_id="s1", client_peer_id=42, relay_id="r1", expires_in_secs=30,
+    )
+    assert pick_relay(registry) is None

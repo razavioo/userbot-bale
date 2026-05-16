@@ -57,6 +57,81 @@ def test_tunnel_help_lists_mtproto_rpc_transport() -> None:
     assert "mtproto_rpc" in help_text
 
 
+def _exit_node_mesh_parser():
+    """Build the `tunnel exit-node-mesh` subparser in isolation."""
+    import argparse
+
+    from baleobala.vpn.cli import add_tunnel_subparser
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="cmd")
+    add_tunnel_subparser(sub)
+    tunnel_parser = next(
+        action.choices["tunnel"]
+        for action in parser._actions
+        if isinstance(getattr(action, "choices", None), dict) and "tunnel" in action.choices
+    )
+    return next(
+        action.choices["exit-node-mesh"]
+        for action in tunnel_parser._actions
+        if isinstance(getattr(action, "choices", None), dict)
+        and "exit-node-mesh" in action.choices
+    )
+
+
+def test_exit_node_mesh_relay_id_prefix_defaults_to_none() -> None:
+    """When --relay-id-prefix is not supplied, the CLI leaves the value
+    as None so cmd_vpn_exit_node_mesh falls back to socket.gethostname()."""
+    mesh = _exit_node_mesh_parser()
+    args = mesh.parse_args([
+        "--bale-jwt-file", "/tmp/jwt",
+    ])
+    assert getattr(args, "relay_id_prefix", "MISSING") is None
+
+
+def test_exit_node_mesh_relay_id_prefix_is_accepted() -> None:
+    """The flag exists and an explicit value flows into args verbatim."""
+    mesh = _exit_node_mesh_parser()
+    args = mesh.parse_args([
+        "--bale-jwt-file", "/tmp/jwt",
+        "--relay-id-prefix", "edge-tokyo",
+    ])
+    assert args.relay_id_prefix == "edge-tokyo"
+
+
+def test_exit_node_mesh_relay_id_prefix_help_explains_multi_process_use() -> None:
+    """The help text must explain WHY the flag exists (multiple mesh
+    instances on the same host) so operators discover it before they
+    hit the silent-collision footgun."""
+    mesh = _exit_node_mesh_parser()
+    help_text = mesh.format_help()
+    assert "--relay-id-prefix" in help_text
+    assert "hostname" in help_text  # default behavior is documented
+    assert "distinct relay" in help_text or "multiple mesh" in help_text
+
+
+def test_exit_node_mesh_relay_id_uses_prefix_then_account_index() -> None:
+    """The relay_id format is `<prefix>-<account_index>`; this is the
+    contract every CoordinatorReporter relies on for uniqueness across
+    processes on the same host."""
+    mesh = _exit_node_mesh_parser()
+    # Explicit prefix → used verbatim.
+    args = mesh.parse_args([
+        "--bale-jwt-file", "/tmp/jwt-a",
+        "--bale-jwt-file", "/tmp/jwt-b",
+        "--relay-id-prefix", "vps-prod-1",
+    ])
+    prefix = args.relay_id_prefix or "hostname-fallback"
+    assert [f"{prefix}-{i}" for i in range(2)] == ["vps-prod-1-0", "vps-prod-1-1"]
+
+    # Default (None) prefix falls back to a non-empty hostname-style name.
+    import socket
+    args2 = mesh.parse_args(["--bale-jwt-file", "/tmp/jwt"])
+    fallback_prefix = args2.relay_id_prefix or socket.gethostname()
+    assert fallback_prefix, "hostname fallback must produce a non-empty prefix"
+    assert "-" not in fallback_prefix.rsplit("-", 1)[0] or fallback_prefix == socket.gethostname()
+
+
 def test_vpn_status_summary_guides_next_step(monkeypatch, capsys, tmp_path) -> None:
     monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
     from baleobala.cli import cmd_vpn

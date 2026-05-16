@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+import random
 import socket
 import threading
 import time
+
+import pytest
 
 from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, QueuedTunnelTransport, TunnelRole, TunnelSession
 from baleobala.runtime.proxy import (
@@ -13,6 +17,7 @@ from baleobala.runtime.proxy import (
     Socks5ProxyServer,
     TunnelTcpRelay,
 )
+from baleobala.runtime.proxy import HEADER_SIZE, MAGIC, MAX_DATA_LEN, MAX_HOST_LEN
 
 PROXY_SECRET = b"proxy-secret"
 
@@ -504,6 +509,174 @@ def test_socks5_proxy_multiplexes_multiple_connections() -> None:
     right.close()
     server_thread.join(timeout=2.0)
     relay_thread.join(timeout=2.0)
+
+
+# --- ProxyPacket adversarial + property scenarios ----------------------------
+#
+# These exercise the wire format directly rather than going through SOCKS5.
+# Each test enumerates many cases through pytest.parametrize so a single
+# scenario stands in for a class of behaviors.
+
+
+_PACKET_TYPES_NO_HOST = [
+    ProxyPacketType.HELLO,
+    ProxyPacketType.OPEN_OK,
+    ProxyPacketType.DATA,
+    ProxyPacketType.CLOSE,
+    ProxyPacketType.ERROR,
+    ProxyPacketType.HELLO_ACK,
+]
+
+
+@pytest.mark.parametrize("ptype", _PACKET_TYPES_NO_HOST)
+@pytest.mark.parametrize("secret", [None, PROXY_SECRET])
+def test_proxy_packet_roundtrips_every_type_and_secret_mode(ptype, secret) -> None:
+    """Encode/decode is the identity for every packet type, with or
+    without encryption, for arbitrary conn_id/port/payload values."""
+    rng = random.Random(f"{ptype}-{secret!r}")
+    for _ in range(8):
+        payload = bytes(rng.randrange(256) for _ in range(rng.randrange(0, 4096)))
+        port = rng.randrange(0, 0xFFFF + 1) if ptype == ProxyPacketType.DATA else 0
+        packet = ProxyPacket(
+            packet_type=ptype,
+            conn_id=rng.randrange(0, 0x1_0000_0000),
+            port=port,
+            payload=payload,
+        )
+        decoded = ProxyPacket.decode(packet.encode(secret), secret)
+        assert decoded == packet
+
+
+@pytest.mark.parametrize("secret", [None, PROXY_SECRET])
+def test_proxy_packet_open_carries_host(secret) -> None:
+    """OPEN packets must roundtrip their host string; non-OPEN must not."""
+    rng = random.Random(f"open-{secret!r}")
+    for _ in range(8):
+        host_len = rng.randrange(1, MAX_HOST_LEN + 1)
+        host = "".join(chr(rng.randrange(0x21, 0x7E)) for _ in range(host_len))
+        packet = ProxyPacket(
+            packet_type=ProxyPacketType.OPEN,
+            conn_id=rng.randrange(0, 0x1_0000_0000),
+            host=host,
+            port=rng.randrange(1, 0x10000),
+        )
+        decoded = ProxyPacket.decode(packet.encode(secret), secret)
+        assert decoded is not None
+        assert decoded.host == host
+        assert decoded.port == packet.port
+
+
+@pytest.mark.parametrize("ptype", _PACKET_TYPES_NO_HOST)
+def test_proxy_packet_non_open_rejects_host(ptype) -> None:
+    """encode() guards: only OPEN may carry a host string."""
+    with pytest.raises(ValueError, match="only OPEN"):
+        ProxyPacket(packet_type=ptype, conn_id=1, host="evil.example").encode()
+
+
+def test_proxy_packet_oversized_fields_are_rejected() -> None:
+    """Length-prefix overflow guards: encode() refuses anything that
+    couldn't legally fit on the wire."""
+    with pytest.raises(ValueError, match="host too long"):
+        ProxyPacket(
+            packet_type=ProxyPacketType.OPEN,
+            conn_id=1,
+            host="x" * (MAX_HOST_LEN + 1),
+            port=80,
+        ).encode()
+    with pytest.raises(ValueError, match="payload too large"):
+        ProxyPacket(
+            packet_type=ProxyPacketType.DATA,
+            conn_id=1,
+            payload=b"x" * (MAX_DATA_LEN + 1),
+        ).encode()
+    with pytest.raises(ValueError, match="connection id"):
+        ProxyPacket(packet_type=ProxyPacketType.DATA, conn_id=-1).encode()
+    with pytest.raises(ValueError, match="connection id"):
+        ProxyPacket(packet_type=ProxyPacketType.DATA, conn_id=1 << 32).encode()
+    with pytest.raises(ValueError, match="port"):
+        ProxyPacket(
+            packet_type=ProxyPacketType.OPEN,
+            conn_id=1,
+            host="a",
+            port=1 << 16,
+        ).encode()
+
+
+def test_proxy_packet_decode_rejects_short_or_corrupt_buffers() -> None:
+    """Decoders are silent — they return None instead of raising — so a
+    flaky transport never crashes the pump loop."""
+    assert ProxyPacket.decode(b"") is None
+    assert ProxyPacket.decode(b"\x00" * (HEADER_SIZE - 1)) is None
+    # Right size, wrong magic.
+    blob = bytearray(HEADER_SIZE)
+    blob[0:2] = b"XY"
+    assert ProxyPacket.decode(bytes(blob)) is None
+    # Right magic, header claims a body that wasn't appended.
+    valid = ProxyPacket(
+        packet_type=ProxyPacketType.DATA, conn_id=1, payload=b"abc"
+    ).encode()
+    assert ProxyPacket.decode(valid[:HEADER_SIZE]) is None  # body missing
+
+
+def test_proxy_packet_rejects_tampered_hmac() -> None:
+    """A single bitflip anywhere in the encrypted blob invalidates the
+    HMAC and the packet is silently dropped (returns None)."""
+    rng = random.Random("tamper")
+    original = ProxyPacket(
+        packet_type=ProxyPacketType.DATA,
+        conn_id=99,
+        payload=b"sensitive payload" * 4,
+    ).encode(PROXY_SECRET)
+    # Tamper at several byte offsets and assert each one fails to decode.
+    for _ in range(16):
+        offset = rng.randrange(0, len(original))
+        bit = 1 << rng.randrange(8)
+        tampered = bytearray(original)
+        tampered[offset] ^= bit
+        if bytes(tampered) == original:  # no-op flip (impossible but defensive)
+            continue
+        assert ProxyPacket.decode(bytes(tampered), PROXY_SECRET) is None
+
+
+def test_proxy_packet_psk_mismatch_is_silent_drop() -> None:
+    """Mismatched PSK is rejected as if the packet were never sent —
+    no exception, no partial decode."""
+    encoded = ProxyPacket(
+        packet_type=ProxyPacketType.DATA, conn_id=1, payload=b"x"
+    ).encode(PROXY_SECRET)
+    assert ProxyPacket.decode(encoded, b"wrong-secret") is None
+    assert ProxyPacket.decode(encoded, None) is None  # encrypted but no secret given
+    # And the other direction: plaintext packets are dropped if a secret
+    # was expected.
+    plaintext = ProxyPacket(
+        packet_type=ProxyPacketType.DATA, conn_id=1, payload=b"x"
+    ).encode()
+    assert ProxyPacket.decode(plaintext, PROXY_SECRET) is None
+
+
+def test_proxy_packet_encrypted_payload_does_not_appear_in_ciphertext() -> None:
+    """Sanity: the keystream actually XORs the body. If encryption is
+    accidentally disabled, the plaintext would be visible."""
+    plaintext_marker = b"ATTACK_AT_DAWN"
+    encoded = ProxyPacket(
+        packet_type=ProxyPacketType.DATA,
+        conn_id=1,
+        payload=plaintext_marker * 8,
+    ).encode(PROXY_SECRET)
+    assert plaintext_marker not in encoded
+
+
+def test_proxy_packet_encrypted_uses_fresh_nonce_each_call() -> None:
+    """Two encrypts of the same packet must produce different ciphertext
+    (otherwise replay attackers see structure leaks)."""
+    pkt = ProxyPacket(
+        packet_type=ProxyPacketType.DATA, conn_id=1, payload=b"same payload"
+    )
+    a = pkt.encode(PROXY_SECRET)
+    b = pkt.encode(PROXY_SECRET)
+    assert a != b
+    assert ProxyPacket.decode(a, PROXY_SECRET) == pkt
+    assert ProxyPacket.decode(b, PROXY_SECRET) == pkt
 
 
 def test_http_connect_proxy_roundtrip_over_memory_tunnel() -> None:
