@@ -622,3 +622,92 @@ def test_sess_id_used_in_mesh_provision_matches_constant():
     assert sent, "no provisioning message sent"
     msg = MeshProvisionMessage.decode(sent[0])
     assert msg.session_id == DEFAULT_TUNNEL_SESS_ID
+
+
+# --- async probe teardown ---------------------------------------------------
+
+
+class _SlowStopLiveKitSession(FakeLiveKitSession):
+    """Variant whose .stop() blocks until released, so we can observe
+    whether `handle_call` waits for it or returns early."""
+
+    def __init__(self, *, stop_gate: threading.Event, **kwargs):
+        super().__init__(**kwargs)
+        self._stop_gate = stop_gate
+        self.stop_started_at: float | None = None
+        self.stop_returned_at: float | None = None
+
+    def stop(self) -> None:
+        self.stop_started_at = time.monotonic()
+        self._stop_gate.wait(timeout=10.0)
+        super().stop()
+        self.stop_returned_at = time.monotonic()
+
+
+def test_expect_client_teardown_does_not_block_handle_call_return():
+    """The active flag must clear and `handle_call` must return WITHOUT
+    waiting for probe.stop() to complete. In production, probe.stop()
+    can take up to 14 s when no other session is keeping the livekit-ffi
+    runtime warm — blocking on it inside the probe lock made the client's
+    inbound dial (which arrives ~100 ms after ASSIGN) skip-probe out
+    via the still-set _account_active flag."""
+    h = _Harness()
+    stop_gate = threading.Event()
+
+    # Swap the LK factory to produce a slow-stop variant for this test.
+    original_factory = h.handler._LiveKitSession  # type: ignore[attr-defined]
+
+    def slow_factory(**kwargs):
+        sess = _SlowStopLiveKitSession(stop_gate=stop_gate, **kwargs)
+        # Mirror the harness's pre-staging behavior.
+        if h._pending_expect_client is not None:
+            sess.expect_client_payload = h._pending_expect_client
+            h._pending_expect_client = None
+        if h._pending_remote_identities is not None:
+            sess.remote_identities = list(h._pending_remote_identities)
+            h._pending_remote_identities = None
+        h.created_sessions.append(sess)
+        return sess
+
+    h.handler._LiveKitSession = slow_factory  # type: ignore[attr-defined]
+    h.stage_expect_client(client_peer_id=42, session_id="s-async")
+
+    event = _fake_event(peer_id=999)
+    start = time.monotonic()
+    h.handler.handle_call(event)
+    elapsed = time.monotonic() - start
+
+    try:
+        # 1) handle_call must return promptly — well under the 10 s gate.
+        assert elapsed < 2.0, (
+            f"handle_call blocked {elapsed:.2f}s on probe teardown; "
+            "stop() should run on a background thread"
+        )
+
+        # 2) The active flag must already be clear — the next inbound
+        # client dial would otherwise be skip-probed.
+        assert h.relay_state.is_active(0) is False, (
+            "active flag still True after handle_call returned; "
+            "client's follow-up dial would skip-probe"
+        )
+
+        # 3) The probe is still in the middle of stop() (gate not released).
+        probe = h.created_sessions[-1]
+        assert probe.stop_started_at is not None, (
+            "background teardown thread didn't start"
+        )
+        assert probe.stop_returned_at is None, (
+            "probe.stop() completed before we released the gate — "
+            "the test's blocking gate is the wrong shape"
+        )
+    finally:
+        # 4) Release the gate; the background thread must complete cleanly.
+        stop_gate.set()
+
+    probe = h.created_sessions[-1]
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and probe.stop_returned_at is None:
+        time.sleep(0.01)
+    assert probe.stop_returned_at is not None, (
+        "background teardown thread never completed probe.stop()"
+    )

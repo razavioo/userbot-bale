@@ -336,3 +336,161 @@ def test_event_with_missing_peer_id_is_ignored(transport):
     import time
     time.sleep(0.1)
     assert received == []
+
+
+# --- inbound semaphore: bounds concurrent sessions, releases on every exit ---
+
+
+def _push_call(client, peer_id: int) -> None:
+    creds = CallCredentials(
+        url=f"wss://lk/{peer_id}", token=f"tok-{peer_id}", room=f"r-{peer_id}",
+        peer_id=peer_id,
+    )
+    client.listener(IncomingCallEvent(credentials=creds, peer_id=peer_id))
+
+
+def test_inbound_semaphore_caps_concurrent_sessions(transport):
+    """Bale's push system redelivers each notification 5-10×; without a
+    cap the livekit-ffi runtime stalls every per-session callback past
+    the HELLO recv timeout. The cap (3) drops further pushes immediately
+    so the in-flight sessions can complete cleanly.
+
+    This test holds 4 incoming calls inside the handler concurrently and
+    asserts only 3 were ever admitted."""
+    import time as _time
+
+    from baleobala.coordinator.bale_transport import MAX_CONCURRENT_INBOUND_SESSIONS
+
+    release = threading.Event()
+    admitted = []
+    admit_lock = threading.Lock()
+
+    def blocking_handler(call):
+        with admit_lock:
+            admitted.append(call.peer_id)
+        release.wait(timeout=2.0)
+
+    transport.listen(blocking_handler)
+    listen_client = transport._clients["jwt-listen"]
+
+    # Fire 1 more push than capacity. The extra one must be dropped.
+    for peer_id in range(100, 100 + MAX_CONCURRENT_INBOUND_SESSIONS + 1):
+        _push_call(listen_client, peer_id)
+
+    # Give dispatch threads a moment to enter the handler.
+    deadline = _time.time() + 1.0
+    while _time.time() < deadline and len(admitted) < MAX_CONCURRENT_INBOUND_SESSIONS:
+        _time.sleep(0.02)
+
+    assert len(admitted) == MAX_CONCURRENT_INBOUND_SESSIONS, (
+        f"expected exactly {MAX_CONCURRENT_INBOUND_SESSIONS} admitted, "
+        f"got {len(admitted)} ({admitted}). The 4th push should have been "
+        "dropped by the bounded semaphore."
+    )
+
+    release.set()
+
+
+def test_inbound_semaphore_releases_after_handler_returns(transport):
+    """After the handler returns, the slot is freed so the next push
+    can proceed. The cap is on concurrency, not lifetime."""
+    import time as _time
+
+    from baleobala.coordinator.bale_transport import MAX_CONCURRENT_INBOUND_SESSIONS
+
+    handled = threading.Event()
+    handled_count = {"n": 0}
+
+    def handler(call):
+        handled_count["n"] += 1
+        handled.set()
+
+    transport.listen(handler)
+    listen_client = transport._clients["jwt-listen"]
+
+    # Push 2× capacity, one at a time, waiting for each to be handled.
+    for i in range(MAX_CONCURRENT_INBOUND_SESSIONS * 2):
+        handled.clear()
+        _push_call(listen_client, 200 + i)
+        assert handled.wait(timeout=2.0), f"push {i} was not handled"
+    assert handled_count["n"] == MAX_CONCURRENT_INBOUND_SESSIONS * 2
+
+
+def test_inbound_semaphore_releases_when_handler_raises(transport):
+    """If the handler crashes the slot must still be freed; otherwise
+    each handler crash would permanently leak one inbound slot until
+    the relay was restarted."""
+    import time as _time
+
+    from baleobala.coordinator.bale_transport import MAX_CONCURRENT_INBOUND_SESSIONS
+
+    crashes = {"n": 0}
+
+    def crashing_handler(call):
+        crashes["n"] += 1
+        raise RuntimeError("handler boom")
+
+    transport.listen(crashing_handler)
+    listen_client = transport._clients["jwt-listen"]
+
+    # Drive more than capacity sequentially. After each push, wait for
+    # the call's session to be torn down (hangup ran → finally is about
+    # to release the slot). The next iteration confirms the slot is
+    # actually free; if it weren't, the new session would never be made.
+    target = MAX_CONCURRENT_INBOUND_SESSIONS + 2
+    for i in range(target):
+        before = len(FakeLiveKitSession.instances)
+        _push_call(listen_client, 300 + i)
+        deadline = _time.time() + 2.0
+        while _time.time() < deadline and len(FakeLiveKitSession.instances) <= before:
+            _time.sleep(0.01)
+        # If the slot leaked, the next push would silently drop and
+        # no new session would be created.
+        assert len(FakeLiveKitSession.instances) > before, (
+            f"push {i}: no new session created — semaphore did not "
+            f"release after prior crashes"
+        )
+        # Wait for the dispatch thread's finally to actually release.
+        new_session = FakeLiveKitSession.instances[-1]
+        deadline = _time.time() + 2.0
+        while _time.time() < deadline and not new_session.stopped:
+            _time.sleep(0.01)
+        assert new_session.stopped, f"push {i}: handler exception did not lead to hangup"
+    assert crashes["n"] == target
+
+
+def test_inbound_semaphore_releases_when_no_listener_registered(monkeypatch):
+    """Bale-push events that arrive before `listen()` is called still
+    spin up a LiveKitSession; the slot they consume must be released
+    when we discover there's no handler and hang up."""
+    from baleobala.coordinator import bale_transport as bt
+    from baleobala.coordinator.bale_transport import MAX_CONCURRENT_INBOUND_SESSIONS
+
+    monkeypatch.setattr(bt, "LiveKitSession", FakeLiveKitSession)
+    clients: dict[str, FakeBaleApiClient] = {}
+
+    def factory(*, jwt: str, ws_tls_config=None):
+        c = FakeBaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+        clients[jwt] = c
+        return c
+
+    t = bt.BaleCoordinatorTransport(
+        listen_jwt="jwt-l", dispatch_jwt="jwt-d", client_factory=factory,
+    )
+    # We need a listener to be present so _on_listen_event runs at all,
+    # but we'll race the no-listener branch by clearing it before each push.
+    t.listen(lambda _: None)
+    t._on_call = None  # simulate no-listener
+
+    for i in range(MAX_CONCURRENT_INBOUND_SESSIONS + 2):
+        _push_call(clients["jwt-l"], 400 + i)
+
+    # All sessions should be torn down (hangup → stop) because there was
+    # no listener; the cap must NOT have stuck any of them in limbo.
+    assert all(s.stopped for s in FakeLiveKitSession.instances), (
+        "no-listener path leaked a session past hangup"
+    )
+    assert len(FakeLiveKitSession.instances) == MAX_CONCURRENT_INBOUND_SESSIONS + 2, (
+        "fewer sessions than push events — semaphore did not release "
+        "between events with no listener"
+    )
