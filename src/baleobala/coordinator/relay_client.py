@@ -218,10 +218,14 @@ class CoordinatorReporter:
                 session.stop()
             except Exception:  # noqa: BLE001
                 pass
-            # session.stop() calls fut.result(timeout=6) + thread.join(timeout=8),
-            # so the Rust tokio runtime is fully torn down before we return.
-            # The old sleep(2.0) here was a conservative workaround added before
-            # the thread join was in place; it is no longer needed.
+            # 2s flush window: A7's "synchronous stop is enough" hypothesis
+            # was wrong. Without this pause, back-to-back HEARTBEAT sessions
+            # on the same Bale account race the Rust tokio runtime's async
+            # teardown, eventually causing "LiveKit room did not become
+            # ready within 45s" timeouts on the next attempt and
+            # 401 Unauthorized on the receiving coordinator.
+            # Live regression observed 2026-05-16 post-deploy.
+            _time.sleep(2.0)
 
 
 class ExpectedClientSet:
