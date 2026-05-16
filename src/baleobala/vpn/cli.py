@@ -92,8 +92,11 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
                     dest="relay_peer_ids",
                     help="Bale user_id for each --bale-jwt-file in order "
                          "(required when --coordinator-peer-id is set). Repeat once per JWT.")
-    mx.add_argument("--heartbeat-interval", type=float, default=60.0,
-                    help="seconds between HEARTBEAT messages to coordinator (default: 60)")
+    mx.add_argument("--heartbeat-interval", type=float, default=300.0,
+                    help="seconds between HEARTBEAT messages to coordinator (default: 300). "
+                         "Each heartbeat opens a fresh Bale call + LiveKit room — too-frequent "
+                         "heartbeats keep the coordinator account saturated and starve real "
+                         "client HELLOs. Pair with coordinator's --stale-timeout >= 3x this.")
     mx.add_argument("--relay-id-prefix", default=None,
                     help="prefix for the coordinator relay_id (default: hostname). "
                          "Use a unique value per process when running multiple mesh "
@@ -125,8 +128,10 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
     co.add_argument("--identity-prefix", default="coordinator")
     co.add_argument("--prune-interval", type=float, default=30.0,
                     help="seconds between stale-relay pruning passes")
-    co.add_argument("--stale-timeout", type=float, default=90.0,
-                    help="seconds since last heartbeat before a relay is dropped")
+    co.add_argument("--stale-timeout", type=float, default=900.0,
+                    help="seconds since last heartbeat before a relay is dropped (default: 900 = 15min). "
+                         "Must be > 3x the relay's --heartbeat-interval (default 300s on the relay side) "
+                         "so a single dropped heartbeat doesn't prune a healthy relay.")
     co.add_argument("--metrics-port", type=int, default=9202,
                     help="bind a Prometheus /metrics + /healthz endpoint on "
                          "127.0.0.1:<port>; pass 0 to disable (default: 9202)")

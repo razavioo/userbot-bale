@@ -206,6 +206,34 @@ The reconnect policy for all clients is defined in [`src/baleobala/control/recon
 
 ---
 
+## Known limitation — livekit-rtc single-process concurrency
+
+Live diagnosis on 2026-05-16 with two Android clients on Iranian carriers exposed the operating envelope of the current single-machine deployment:
+
+- The coordinator and mesh exit-node share one VPS. Both processes embed the Rust `livekit-rtc` runtime via the Python bindings, and each Bale call opens a new LiveKit room.
+- With heartbeats from 5 relay accounts every 60–120 s plus client HELLOs, the coordinator account hits ~40–60 % LiveKit-room-setup duty cycle. Concurrent `room.connect()` calls in the same process degrade from <1 s to >4 s.
+- Two clients tapping Connect within the same second produce one of: 401 from LiveKit (Bale-side token race), `coordinator did not respond to HELLO` (HELLO deadline crossed during dispatch queueing), or `coordinator denied connection: internal` (`relay did not ack EXPECT_CLIENT`).
+
+**Mitigations already in place** (commits `ef3d928`, `6de3189`, `c79dcc3`):
+
+1. 2 s post-stop sleep restored after every `session.stop()` to let the Rust runtime flush before the next room.
+2. `CoordinatorService._dispatch_lock` serializes outbound EXPECT_CLIENT dispatches so simultaneous clients can't race the same livekit-ffi runtime.
+3. `HELLO_TIMEOUT 45 s` and `EXPECT_TIMEOUT 15 s` size the deadlines to absorb the serialized queueing.
+4. Probe LiveKit teardown moved to a background thread in `relay_handler` so the per-account "active" flag is released the moment EXPECT_CLIENT acks — the legitimate VPN-client dial that arrives 100 ms later isn't rejected via skip_probe.
+5. `--heartbeat-interval` default raised 60 → 300 s and coordinator's `--stale-timeout` default raised 90 → 900 s so the coordinator account isn't constantly churning rooms.
+
+**What this buys:** single-client connect works reliably (verified end-to-end: x.com loads through the tunnel, HTTP 200 from Cloudflare).
+
+**What remains brittle:** concurrent client connects within the same ~10 s window may still fail with one of the three errors above — the first client almost always succeeds, the second sometimes has to retry.
+
+**Real architectural fix (not in v0.3):** one or more of:
+
+- Move the coordinator to its own VPS, separating its livekit-ffi runtime from the mesh's. Eliminates the cross-process contention on the same machine's network/CPU.
+- Add a process-wide async semaphore around all `LiveKitSession.start()` calls inside one process, capping concurrent room operations to 1–2 to prevent the runtime degradation.
+- Replace `livekit-rtc` (Python bindings over Rust FFI) with a pure-Python WebRTC stack or a thinner LiveKit signaling client.
+
+---
+
 ## Coordinator HA (B5 — stretch)
 
 The current production deployment runs a single coordinator (SPOF). For HA:
