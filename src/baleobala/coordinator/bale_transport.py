@@ -36,6 +36,15 @@ log = logging.getLogger(__name__)
 
 REMOTE_JOIN_TIMEOUT = 15.0
 DEFAULT_QUICK_EXCHANGE_CREDS_TIMEOUT = 30.0
+# Cap on concurrent inbound LiveKit sessions. Bale's push system frequently
+# re-delivers the same notification 5-10 times in a single second; without a
+# cap we briefly hold that many sessions inside the shared livekit-ffi Rust
+# runtime, which causes per-session data-channel callbacks to stall past the
+# HELLO recv timeout and legitimate client HELLOs are dropped. Cap at 2 so
+# two concurrent clients can be processed but Bale-push duplicates queue up
+# behind them instead of overloading the runtime.
+MAX_CONCURRENT_INBOUND_SESSIONS = 3
+INBOUND_QUEUE_WAIT_TIMEOUT = 30.0
 
 
 class BaleIncomingCall:
@@ -120,6 +129,9 @@ class BaleCoordinatorTransport(CoordinatorTransport):
         self._stopped = False
         self._stop_lock = threading.Lock()
         self._started = False
+        self._inbound_semaphore = threading.BoundedSemaphore(
+            MAX_CONCURRENT_INBOUND_SESSIONS,
+        )
 
     @staticmethod
     def _default_client_factory(*, jwt: str, ws_tls_config=None) -> BaleApiClient:
@@ -179,9 +191,14 @@ class BaleCoordinatorTransport(CoordinatorTransport):
                 session.stop()
             except Exception:
                 pass
-            # session.stop() is synchronous: it calls fut.result(timeout=6)
-            # then thread.join(timeout=8), so the Rust tokio runtime is fully
-            # torn down before we return. No sleep needed.
+            # 2s flush window: A7's "synchronous stop is enough" hypothesis
+            # was wrong under load. Without this pause, Bale's push-echo
+            # race can fire a second AcceptCall on the same call_id while
+            # the Rust runtime is still tearing down the previous room,
+            # and Bale issues a token that LiveKit then rejects with 401.
+            # Live regression observed 2026-05-16 post-deploy.
+            import time as _time
+            _time.sleep(2.0)
 
         if payload is None:
             return None
@@ -213,6 +230,17 @@ class BaleCoordinatorTransport(CoordinatorTransport):
         if peer_id is None:
             log.warning("coordinator: incoming call missing peer_id; ignoring")
             return
+        # Bound the number of concurrent inbound LiveKit sessions. If we are
+        # already at capacity, drop this push notification immediately — it
+        # is almost certainly a Bale push-system duplicate; the original call
+        # that triggered it is already being processed by another thread.
+        if not self._inbound_semaphore.acquire(blocking=False):
+            log.info(
+                "coordinator: at inbound capacity (%d); dropping duplicate "
+                "push for peer=%d",
+                MAX_CONCURRENT_INBOUND_SESSIONS, peer_id,
+            )
+            return
         creds = event.credentials
         identity = f"{self._identity_prefix}-in-{peer_id}"
         try:
@@ -235,10 +263,18 @@ class BaleCoordinatorTransport(CoordinatorTransport):
                 )
         except Exception:  # noqa: BLE001
             log.exception("coordinator: failed to bring up inbound session for peer=%d", peer_id)
+            try:
+                self._inbound_semaphore.release()
+            except ValueError:
+                pass
             return
         if self._on_call is None:
             log.warning("coordinator: received call but no listener; hanging up")
             call.hangup()
+            try:
+                self._inbound_semaphore.release()
+            except ValueError:
+                pass
             return
         threading.Thread(
             target=self._dispatch_call,
@@ -248,11 +284,17 @@ class BaleCoordinatorTransport(CoordinatorTransport):
         ).start()
 
     def _dispatch_call(self, call: BaleIncomingCall) -> None:
-        if self._on_call is None:
-            call.hangup()
-            return
         try:
-            self._on_call(call)
-        except Exception:  # noqa: BLE001
-            log.exception("coordinator: on_call handler crashed for peer=%d", call.peer_id)
-            call.hangup()
+            if self._on_call is None:
+                call.hangup()
+                return
+            try:
+                self._on_call(call)
+            except Exception:  # noqa: BLE001
+                log.exception("coordinator: on_call handler crashed for peer=%d", call.peer_id)
+                call.hangup()
+        finally:
+            try:
+                self._inbound_semaphore.release()
+            except ValueError:
+                pass
