@@ -387,14 +387,29 @@ class RelayCallHandler:
                             # the queued EXPECT_ACK actually lands on the
                             # SFU before room.disconnect() races it.
                             _time.sleep(0.5)
-                            try:
-                                probe.stop()
-                            except Exception:  # noqa: BLE001
-                                pass
+                            # Release the per-account flag immediately so the
+                            # legitimate VPN client's inbound dial — which
+                            # arrives within ~100 ms of the coordinator sending
+                            # ASSIGN — isn't rejected via skip_probe while we
+                            # wait for the probe LiveKit session to fully tear
+                            # down (which can take up to 14 s when there is no
+                            # other live session keeping the ffi runtime warm).
+                            # The teardown is moved to a background thread; it
+                            # still completes, just without holding the lock.
                             self._relay_state.transition(
                                 account_index, False, "expect-client-done", cid=cid,
                             )
                             self._bump("expect_client")
+                            def _async_stop(p=probe, _cid=cid):
+                                try:
+                                    p.stop()
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            threading.Thread(
+                                target=_async_stop,
+                                name=f"probe-teardown-{cid}",
+                                daemon=True,
+                            ).start()
                             return None  # coordinator instruction handled
                     except _CtrlError:
                         pass

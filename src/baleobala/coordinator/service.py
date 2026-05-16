@@ -67,8 +67,8 @@ _RELAYS_CAPACITY = gauge(
 )
 
 
-DEFAULT_HELLO_TIMEOUT = 15.0
-DEFAULT_EXPECT_TIMEOUT = 5.0
+DEFAULT_HELLO_TIMEOUT = 45.0
+DEFAULT_EXPECT_TIMEOUT = 15.0
 DEFAULT_SESSION_EXPIRES_SECS = 30
 
 
@@ -94,6 +94,14 @@ class CoordinatorService:
         self._config = config or ServiceConfig()
         self._new_session_id = new_session_id
         self._lock = threading.Lock()
+        # Serializes outbound EXPECT_CLIENT dispatches. The coordinator runs
+        # each HELLO in its own thread, so without this lock two clients
+        # arriving within the same second produce two concurrent outbound
+        # LiveKit rooms in this process. The shared livekit-ffi runtime
+        # overloads (connection setup degrades from <1 s to >4 s) and the
+        # second dispatch misses its 5 s EXPECT_ACK deadline → DENY to the
+        # second client. Serializing keeps each dispatch in isolation.
+        self._dispatch_lock = threading.Lock()
         self._stopped = False
         # Per-scrape gauges sourced from the live registry.
         try:
@@ -275,11 +283,12 @@ class CoordinatorService:
             session_psk=session_psk,
         )
         try:
-            ack = self._transport.quick_exchange(
-                peer_id=slot.peer_id,
-                send=msg,
-                timeout=self._config.expect_timeout,
-            )
+            with self._dispatch_lock:
+                ack = self._transport.quick_exchange(
+                    peer_id=slot.peer_id,
+                    send=msg,
+                    timeout=self._config.expect_timeout,
+                )
         except Exception:  # noqa: BLE001
             log.exception(
                 "coordinator: cid=%s quick_exchange to relay=%s failed",
