@@ -28,48 +28,67 @@ class Theme:
     info: str
     card_border: str
     shadow: str
-    font_family_ui: str = '"Avenir Next", "Segoe UI", sans-serif'
-    font_family_mono: str = '"SF Mono", Menlo, Consolas, monospace'
+    bg_base: str = "#08090C"
+    bg_surface: str = "#101114"
+    bg_elevated: str = "#16181D"
+    text_primary: str = "#F4F5F8"
+    text_secondary: str = "#9BA1AE"
+    text_tertiary: str = "#5C606A"
+    font_family_ui: str = '"Inter", "SF Pro Text", "Segoe UI", system-ui, sans-serif'
+    font_family_display: str = '"Inter Display", "SF Pro Display", "Inter", system-ui, sans-serif'
+    font_family_mono: str = '"JetBrains Mono", "SF Mono", Menlo, Consolas, monospace'
     base_font_px: int = 14
-    title_font_px: int = 28
-    section_font_px: int = 12
-    radius_card: int = 16
+    title_font_px: int = 30
+    section_font_px: int = 11
+    radius_card: int = 14
     radius_input: int = 10
 
 
 LIGHT = Theme(
     name="light",
-    accent="#0f766e",
-    accent_hover="#0b5f59",
-    accent_pressed="#094e49",
-    accent_soft="#d7f3ef",
-    ok="#1f7a44",
-    err="#b9384e",
-    info="#185c9c",
-    card_border="#d5ddd9",
-    shadow="rgba(16, 24, 40, 0.08)",
+    accent="#6948E8",
+    accent_hover="#7C5CFF",
+    accent_pressed="#5A39D6",
+    accent_soft="rgba(124, 92, 255, 0.10)",
+    ok="#0EA47A",
+    err="#E04565",
+    info="#2563EB",
+    card_border="#E8EAF0",
+    shadow="rgba(15, 17, 25, 0.05)",
+    bg_base="#FAFAFB",
+    bg_surface="#FFFFFF",
+    bg_elevated="#F4F5F8",
+    text_primary="#0B0C10",
+    text_secondary="#5A6072",
+    text_tertiary="#9098A6",
 )
 
 DARK = Theme(
     name="dark",
-    accent="#2ec4b6",
-    accent_hover="#27aa9d",
-    accent_pressed="#1f8d82",
-    accent_soft="rgba(46, 196, 182, 0.15)",
-    ok="#59c174",
-    err="#ff6b81",
-    info="#78b8ff",
-    card_border="#2f3744",
-    shadow="rgba(0, 0, 0, 0.35)",
+    accent="#7C5CFF",
+    accent_hover="#8E73FF",
+    accent_pressed="#6948E8",
+    accent_soft="rgba(124, 92, 255, 0.14)",
+    ok="#3FE0A0",
+    err="#FF5C7C",
+    info="#7EC2FF",
+    card_border="#1F232C",
+    shadow="rgba(0, 0, 0, 0.45)",
+    bg_base="#08090C",
+    bg_surface="#101114",
+    bg_elevated="#16181D",
+    text_primary="#F4F5F8",
+    text_secondary="#9BA1AE",
+    text_tertiary="#5C606A",
 )
 
 
 def detect_os_theme() -> Literal["light", "dark"]:
     if QApplication is None:
-        return "light"
+        return "dark"
     app = QApplication.instance()
     if app is None:
-        return "light"
+        return "dark"
     palette = app.palette()
     window = palette.color(QPalette.ColorRole.Window)
     return "dark" if window.valueF() < 0.5 else "light"
@@ -86,178 +105,322 @@ def stylesheet(theme: Theme) -> str:
 * {{
     font-family: {theme.font_family_ui};
     font-size: {theme.base_font_px}px;
+    color: {theme.text_primary};
 }}
 
 QMainWindow, QWidget#container, LoginView, ConnectView, QScrollArea, QAbstractScrollArea {{
-    background-color: #f4f8f7;
+    background-color: {theme.bg_base};
 }}
 
-QScrollArea {{
-    border: none;
-}}
+QScrollArea {{ border: none; }}
+QScrollArea > QWidget > QWidget {{ background-color: {theme.bg_base}; }}
 
-QScrollArea > QWidget > QWidget {{
-    background-color: #f4f8f7;
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 4px 2px 4px 0;
 }}
+QScrollBar::handle:vertical {{
+    background: {theme.card_border};
+    border-radius: 4px;
+    min-height: 32px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {theme.text_tertiary}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+    margin: 0 4px 2px 4px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {theme.card_border};
+    border-radius: 4px;
+    min-width: 32px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: {theme.text_tertiary}; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
 QWidget#card, QGroupBox, QFrame#banner-info, QFrame#banner-ok, QFrame#banner-err, QFrame#accent-panel, QFrame#hero-panel {{
-    background: palette(base);
+    background: {theme.bg_surface};
     border: 1px solid {theme.card_border};
     border-radius: {theme.radius_card}px;
 }}
 
 QFrame#dashboard-panel, QFrame#gate-panel, QFrame#settings-panel {{
-    background: rgba(15, 118, 110, 0.03);
-    border: 1px solid rgba(15, 118, 110, 0.12);
+    background: {theme.bg_surface};
+    border: 1px solid {theme.card_border};
     border-radius: {theme.radius_card}px;
 }}
 
 QFrame#accent-panel {{
-    background: rgba(15, 118, 110, 0.04);
+    background: {theme.bg_elevated};
+    border: 1px solid {theme.card_border};
 }}
 QFrame#hero-panel {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 {theme.accent_soft},
-        stop:1 rgba(15, 118, 110, 0.03));
-    border-color: rgba(15, 118, 110, 0.20);
+        stop:1 {theme.bg_surface});
+    border: 1px solid {theme.card_border};
 }}
 
 QGroupBox {{
-    margin-top: 8px;
-    padding: 20px 18px 18px 18px;
+    margin-top: 10px;
+    padding: 22px 20px 20px 20px;
     font-weight: 600;
+    color: {theme.text_primary};
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 14px;
+    left: 16px;
     padding: 0 6px;
+    color: {theme.text_secondary};
 }}
 
-QLabel#title {{ font-size: {theme.title_font_px}px; font-weight: 700; }}
-QLabel#subtitle {{ color: palette(placeholder-text); }}
+QLabel {{ color: {theme.text_primary}; background: transparent; }}
+QLabel#title {{
+    font-family: {theme.font_family_display};
+    font-size: {theme.title_font_px}px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: {theme.text_primary};
+}}
+QLabel#subtitle {{ color: {theme.text_secondary}; }}
 QLabel#section, QLabel#eyebrow {{
     font-size: {theme.section_font_px}px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 1.2px;
     text-transform: uppercase;
-    color: palette(placeholder-text);
+    color: {theme.text_tertiary};
 }}
-QLabel#summary {{ color: palette(placeholder-text); }}
-QLabel#accent-title {{ font-weight: 700; }}
-QLabel#accent-body {{ color: palette(text); }}
+QLabel#summary {{ color: {theme.text_secondary}; }}
+QLabel#accent-title {{ font-weight: 700; color: {theme.accent}; }}
+QLabel#accent-body {{ color: {theme.text_primary}; }}
 QLabel#readiness-ok {{
-    color: palette(text);
-    background: rgba(31, 122, 68, 0.08);
-    border: 1px solid rgba(31, 122, 68, 0.18);
+    color: {theme.text_primary};
+    background: rgba(63, 224, 160, 0.10);
+    border: 1px solid rgba(63, 224, 160, 0.28);
     border-radius: 10px;
-    padding: 8px 10px;
+    padding: 10px 12px;
 }}
 QLabel#readiness-pending {{
-    color: palette(text);
-    background: rgba(24, 92, 156, 0.08);
-    border: 1px solid rgba(24, 92, 156, 0.18);
+    color: {theme.text_secondary};
+    background: {theme.bg_elevated};
+    border: 1px solid {theme.card_border};
     border-radius: 10px;
-    padding: 8px 10px;
+    padding: 10px 12px;
 }}
 
 QLabel#banner-title {{ font-weight: 700; }}
-QLabel#banner-body {{ color: palette(text); }}
-QFrame#banner-info {{ background: {theme.accent_soft}; }}
-QFrame#banner-ok {{ background: rgba(31, 122, 68, 0.10); }}
-QFrame#banner-err {{ background: rgba(185, 56, 78, 0.10); }}
+QLabel#banner-body {{ color: {theme.text_secondary}; }}
+QFrame#banner-info {{
+    background: {theme.accent_soft};
+    border: 1px solid {theme.accent};
+}}
+QFrame#banner-ok {{
+    background: rgba(63, 224, 160, 0.10);
+    border: 1px solid rgba(63, 224, 160, 0.32);
+}}
+QFrame#banner-err {{
+    background: rgba(255, 92, 124, 0.10);
+    border: 1px solid rgba(255, 92, 124, 0.32);
+}}
 
-QLabel#status-info {{ color: palette(text); }}
+QLabel#status-info {{ color: {theme.text_secondary}; }}
 QLabel#status-ok {{ color: {theme.ok}; font-weight: 600; }}
 QLabel#status-err {{ color: {theme.err}; font-weight: 600; }}
 
 QLabel#step-done, QLabel#step-current, QLabel#step-pending {{
     border-radius: 10px;
-    padding: 8px 10px;
+    padding: 10px 12px;
     border: 1px solid {theme.card_border};
 }}
-QLabel#step-done {{ background: rgba(31, 122, 68, 0.10); color: {theme.ok}; font-weight: 700; }}
-QLabel#step-current {{ background: {theme.accent_soft}; color: {theme.accent}; font-weight: 700; border-color: {theme.accent}; }}
-QLabel#step-pending {{ color: palette(placeholder-text); background: palette(base); }}
+QLabel#step-done {{
+    background: rgba(63, 224, 160, 0.10);
+    color: {theme.ok};
+    font-weight: 700;
+    border-color: rgba(63, 224, 160, 0.32);
+}}
+QLabel#step-current {{
+    background: {theme.accent_soft};
+    color: {theme.accent};
+    font-weight: 700;
+    border-color: {theme.accent};
+}}
+QLabel#step-pending {{
+    color: {theme.text_tertiary};
+    background: {theme.bg_surface};
+}}
 
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {{
-    padding: 9px 11px;
-    border: 1px solid palette(mid);
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QAbstractSpinBox {{
+    padding: 10px 12px;
+    border: 1px solid {theme.card_border};
     border-radius: {theme.radius_input}px;
-    background: palette(base);
+    background: {theme.bg_surface};
+    color: {theme.text_primary};
     selection-background-color: {theme.accent};
+    selection-color: white;
+}}
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QPlainTextEdit:hover {{
+    border-color: {theme.text_tertiary};
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{
-    border-color: {theme.accent};
+    border: 1px solid {theme.accent};
+    background: {theme.bg_surface};
+}}
+QPlainTextEdit {{
+    font-family: {theme.font_family_mono};
+    font-size: 12px;
+}}
+QLineEdit::placeholder {{ color: {theme.text_tertiary}; }}
+
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox QAbstractItemView {{
+    background: {theme.bg_elevated};
+    color: {theme.text_primary};
+    border: 1px solid {theme.card_border};
+    border-radius: 8px;
+    padding: 4px;
+    selection-background-color: {theme.accent};
+    selection-color: white;
+    outline: 0;
 }}
 
 QPushButton, QToolButton {{
-    padding: 10px 16px;
+    padding: 10px 18px;
     border-radius: {theme.radius_input}px;
-    border: 1px solid palette(mid);
-    background: palette(button);
+    border: 1px solid {theme.card_border};
+    background: {theme.bg_surface};
+    color: {theme.text_primary};
+    font-weight: 500;
 }}
-QPushButton:hover, QToolButton:hover {{ background: palette(midlight); }}
-QPushButton:disabled, QToolButton:disabled {{ color: palette(placeholder-text); }}
+QPushButton:hover, QToolButton:hover {{
+    background: {theme.bg_elevated};
+    border-color: {theme.text_tertiary};
+}}
+QPushButton:pressed, QToolButton:pressed {{ background: {theme.bg_elevated}; }}
+QPushButton:disabled, QToolButton:disabled {{
+    color: {theme.text_tertiary};
+    background: {theme.bg_surface};
+}}
 
 QPushButton#primary {{
-    background: {theme.accent};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 {theme.accent_hover},
+        stop:1 {theme.accent});
     color: white;
-    border-color: {theme.accent};
+    border: 1px solid {theme.accent};
     font-weight: 700;
 }}
-QPushButton#primary:hover {{ background: {theme.accent_hover}; }}
-QPushButton#primary:pressed {{ background: {theme.accent_pressed}; }}
+QPushButton#primary:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 {theme.accent_hover},
+        stop:1 {theme.accent_hover});
+}}
+QPushButton#primary:pressed {{
+    background: {theme.accent_pressed};
+    border-color: {theme.accent_pressed};
+}}
+QPushButton#primary:disabled {{
+    background: {theme.bg_elevated};
+    color: {theme.text_tertiary};
+    border-color: {theme.card_border};
+}}
 
 QPushButton#hero-action {{
-    background: {theme.accent};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 {theme.accent_hover},
+        stop:1 {theme.accent});
     color: white;
-    border-color: {theme.accent};
-    font-weight: 800;
+    border: 1px solid {theme.accent};
+    font-weight: 700;
     font-size: 18px;
-    min-height: 58px;
-    padding: 14px 24px;
+    letter-spacing: 0.2px;
+    min-height: 60px;
+    padding: 16px 28px;
     border-radius: 16px;
 }}
-QPushButton#hero-action:hover {{ background: {theme.accent_hover}; }}
-QPushButton#hero-action:pressed {{ background: {theme.accent_pressed}; }}
+QPushButton#hero-action:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 {theme.accent_hover},
+        stop:1 {theme.accent_hover});
+}}
+QPushButton#hero-action:pressed {{
+    background: {theme.accent_pressed};
+    border-color: {theme.accent_pressed};
+}}
 QPushButton#hero-action:checked {{ background: {theme.accent_pressed}; }}
 QPushButton#hero-action:checked:hover {{ background: {theme.accent_hover}; }}
 
 QPushButton#danger {{
     background: transparent;
     color: {theme.err};
-    border-color: {theme.err};
+    border: 1px solid {theme.err};
     font-weight: 700;
 }}
-QPushButton#danger:hover {{ background: rgba(185, 56, 78, 0.08); }}
+QPushButton#danger:hover {{
+    background: rgba(255, 92, 124, 0.10);
+}}
 
-QStatusBar {{ color: palette(placeholder-text); }}
+QStatusBar {{
+    color: {theme.text_tertiary};
+    background: {theme.bg_base};
+    border-top: 1px solid {theme.card_border};
+}}
+
+QToolTip {{
+    background: {theme.bg_elevated};
+    color: {theme.text_primary};
+    border: 1px solid {theme.card_border};
+    border-radius: 6px;
+    padding: 6px 8px;
+}}
+
+QMenu {{
+    background: {theme.bg_elevated};
+    color: {theme.text_primary};
+    border: 1px solid {theme.card_border};
+    border-radius: 8px;
+    padding: 4px;
+}}
+QMenu::item {{
+    padding: 6px 14px;
+    border-radius: 6px;
+}}
+QMenu::item:selected {{ background: {theme.accent}; color: white; }}
+
+QCheckBox, QRadioButton {{ spacing: 8px; color: {theme.text_primary}; }}
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: 16px; height: 16px;
+    border: 1px solid {theme.card_border};
+    border-radius: 4px;
+    background: {theme.bg_surface};
+}}
+QRadioButton::indicator {{ border-radius: 8px; }}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+    background: {theme.accent};
+    border-color: {theme.accent};
+}}
 """
 
 
 def apply_theme(app, mode: Mode = "auto") -> Theme:
-    theme = LIGHT if mode != "dark" else DARK
+    theme = resolve_theme(mode)
     app.setStyle("Fusion")
     palette = app.palette()
-    if theme.name == "dark":
-        palette.setColor(QPalette.ColorRole.Window, QColor("#101820"))
-        palette.setColor(QPalette.ColorRole.Base, QColor("#161d27"))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#1c2431"))
-        palette.setColor(QPalette.ColorRole.Button, QColor("#202938"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#f4f7fb"))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor("#f4f7fb"))
-        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#f4f7fb"))
-        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#95a3b3"))
-    else:
-        palette.setColor(QPalette.ColorRole.Window, QColor("#f4f8f7"))
-        palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#edf4f2"))
-        palette.setColor(QPalette.ColorRole.Button, QColor("#ffffff"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#10211f"))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor("#10211f"))
-        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#10211f"))
-        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6b7c77"))
+    palette.setColor(QPalette.ColorRole.Window, QColor(theme.bg_base))
+    palette.setColor(QPalette.ColorRole.Base, QColor(theme.bg_surface))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(theme.bg_elevated))
+    palette.setColor(QPalette.ColorRole.Button, QColor(theme.bg_surface))
+    palette.setColor(QPalette.ColorRole.Text, QColor(theme.text_primary))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(theme.text_primary))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(theme.text_primary))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(theme.text_tertiary))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(theme.accent))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(theme.bg_elevated))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(theme.text_primary))
+    palette.setColor(QPalette.ColorRole.Link, QColor(theme.accent))
     app.setPalette(palette)
     app.setStyleSheet(stylesheet(theme))
     return theme

@@ -1,6 +1,29 @@
 import AppKit
 import SwiftUI
 
+private enum BrandTheme {
+    static let accent = Color(red: 124.0 / 255.0, green: 92.0 / 255.0, blue: 1.0)
+    static let accentHover = Color(red: 142.0 / 255.0, green: 115.0 / 255.0, blue: 1.0)
+    static let accentPressed = Color(red: 105.0 / 255.0, green: 72.0 / 255.0, blue: 232.0 / 255.0)
+    static let accentSoft = Color(red: 124.0 / 255.0, green: 92.0 / 255.0, blue: 1.0).opacity(0.14)
+    static let ok = Color(red: 63.0 / 255.0, green: 224.0 / 255.0, blue: 160.0 / 255.0)
+    static let warn = Color(red: 1.0, green: 192.0 / 255.0, blue: 102.0 / 255.0)
+    static let err = Color(red: 1.0, green: 92.0 / 255.0, blue: 124.0 / 255.0)
+    static let info = Color(red: 126.0 / 255.0, green: 194.0 / 255.0, blue: 1.0)
+
+    static let panelRadius: CGFloat = 14
+    static let tileRadius: CGFloat = 12
+    static let buttonRadius: CGFloat = 10
+
+    static var meterGradient: LinearGradient {
+        LinearGradient(
+            colors: [accentHover, info],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
+
 private enum AppSection: String, CaseIterable, Identifiable {
     case overview
     case relays
@@ -84,21 +107,27 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 920, minHeight: 640)
+        .tint(BrandTheme.accent)
         .onAppear {
             controller.loadState()
         }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Image(systemName: controller.isTunnelRunning ? "lock.shield.fill" : "lock.open")
-                .font(.system(size: 28, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(controller.isTunnelRunning ? .green : .secondary)
-                .frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .center, spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(BrandTheme.accentSoft)
+                    .frame(width: 48, height: 48)
+                Image(systemName: controller.isTunnelRunning ? "lock.shield.fill" : "lock.open")
+                    .font(.system(size: 24, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(controller.isTunnelRunning ? BrandTheme.ok : BrandTheme.accent)
+            }
+            VStack(alignment: .leading, spacing: 2) {
                 Text("baleobala")
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
+                    .kerning(-0.4)
                 Text("Native macOS VPN")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -124,9 +153,11 @@ struct ContentView: View {
                                 controller.primaryAction()
                             } label: {
                                 Label(controller.primaryActionTitle, systemImage: controller.primaryActionSystemImage)
+                                    .font(.body.weight(.semibold))
                                     .frame(minWidth: 210)
                             }
                             .buttonStyle(.borderedProminent)
+                            .tint(BrandTheme.accent)
                             .controlSize(.large)
 
                             Menu {
@@ -417,11 +448,13 @@ struct ContentView: View {
     }
 
     private var readinessGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             ForEach(controller.appState.readiness) { item in
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
                     Image(systemName: item.ready ? "checkmark.circle.fill" : "exclamationmark.circle")
-                        .foregroundStyle(item.ready ? .green : .orange)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(item.ready ? BrandTheme.ok : BrandTheme.warn)
+                        .font(.title3)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(item.label)
                             .font(.headline)
@@ -432,11 +465,11 @@ struct ContentView: View {
                     }
                     Spacer()
                 }
-                .padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(12)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(item.ready ? BrandTheme.ok.opacity(0.25) : .white.opacity(0.06), lineWidth: 1)
                 )
             }
         }
@@ -557,13 +590,17 @@ private struct Panel<Content: View>: View {
 
     var body: some View {
         content()
-            .padding(16)
+            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(.quaternary, lineWidth: 1)
+            .background(
+                RoundedRectangle(cornerRadius: BrandTheme.panelRadius, style: .continuous)
+                    .fill(.regularMaterial)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: BrandTheme.panelRadius, style: .continuous)
+                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 8)
     }
 }
 
@@ -575,8 +612,10 @@ private struct SectionTitle: View {
     }
 
     var body: some View {
-        Text(text)
-            .font(.headline)
+        Text(text.uppercased())
+            .font(.caption.weight(.bold))
+            .kerning(1.2)
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -584,27 +623,53 @@ private struct StatusBadge: View {
     var state: ConnectionState
     var text: String
 
+    @State private var pulse: Bool = false
+
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Circle()
                 .fill(color)
                 .frame(width: 8, height: 8)
+                .overlay(
+                    Circle()
+                        .stroke(color.opacity(0.35), lineWidth: 1)
+                        .scaleEffect(pulse ? 2.2 : 1.0)
+                        .opacity(pulse ? 0 : 0.9)
+                )
+                .onAppear {
+                    guard pulsing else { return }
+                    withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                        pulse = true
+                    }
+                }
             Text(text)
-                .font(.callout.weight(.medium))
+                .font(.callout.weight(.semibold))
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(.thinMaterial, in: Capsule())
+        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .background(
+            Capsule().fill(color.opacity(0.10))
+        )
+        .overlay(
+            Capsule().strokeBorder(color.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var pulsing: Bool {
+        switch state {
+        case .connecting, .reconnecting: return true
+        default: return false
+        }
     }
 
     private var color: Color {
         switch state {
         case .connected:
-            return .green
+            return BrandTheme.ok
         case .connecting, .reconnecting:
-            return .blue
+            return BrandTheme.accent
         case .blocked, .degraded, .expiredSession:
-            return .orange
+            return BrandTheme.warn
         default:
             return .secondary
         }
@@ -617,18 +682,21 @@ private struct ConnectionMeter: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(.quaternary, lineWidth: 12)
-                .frame(width: 132, height: 132)
+                .stroke(.white.opacity(0.06), lineWidth: 14)
+                .frame(width: 140, height: 140)
             Circle()
                 .trim(from: 0, to: progress)
-                .stroke(color, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                .stroke(strokeStyle, style: StrokeStyle(lineWidth: 14, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .frame(width: 132, height: 132)
+                .frame(width: 140, height: 140)
+                .shadow(color: glowColor.opacity(0.45), radius: 14, x: 0, y: 0)
+                .animation(.easeInOut(duration: 0.4), value: progress)
             Image(systemName: icon)
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(color)
+                .font(.system(size: 38, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(glowColor)
         }
-        .frame(width: 150, height: 150)
+        .frame(width: 160, height: 160)
     }
 
     private var progress: CGFloat {
@@ -644,14 +712,30 @@ private struct ConnectionMeter: View {
         }
     }
 
-    private var color: Color {
+    private var strokeStyle: AnyShapeStyle {
         switch state {
         case .connected:
-            return .green
+            return AnyShapeStyle(
+                LinearGradient(colors: [BrandTheme.ok, BrandTheme.ok.opacity(0.7)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
         case .connecting, .reconnecting:
-            return .blue
+            return AnyShapeStyle(BrandTheme.meterGradient)
         case .degraded, .blocked:
-            return .orange
+            return AnyShapeStyle(BrandTheme.warn)
+        default:
+            return AnyShapeStyle(Color.secondary)
+        }
+    }
+
+    private var glowColor: Color {
+        switch state {
+        case .connected:
+            return BrandTheme.ok
+        case .connecting, .reconnecting:
+            return BrandTheme.accent
+        case .degraded, .blocked:
+            return BrandTheme.warn
         default:
             return .gray
         }
@@ -677,14 +761,19 @@ private struct MetricTile: View {
     var systemImage: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .font(.title3)
-                .frame(width: 28)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(BrandTheme.accentSoft)
+                    .frame(width: 34, height: 34)
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(BrandTheme.accent)
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption)
+                Text(title.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .kerning(0.8)
                     .foregroundStyle(.secondary)
                 Text(value.isEmpty ? "n/a" : value)
                     .font(.headline)
@@ -693,11 +782,14 @@ private struct MetricTile: View {
             }
             Spacer()
         }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: BrandTheme.tileRadius, style: .continuous)
+                .fill(.thinMaterial)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 1)
+            RoundedRectangle(cornerRadius: BrandTheme.tileRadius, style: .continuous)
+                .strokeBorder(.white.opacity(0.06), lineWidth: 1)
         )
     }
 }
@@ -739,18 +831,32 @@ private struct EmptyStateRow: View {
     var detail: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "tray")
-                .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(BrandTheme.accentSoft)
+                    .frame(width: 34, height: 34)
+                Image(systemName: "tray")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(BrandTheme.accent)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.headline)
                 Text(detail)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
         }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: BrandTheme.tileRadius, style: .continuous)
+                .fill(.thinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: BrandTheme.tileRadius, style: .continuous)
+                .strokeBorder(.white.opacity(0.06), lineWidth: 1)
+        )
     }
 }
