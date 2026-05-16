@@ -34,13 +34,6 @@ android {
         val versionFile = rootProject.file("../../VERSION")
         versionName = if (versionFile.exists()) versionFile.readText().trim() else "0.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // Override via local.properties: coordinatorPeerId=<long>
-        // or via COORDINATOR_PEER_ID env var in CI/release builds.
-        val coordId = (project.findProperty("coordinatorPeerId")
-            ?: System.getenv("COORDINATOR_PEER_ID")
-            ?: "0").toString()
-        buildConfigField("long", "COORDINATOR_PEER_ID", "${coordId}L")
     }
 
     buildTypes {

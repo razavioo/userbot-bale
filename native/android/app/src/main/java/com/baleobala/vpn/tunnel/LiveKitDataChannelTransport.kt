@@ -154,12 +154,12 @@ class LiveKitDataChannelTransport(
 
         // Mesh provisioning handshake — the relay sends BBMESH1:{kind:"assign",...}
         // immediately after joining. We must ACK it before VPN traffic can flow.
-        // If BBMESH1 doesn't arrive within the window, the relay almost
-        // certainly rejected the call (e.g. coordinator's EXPECT_CLIENT
-        // hadn't propagated yet). Falling through with default values
-        // produces a tun_up that's connected to nothing — the carrier
-        // then sends frames into the void and only notices via
-        // tunnel_dead 25 s later. Throwing here lets the BaleVpnService
+        // If BBMESH1 doesn't arrive within the window, the relay refused
+        // the call (slot busy, account already in use, or PSK mismatch).
+        // Falling through with default values produces a tun_up that's
+        // connected to nothing — the carrier then sends frames into the
+        // void and only notices via tunnel_dead 25 s later. Throwing here
+        // lets the BaleVpnService
         // catch it and trigger an immediate retry instead.
         if (topic == "vpn") {
             val provRaw = inbox.poll(15_000, TimeUnit.MILLISECONDS)

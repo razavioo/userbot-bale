@@ -14,7 +14,6 @@ struct ProxyState: Equatable {
     var listenPort: Int = 1080
     var service: String = "Wi-Fi"
     var relayPeerId: String = ""
-    var coordinatorPeerId: String = ""
     var startedAt: Date? = nil
     /// True iff `networksetup -getsocksfirewallproxy <service>` reports
     /// Enabled: Yes. Distinguishes "subprocess running" from "macOS
@@ -31,7 +30,6 @@ struct ProxySettingsView: Equatable {
     var listenPort: Int = 1080
     var service: String = "Wi-Fi"
     var relayPeerId: String = ""
-    var coordinatorPeerId: String = ""
     var availableServices: [String] = []
 }
 
@@ -146,12 +144,11 @@ final class ProxyController: ObservableObject {
         runCommand("proxyStop")
     }
 
-    func saveSettings(port: Int, service: String, relayPeerId: String, coordinatorPeerId: String = "") {
+    func saveSettings(port: Int, service: String, relayPeerId: String) {
         runCommand("saveSettings", payload: [
             "listen_port": port,
             "network_service": service,
             "relay_peer_id": relayPeerId,
-            "coordinator_peer_id": coordinatorPeerId,
         ])
     }
 
@@ -196,7 +193,6 @@ final class ProxyController: ObservableObject {
             proxy.listenPort = (proxyDict["listen_port"] as? Int) ?? proxy.listenPort
             proxy.service = (proxyDict["service"] as? String) ?? proxy.service
             proxy.relayPeerId = (proxyDict["relay_peer_id"] as? String) ?? proxy.relayPeerId
-            proxy.coordinatorPeerId = (proxyDict["coordinator_peer_id"] as? String) ?? proxy.coordinatorPeerId
             proxy.systemProxyActive = (proxyDict["system_proxy_active"] as? Bool) ?? false
             proxy.systemProxyServer = (proxyDict["system_proxy_server"] as? String) ?? ""
             proxy.systemProxyPort = (proxyDict["system_proxy_port"] as? String) ?? ""
@@ -210,7 +206,6 @@ final class ProxyController: ObservableObject {
             settings.listenPort = (settingsDict["listen_port"] as? Int) ?? settings.listenPort
             settings.service = (settingsDict["network_service"] as? String) ?? settings.service
             settings.relayPeerId = (settingsDict["relay_peer_id"] as? String) ?? settings.relayPeerId
-            settings.coordinatorPeerId = (settingsDict["coordinator_peer_id"] as? String) ?? settings.coordinatorPeerId
         }
         recomputePhase()
     }

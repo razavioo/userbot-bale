@@ -49,7 +49,7 @@ class BaleVpnService : VpnService() {
     private var statsThread: Thread? = null
     private var startupHeartbeatThread: Thread? = null
     private var carrier: Carrier? = null
-    private var coordinatorPeerId: Long = 0L
+    private var relayPeerIdsConfigured: List<Long> = emptyList()
     @Volatile private var inflightWs: com.baleobala.vpn.bale.BaleWsClient? = null
     @Volatile private var inflightTransport: LiveKitDataChannelTransport? = null
     private val outQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>(1024)
@@ -130,10 +130,10 @@ class BaleVpnService : VpnService() {
             stopSelf()
             return
         }
-        coordinatorPeerId = AppSettings(this).coordinatorPeerId
-        if (coordinatorPeerId <= 0L) {
-            broadcast("error", "Coordinator peer ID not configured. Install the correct app build.")
-            updateNotification("failed", "Coordinator not configured")
+        relayPeerIdsConfigured = AppSettings(this).relayPeerIds
+        if (relayPeerIdsConfigured.isEmpty()) {
+            broadcast("error", "No relay peer IDs configured. Add at least one in Settings.")
+            updateNotification("failed", "No relays configured")
             stopSelf()
             return
         }
@@ -144,8 +144,8 @@ class BaleVpnService : VpnService() {
         // a different /30 attached than the one Android sends from, and
         // every return packet is silently dropped (Android shows
         // "connected" while moving 0 B).
-        broadcast("log", "carrier=bale coordinator=$coordinatorPeerId")
-        broadcast("log", "preflight: connecting to relay to receive provisioning…")
+        broadcast("log", "carrier=bale relays=${relayPeerIdsConfigured.size}")
+        broadcast("log", "preflight: dialing a relay from the configured list…")
         val preTransport: com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
         try {
             preTransport = makeBaleTransport() as com.baleobala.vpn.tunnel.LiveKitDataChannelTransport
@@ -214,50 +214,64 @@ class BaleVpnService : VpnService() {
     private fun makeBaleTransport(): Transport {
         val store = AuthStore(this)
         val jwt = store.jwt() ?: throw IllegalStateException("no Bale JWT stored")
-        val clientPeerId = store.userId()
-        if (clientPeerId == null || clientPeerId <= 0L) {
-            broadcast("log", "warn: no stored user_id; HELLO will rely on legacy callee-peer fallback")
-        }
-        val creds = BaleCallClient(
+        val clientPeerId = store.userId() ?: 0L
+
+        // Per-device deterministic shuffle so different installs of the
+        // app distribute load across relays without any coordination.
+        val shuffled = relayPeerIdsConfigured
+            .shuffled(java.util.Random(clientPeerId.takeIf { it > 0L } ?: System.currentTimeMillis()))
+
+        val call = BaleCallClient(
             jwt = jwt,
             onLog = { broadcast("log", it) },
             onWsCreated = { inflightWs = it },
-        ).requestRelayAssignment(
-            coordinatorPeerId = coordinatorPeerId,
-            clientId = "android-vpn",
-            appContext = applicationContext,
-            clientPeerId = clientPeerId,
-            timeoutMs = STARTCALL_TIMEOUT_MS,
         )
-        // Bale call done; release the WS reference so a later cancel only
-        // touches the LiveKit transport.
-        inflightWs = null
-        broadcast("log", "joining LiveKit room=${creds.room.ifEmpty { "(unknown)" }}")
-        val tx = LiveKitDataChannelTransport(
-            appContext = applicationContext,
-            url = creds.url,
-            token = creds.token,
-            topic = "vpn",
-            // Let the tunnel's own ARQ provide reliability. Bale's LiveKit
-            // SFU has repeatedly accepted reliable publishData calls while
-            // delivering no DataReceived events to the peer, which leaves
-            // both ends in seq=0..N max-retry/tunnel_dead loops.
-            reliable = false,
-            onLog = { broadcast("log", it) },
-            // LiveKit's data channel can go silent without throwing on
-            // any TUN-side I/O. Without this hook the carrier keeps
-            // racking up max-retry drops forever and the user sees a
-            // session that's "connected" but moves no traffic. Bouncing
-            // the tunnel triggers the same reconnect path as a TUN
-            // read/write error.
-            onDisconnected = { handleTunnelDrop("LiveKit DataChannel disconnected") },
-        )
-        inflightTransport = tx
-        try {
-            return tx.connect(timeoutMs = LIVEKIT_TIMEOUT_MS)
-        } finally {
-            inflightTransport = null
+
+        val failures = mutableListOf<String>()
+        for ((idx, peerId) in shuffled.withIndex()) {
+            broadcast("log", "dialing relay ${idx + 1}/${shuffled.size}: peer=$peerId")
+            val creds = try {
+                call.startCall(peerId, timeoutMs = STARTCALL_TIMEOUT_MS)
+            } catch (e: Throwable) {
+                inflightWs = null
+                val msg = "${e.javaClass.simpleName}: ${e.message ?: "?"}"
+                broadcast("log", "relay peer=$peerId failed: $msg — trying next")
+                failures += "peer=$peerId $msg"
+                continue
+            }
+            inflightWs = null
+            broadcast("log", "joining LiveKit room=${creds.room.ifEmpty { "(unknown)" }}")
+            val tx = LiveKitDataChannelTransport(
+                appContext = applicationContext,
+                url = creds.url,
+                token = creds.token,
+                topic = "vpn",
+                // Let the tunnel's own ARQ provide reliability. Bale's LiveKit
+                // SFU has repeatedly accepted reliable publishData calls while
+                // delivering no DataReceived events to the peer, which leaves
+                // both ends in seq=0..N max-retry/tunnel_dead loops.
+                reliable = false,
+                onLog = { broadcast("log", it) },
+                onDisconnected = { handleTunnelDrop("LiveKit DataChannel disconnected") },
+            )
+            inflightTransport = tx
+            try {
+                return tx.connect(timeoutMs = LIVEKIT_TIMEOUT_MS)
+            } catch (e: Throwable) {
+                inflightTransport = null
+                val msg = "${e.javaClass.simpleName}: ${e.message ?: "?"}"
+                broadcast("log", "LiveKit connect to peer=$peerId failed: $msg — trying next")
+                failures += "peer=$peerId LiveKit $msg"
+                try { tx.close() } catch (_: Throwable) {}
+                continue
+            } finally {
+                inflightTransport = null
+            }
         }
+        throw RuntimeException(
+            "all ${shuffled.size} relay peer(s) failed; last errors: " +
+            failures.takeLast(3).joinToString("; ")
+        )
     }
 
     private fun readerLoop(fd: ParcelFileDescriptor) {

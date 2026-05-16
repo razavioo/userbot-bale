@@ -19,13 +19,6 @@ from typing import Any
 
 import pytest
 
-from baleobala.coordinator.protocol import (
-    CONTROL_TOPIC,
-    Kind,
-    encode as ctrl_encode,
-    make_expect_client,
-)
-from baleobala.coordinator.relay_client import ExpectedClientSet
 from baleobala.vpn.constants import DEFAULT_TUNNEL_SESS_ID
 from baleobala.vpn.relay_handler import RelayCallHandler
 from baleobala.vpn.relay_state import (
@@ -257,14 +250,6 @@ class FakeAllocator:
             slot.peer_ids.remove(peer_id)
 
 
-class FakeReporter:
-    def __init__(self) -> None:
-        self.released: list[str] = []
-
-    def report_released(self, session_id: str) -> None:
-        self.released.append(session_id)
-
-
 def _fake_event(*, peer_id: int, url: str = "wss://x", token: str = "t"):
     creds = SimpleNamespace(url=url, token=token, peer_id=peer_id)
     return SimpleNamespace(peer_id=peer_id, credentials=creds)
@@ -280,7 +265,6 @@ class _Harness:
     def __init__(
         self,
         *,
-        use_coordinator: bool = True,
         num_accounts: int = 1,
         max_per_slot: int = 4,
         psk_key: bytes | None = None,
@@ -291,12 +275,10 @@ class _Harness:
             num_accounts=num_accounts, max_per_slot=max_per_slot
         )
         self.control = FakeControl()
-        self.expected_clients = ExpectedClientSet()
         self.session_map: dict[str, str] = {}
         self.session_map_lock = threading.Lock()
         self.relay_state = RelayState(num_accounts=num_accounts, log_stream=self.log)
         self.sessions: list[tuple[int, Any, Any]] = []
-        self.reporters = [FakeReporter() for _ in range(num_accounts)]
         # Track every LiveKitSession the handler instantiates so tests
         # can inspect / pre-stage payloads.
         self.created_sessions: list[FakeLiveKitSession] = []
@@ -306,11 +288,8 @@ class _Harness:
 
         def lk_factory(**kwargs: Any) -> FakeLiveKitSession:
             sess = FakeLiveKitSession(**kwargs)
-            # Apply pre-staged hooks to the NEXT session created, then
-            # clear them so subsequent sessions don't reuse stale state.
-            if self._pending_expect_client is not None:
-                sess.expect_client_payload = self._pending_expect_client
-                self._pending_expect_client = None
+            # Apply pre-staged remote identities to the NEXT session, then
+            # clear so subsequent sessions don't reuse stale state.
             if self._pending_remote_identities is not None:
                 sess.remote_identities = list(self._pending_remote_identities)
                 self._pending_remote_identities = None
@@ -348,11 +327,9 @@ class _Harness:
             ProvisioningError,
         )
 
-        self._pending_expect_client: bytes | None = None
         self._pending_remote_identities: list[str] | None = None
 
         self.handler = RelayCallHandler(
-            use_coordinator=use_coordinator,
             identity_prefix="test-relay",
             pool_cidr="10.77.0.0/16",
             tun_mtu=1400,
@@ -361,14 +338,12 @@ class _Harness:
             mesh=self.mesh,
             allocator=self.allocator,
             control=self.control,
-            expected_clients=self.expected_clients,
             session_map=self.session_map,
             session_map_lock=self.session_map_lock,
             probe_locks={i: _NoLock() for i in range(num_accounts)},
             relay_state=self.relay_state,
             stale_active_flag_secs=DEFAULT_STALE_ACTIVE_FLAG_SECS,
             sessions=self.sessions,
-            reporters=self.reporters,
             livekit_session_factory=lk_factory,
             keepalive_factory=FakeKeepalive,
             datachannel_transport_factory=dc_factory,
@@ -377,15 +352,6 @@ class _Harness:
             recv_provision=_fake_recv_provision,
             provisioning_error_cls=ProvisioningError,
             log_stream=self.log,
-        )
-
-    def stage_expect_client(self, *, client_peer_id: int, session_id: str) -> None:
-        self._pending_expect_client = ctrl_encode(
-            make_expect_client(
-                client_peer_id=client_peer_id,
-                session_id=session_id,
-                expires_in_secs=30,
-            )
         )
 
     def stage_remote_identities(self, identities: list[str]) -> None:
@@ -412,65 +378,29 @@ def test_missing_peer_id_is_rejected():
     assert h.relay_state.is_active(0) is False
 
 
-def test_expect_client_message_registers_and_acks_then_exits():
-    """When a coordinator dispatch arrives, the probe reads
-    EXPECT_CLIENT, registers the client_peer_id with a session id,
-    sends EXPECT_ACK, and returns *without* allocating a tunnel."""
+def test_no_caller_identity_rejects_call():
+    """If the LiveKit participant list contains no resolvable caller
+    user_id (only the relay's own identity, or no remote yet), the
+    handler must refuse the call rather than issue a tunnel keyed by
+    the relay's own peer_id."""
     h = _Harness()
-    h.stage_expect_client(client_peer_id=42, session_id="s-abc")
-    event = _fake_event(peer_id=999)  # event.peer_id is the relay's own
+    # No remote identities staged — _join_room joins the room but
+    # remote_participant_identities() returns [].
+    event = _fake_event(peer_id=999)
     h.handler.handle_call(event)
-
-    # The probe consumed the EXPECT_CLIENT and acked.
-    probe = h.created_sessions[0]
-    ctrl = probe._channels[CONTROL_TOPIC]
-    assert ctrl.sent, "no EXPECT_ACK was sent"
-    # And nothing was allocated for this short call.
-    assert h.allocator.assignment() == {}
-    assert h.sessions == []
-    # The EXPECT_CLIENT was registered for the real client.
-    assert h.expected_clients.consume(42) == ("s-abc", "")
-    # And the active flag is back to False (probe-only scope, a08072a).
-    assert h.relay_state.is_active(0) is False
-
-
-def test_unknown_caller_is_rejected_when_no_expect_client_pre_approval():
-    """A caller user_id that the coordinator hasn't pre-approved must be
-    rejected after the 5 s polling window without allocating a tunnel
-    (vpn/cli.py:520-554 → relay_handler.py)."""
-    h = _Harness()
-    # No EXPECT_CLIENT staged. The probe will read None from the
-    # control channel (falls through), then we expect rejection.
-    event = _fake_event(peer_id=99)
-    # Speed up the test: monkeypatch the polling to a single round
-    # by clearing the deadline-poll loop.
-    import baleobala.vpn.relay_handler as rh
-
-    real_monotonic = rh._time.monotonic
-
-    times = iter([0.0, 10.0])  # second call returns past the 5s deadline
-    rh._time.monotonic = lambda: next(times, 100.0)
-    try:
-        h.handler.handle_call(event)
-    finally:
-        rh._time.monotonic = real_monotonic
-
     assert h.allocator.assignment() == {}, "unknown caller was allocated a slot"
     assert h.mesh.issued == [], "unknown caller had a tunnel issued"
-    assert "rejecting unknown caller=99" in h.log.getvalue()
-    # And the active flag was cleared on the no-expect-client exit.
+    assert "could not resolve caller identity" in h.log.getvalue()
     assert h.relay_state.is_active(0) is False
 
 
 def test_per_caller_routing_uses_livekit_identity_over_event_peer_id():
-    """Regression for 36a8579. event.peer_id is the relay's own peer_id
-    under Bale push semantics. The handler must override it with the
-    real caller user_id resolved from LiveKit participant identity, so
-    two distinct callers on the same relay JWT each get their own slot
-    in `mesh.issue_client`."""
+    """event.peer_id is the relay's own peer_id under Bale push
+    semantics. The handler must override it with the real caller
+    user_id resolved from LiveKit participant identity, so two
+    distinct callers on the same relay JWT each get their own slot
+    in mesh.issue_client."""
     h = _Harness()
-    # Pre-approve caller 42 (the actual user_id, NOT the relay's own).
-    h.expected_clients.register(client_peer_id=42, session_id="s-1", expires_in_secs=30)
     h.stage_remote_identities(["42"])
     # The Bale push delivers event.peer_id = relay's own (here 999).
     event = _fake_event(peer_id=999)
@@ -479,25 +409,23 @@ def test_per_caller_routing_uses_livekit_identity_over_event_peer_id():
     # The mesh was issued for the resolved caller (42), not the
     # relay's own peer_id (999).
     assert [pid for pid, *_ in h.mesh.issued] == [42]
-    assert "caller user_id resolved from LiveKit identity: peer_id=999 → 42" in h.log.getvalue()
+    assert "caller resolved from LiveKit identity: 42" in h.log.getvalue()
 
 
 def test_active_flag_clears_after_session_commit():
-    """Regression for a08072a. The flag is set True at probe-start and
-    must be cleared after sessions.append (the "after-commit" call
-    site). It does NOT remain True for the session's lifetime — the
-    reaper / on_drop are what clear it later in production. Here we
-    drive a successful tunnel bring-up and assert the flag is False
-    on return."""
+    """The flag is set True at join-start and must be cleared after
+    sessions.append. It does NOT remain True for the session's
+    lifetime — the reaper / on_drop are what clear it later in
+    production. Here we drive a successful tunnel bring-up and
+    assert the flag is False on return."""
     h = _Harness()
-    h.expected_clients.register(client_peer_id=42, session_id="s-1", expires_in_secs=30)
     h.stage_remote_identities(["42"])
     event = _fake_event(peer_id=999)
     h.handler.handle_call(event)
 
     assert h.sessions, "session was not committed"
     assert h.relay_state.is_active(0) is False, (
-        "_account_active leaked True past after-commit; reintroduces a08072a"
+        "_account_active leaked True past after-commit"
     )
 
 
@@ -512,7 +440,6 @@ def test_reconnect_within_grace_evicts_stale_session():
     and let the new call proceed all the way to sessions.append."""
     h = _Harness()
     # First call — establishes the (eventually-stale) tunnel.
-    h.expected_clients.register(client_peer_id=42, session_id="s-1", expires_in_secs=30)
     h.stage_remote_identities(["42"])
     event = _fake_event(peer_id=999)
     h.handler.handle_call(event)
@@ -525,9 +452,6 @@ def test_reconnect_within_grace_evicts_stale_session():
     live_sess._peer_disconnect_at = time.monotonic() - 1.0
 
     # Second call — same caller reconnects through a fresh Bale push.
-    # Re-stage the EXPECT_CLIENT pre-approval and remote identities so
-    # the new probe (a fresh LiveKitSession) has them.
-    h.expected_clients.register(client_peer_id=42, session_id="s-2", expires_in_secs=30)
     h._pending_remote_identities = ["42"]  # for the next created session
     event2 = _fake_event(peer_id=999)
     h.handler.handle_call(event2)
@@ -566,7 +490,6 @@ def test_stale_active_flag_force_clears_after_threshold():
 
     # No slot allocated for any peer on account 0 — the auto-recovery
     # branch should fire.
-    h.expected_clients.register(client_peer_id=42, session_id="s-x", expires_in_secs=30)
     h.stage_remote_identities(["42"])
     event = _fake_event(peer_id=999)
     h.handler.handle_call(event)
@@ -579,10 +502,12 @@ def test_stale_active_flag_force_clears_after_threshold():
     assert h.sessions, "stale-recovery did not let the new call proceed"
 
 
-def test_skip_probe_when_account_has_active_session(monkeypatch):
+def test_refuse_call_when_account_has_active_session(monkeypatch):
     """When `_account_active[idx]==True` and a slot is already
-    allocated AND no eviction conditions apply, the probe must be
-    skipped — running it concurrently overloads the livekit-rtc FFI."""
+    allocated AND no eviction conditions apply, the new call must be
+    refused — starting a concurrent LiveKit session overloads the
+    livekit-rtc FFI. The caller's app will fall back to the next
+    relay peer_id in its list."""
     h = _Harness()
     # Pre-populate a *running* session (not terminal, not peer-lost)
     # plus the active flag.
@@ -596,9 +521,9 @@ def test_skip_probe_when_account_has_active_session(monkeypatch):
     h.handler.handle_call(event)
 
     out = h.log.getvalue()
-    assert f"skipping probe for account=0" in out
+    assert "refusing call on account=0" in out
     assert h.created_sessions == [], (
-        "skip-probe path created a LiveKitSession; that's the FFI-overload "
+        "busy path created a LiveKitSession; that's the FFI-overload "
         "regression we're guarding against"
     )
     # And the active flag and sessions were left intact.
@@ -611,7 +536,6 @@ def test_sess_id_used_in_mesh_provision_matches_constant():
     when building the MeshProvisionMessage; per-peer offsets caused the
     receiving side's sess_id filter to silently drop every Android frame."""
     h = _Harness()
-    h.expected_clients.register(client_peer_id=42, session_id="s-1", expires_in_secs=30)
     h.stage_remote_identities(["42"])
     event = _fake_event(peer_id=999)
     h.handler.handle_call(event)
@@ -624,90 +548,3 @@ def test_sess_id_used_in_mesh_provision_matches_constant():
     assert msg.session_id == DEFAULT_TUNNEL_SESS_ID
 
 
-# --- async probe teardown ---------------------------------------------------
-
-
-class _SlowStopLiveKitSession(FakeLiveKitSession):
-    """Variant whose .stop() blocks until released, so we can observe
-    whether `handle_call` waits for it or returns early."""
-
-    def __init__(self, *, stop_gate: threading.Event, **kwargs):
-        super().__init__(**kwargs)
-        self._stop_gate = stop_gate
-        self.stop_started_at: float | None = None
-        self.stop_returned_at: float | None = None
-
-    def stop(self) -> None:
-        self.stop_started_at = time.monotonic()
-        self._stop_gate.wait(timeout=10.0)
-        super().stop()
-        self.stop_returned_at = time.monotonic()
-
-
-def test_expect_client_teardown_does_not_block_handle_call_return():
-    """The active flag must clear and `handle_call` must return WITHOUT
-    waiting for probe.stop() to complete. In production, probe.stop()
-    can take up to 14 s when no other session is keeping the livekit-ffi
-    runtime warm — blocking on it inside the probe lock made the client's
-    inbound dial (which arrives ~100 ms after ASSIGN) skip-probe out
-    via the still-set _account_active flag."""
-    h = _Harness()
-    stop_gate = threading.Event()
-
-    # Swap the LK factory to produce a slow-stop variant for this test.
-    original_factory = h.handler._LiveKitSession  # type: ignore[attr-defined]
-
-    def slow_factory(**kwargs):
-        sess = _SlowStopLiveKitSession(stop_gate=stop_gate, **kwargs)
-        # Mirror the harness's pre-staging behavior.
-        if h._pending_expect_client is not None:
-            sess.expect_client_payload = h._pending_expect_client
-            h._pending_expect_client = None
-        if h._pending_remote_identities is not None:
-            sess.remote_identities = list(h._pending_remote_identities)
-            h._pending_remote_identities = None
-        h.created_sessions.append(sess)
-        return sess
-
-    h.handler._LiveKitSession = slow_factory  # type: ignore[attr-defined]
-    h.stage_expect_client(client_peer_id=42, session_id="s-async")
-
-    event = _fake_event(peer_id=999)
-    start = time.monotonic()
-    h.handler.handle_call(event)
-    elapsed = time.monotonic() - start
-
-    try:
-        # 1) handle_call must return promptly — well under the 10 s gate.
-        assert elapsed < 2.0, (
-            f"handle_call blocked {elapsed:.2f}s on probe teardown; "
-            "stop() should run on a background thread"
-        )
-
-        # 2) The active flag must already be clear — the next inbound
-        # client dial would otherwise be skip-probed.
-        assert h.relay_state.is_active(0) is False, (
-            "active flag still True after handle_call returned; "
-            "client's follow-up dial would skip-probe"
-        )
-
-        # 3) The probe is still in the middle of stop() (gate not released).
-        probe = h.created_sessions[-1]
-        assert probe.stop_started_at is not None, (
-            "background teardown thread didn't start"
-        )
-        assert probe.stop_returned_at is None, (
-            "probe.stop() completed before we released the gate — "
-            "the test's blocking gate is the wrong shape"
-        )
-    finally:
-        # 4) Release the gate; the background thread must complete cleanly.
-        stop_gate.set()
-
-    probe = h.created_sessions[-1]
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and probe.stop_returned_at is None:
-        time.sleep(0.01)
-    assert probe.stop_returned_at is not None, (
-        "background teardown thread never completed probe.stop()"
-    )

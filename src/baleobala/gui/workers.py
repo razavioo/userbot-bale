@@ -83,9 +83,8 @@ class ValidateCodeWorker(QObject):
 class DirectProxyWorker(QObject):
     """Connect to proxy-relay via data channel (the fast path used by bale-proxy client).
 
-    Supports coordinator flow: if coordinator_peer_id is given, the worker
-    calls coordinator first to get a relay assignment, then calls that relay.
-    Otherwise it dials peer_id directly.
+    Dials peer_id directly. The relay accepts any inbound call; the
+    optional PSK-encrypted DataChannel authenticates the client.
     """
 
     connecting = Signal(str)
@@ -98,8 +97,7 @@ class DirectProxyWorker(QObject):
         self,
         *,
         jwt: str,
-        peer_id: Optional[int] = None,
-        coordinator_peer_id: Optional[int] = None,
+        peer_id: int,
         proxy_secret: Optional[str] = None,
         listen_host: str = "127.0.0.1",
         listen_port: int = 10800,
@@ -108,7 +106,6 @@ class DirectProxyWorker(QObject):
         super().__init__()
         self._jwt = jwt
         self._peer_id = peer_id
-        self._coordinator_peer_id = coordinator_peer_id
         self._proxy_secret = proxy_secret
         self._listen_host = listen_host
         self._listen_port = listen_port
@@ -160,50 +157,18 @@ class DirectProxyWorker(QObject):
             allow_insecure_debug=True,
         )
 
-        # Phase 1: resolve LiveKit credentials
-        if self._coordinator_peer_id is not None:
-            self.connecting.emit("Contacting coordinator…")
-            self.log_line.emit(f"coordinator peer_id={self._coordinator_peer_id}")
-            from baleobala.coordinator.client_flow import resolve_via_coordinator
-            client_peer_id = None
-            try:
-                from baleobala.control import AuthStore
-                stored = AuthStore().status().get("user_id")
-                if stored not in (None, "unknown"):
-                    client_peer_id = int(stored)
-            except Exception:  # noqa: BLE001
-                client_peer_id = None
-            creds = resolve_via_coordinator(
-                jwt=self._jwt,
-                coordinator_peer_id=self._coordinator_peer_id,
-                ws_tls_config=ws_tls,
-                identity="gui-proxy-client",
-                answer_timeout=30.0,
-                client_peer_id=client_peer_id,
-            )
-            # resolve_via_coordinator returns CarrierCredentials; unpack to url/token
-            lk_url, lk_token = creds.url, creds.token
-            # Keep a bale client alive to hold the relay call open.
-            # The relay call is already established inside resolve_via_coordinator;
-            # we need to NOT stop its relay_client. Re-open a hold-alive client.
-            bale_hold = BaleApiClient(jwt=self._jwt, ws_tls_config=ws_tls)
-            bale_hold.start()
-            self._bale_client = bale_hold
-            self.log_line.emit(f"relay assigned, room={creds.room[:24]}…")
-        elif self._peer_id is not None:
-            self.connecting.emit(f"Calling relay peer {self._peer_id}…")
-            self.log_line.emit(f"dialing peer_id={self._peer_id}")
-            bale = BaleApiClient(jwt=self._jwt, ws_tls_config=ws_tls)
-            bale.start()
-            self._bale_client = bale
-            raw_creds = bale.fetch_livekit_credentials(
-                self._peer_id, creds_timeout=30.0,
-                cancel_event=self._stop_event,
-            )
-            lk_url, lk_token = raw_creds.url, raw_creds.token
-            self.log_line.emit(f"room={raw_creds.room[:24]}…")
-        else:
-            raise RuntimeError("peer_id or coordinator_peer_id required")
+        # Phase 1: dial the relay peer directly
+        self.connecting.emit(f"Calling relay peer {self._peer_id}…")
+        self.log_line.emit(f"dialing peer_id={self._peer_id}")
+        bale = BaleApiClient(jwt=self._jwt, ws_tls_config=ws_tls)
+        bale.start()
+        self._bale_client = bale
+        raw_creds = bale.fetch_livekit_credentials(
+            self._peer_id, creds_timeout=30.0,
+            cancel_event=self._stop_event,
+        )
+        lk_url, lk_token = raw_creds.url, raw_creds.token
+        self.log_line.emit(f"room={raw_creds.room[:24]}…")
 
         if self._stop_event.is_set():
             return

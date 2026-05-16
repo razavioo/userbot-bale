@@ -10,10 +10,10 @@ the public internet.
 > **Throughput:** DataChannel is the primary transport (~100 KB/s+ in
 > reliable mode). Audio is the last-resort fallback (~16 B/s at AUDIBLE_FAST
 > through Opus, MTU=128 B). It is fully wired in production (not a PoC) and
-> can carry coordinator HELLO/ASSIGN exchanges and low-bandwidth control
-> traffic when WebRTC DataChannels are blocked. It is not suitable as the
-> primary VPN path — IP packets are fragmented to 128 B each and sustained
-> throughput is insufficient for most applications.
+> can carry low-bandwidth control traffic when WebRTC DataChannels are
+> blocked. It is not suitable as the primary VPN path — IP packets are
+> fragmented to 128 B each and sustained throughput is insufficient for
+> most applications.
 
 ## Prerequisites
 

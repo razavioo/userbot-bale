@@ -79,57 +79,24 @@ def _exit_node_mesh_parser():
     )
 
 
-def test_exit_node_mesh_relay_id_prefix_defaults_to_none() -> None:
-    """When --relay-id-prefix is not supplied, the CLI leaves the value
-    as None so cmd_vpn_exit_node_mesh falls back to socket.gethostname()."""
-    mesh = _exit_node_mesh_parser()
-    args = mesh.parse_args([
-        "--bale-jwt-file", "/tmp/jwt",
-    ])
-    assert getattr(args, "relay_id_prefix", "MISSING") is None
-
-
-def test_exit_node_mesh_relay_id_prefix_is_accepted() -> None:
-    """The flag exists and an explicit value flows into args verbatim."""
-    mesh = _exit_node_mesh_parser()
-    args = mesh.parse_args([
-        "--bale-jwt-file", "/tmp/jwt",
-        "--relay-id-prefix", "edge-tokyo",
-    ])
-    assert args.relay_id_prefix == "edge-tokyo"
-
-
-def test_exit_node_mesh_relay_id_prefix_help_explains_multi_process_use() -> None:
-    """The help text must explain WHY the flag exists (multiple mesh
-    instances on the same host) so operators discover it before they
-    hit the silent-collision footgun."""
+def test_exit_node_mesh_no_coordinator_surface() -> None:
+    """The mesh parser must not expose coordinator-mode flags after the
+    coordinator removal — clients dial relays directly."""
     mesh = _exit_node_mesh_parser()
     help_text = mesh.format_help()
-    assert "--relay-id-prefix" in help_text
-    assert "hostname" in help_text  # default behavior is documented
-    assert "distinct relay" in help_text or "multiple mesh" in help_text
+    for removed in ("--coordinator-peer-id", "--relay-peer-id", "--standalone",
+                    "--heartbeat-interval", "--relay-id-prefix"):
+        assert removed not in help_text, f"{removed!r} should have been removed"
 
 
-def test_exit_node_mesh_relay_id_uses_prefix_then_account_index() -> None:
-    """The relay_id format is `<prefix>-<account_index>`; this is the
-    contract every CoordinatorReporter relies on for uniqueness across
-    processes on the same host."""
+def test_exit_node_mesh_minimal_args_accepted() -> None:
+    """The only required positional input is a Bale JWT — the rest
+    has reasonable defaults."""
     mesh = _exit_node_mesh_parser()
-    # Explicit prefix → used verbatim.
-    args = mesh.parse_args([
-        "--bale-jwt-file", "/tmp/jwt-a",
-        "--bale-jwt-file", "/tmp/jwt-b",
-        "--relay-id-prefix", "vps-prod-1",
-    ])
-    prefix = args.relay_id_prefix or "hostname-fallback"
-    assert [f"{prefix}-{i}" for i in range(2)] == ["vps-prod-1-0", "vps-prod-1-1"]
-
-    # Default (None) prefix falls back to a non-empty hostname-style name.
-    import socket
-    args2 = mesh.parse_args(["--bale-jwt-file", "/tmp/jwt"])
-    fallback_prefix = args2.relay_id_prefix or socket.gethostname()
-    assert fallback_prefix, "hostname fallback must produce a non-empty prefix"
-    assert "-" not in fallback_prefix.rsplit("-", 1)[0] or fallback_prefix == socket.gethostname()
+    args = mesh.parse_args(["--bale-jwt-file", "/tmp/jwt"])
+    assert args.bale_jwt_file == ["/tmp/jwt"]
+    assert getattr(args, "pool_cidr", None) == "10.77.0.0/16"
+    assert getattr(args, "max_peers_per_server_jwt", None) == 4
 
 
 def test_vpn_status_summary_guides_next_step(monkeypatch, capsys, tmp_path) -> None:

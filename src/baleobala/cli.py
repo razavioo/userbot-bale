@@ -1619,47 +1619,6 @@ def _resolve_carrier_credentials(args: argparse.Namespace):
         allow_insecure_debug=True,
     )
 
-    # ── Coordinator mode ─────────────────────────────────────────────────
-    # If --coordinator-peer-id is given (or found in config / env), call the
-    # coordinator for an ASSIGN, then wait for the relay to call us back.
-    coordinator_peer_id = getattr(args, "coordinator_peer_id", None)
-    no_coordinator = getattr(args, "no_coordinator", False)
-    if coordinator_peer_id is None and not no_coordinator:
-        from baleobala.control.coordinator_config import load_coordinator_peer_id
-        coordinator_peer_id = load_coordinator_peer_id()
-
-    if coordinator_peer_id is not None and not no_coordinator:
-        from baleobala.coordinator.client_flow import resolve_via_coordinator
-
-        client_peer_id = getattr(args, "client_peer_id", None)
-        if client_peer_id is None:
-            try:
-                from baleobala.control import AuthStore
-                stored = AuthStore().status().get("user_id")
-                if stored not in (None, "unknown"):
-                    client_peer_id = int(stored)
-            except Exception:  # noqa: BLE001
-                client_peer_id = None
-        creds = resolve_via_coordinator(
-            coordinator_peer_id=coordinator_peer_id,
-            jwt=jwt,
-            ws_tls_config=ws_tls_config,
-            identity=getattr(args, "identity", "baleobala-client"),
-            answer_timeout=float(getattr(args, "answer_timeout", 60.0)),
-            client_peer_id=client_peer_id,
-        )
-        # B3: if the coordinator provided a per-session PSK, inject it into
-        # args.psk so _build_transport_chain → _resolve_psk picks it up,
-        # overriding any --psk / --psk-file argument.
-        session_psk = getattr(creds, "session_psk", "") or (
-            creds.__dict__.get("session_psk", "") if hasattr(creds, "__dict__") else ""
-        )
-        if session_psk:
-            args.psk = session_psk
-            args.psk_file = None
-        return creds
-    # ─────────────────────────────────────────────────────────────────────
-
     controller = BaleCarrierController(client=BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config))
     try:
         peer_id = args.peer_id
@@ -2480,113 +2439,6 @@ def cmd_bale_proxy_relay(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_coordinator_enroll(args: argparse.Namespace) -> int:
-    """Generate and persist a per-relay HMAC secret (A6 relay auth)."""
-    from baleobala.coordinator.auth import generate_secret
-    from baleobala.control.paths import config_dir
-    import json
-
-    relay_id: str = args.relay_id
-    peer_id: int = args.peer_id
-    capacity: int = args.capacity
-
-    secrets_path = config_dir() / "coordinator-relay-secrets.json"
-    secrets: dict[str, dict] = {}
-    if secrets_path.exists():
-        try:
-            secrets = json.loads(secrets_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            pass
-
-    if relay_id in secrets and not args.force:
-        print(
-            f"relay_id={relay_id!r} is already enrolled. "
-            "Use --force to rotate the secret.",
-            file=sys.stderr,
-        )
-        return 1
-
-    secret = generate_secret()
-    secrets[relay_id] = {
-        "relay_id": relay_id,
-        "peer_id": peer_id,
-        "capacity": capacity,
-        "secret": secret,
-    }
-    secrets_path.parent.mkdir(parents=True, exist_ok=True)
-    secrets_path.write_text(json.dumps(secrets, indent=2))
-    secrets_path.chmod(0o600)
-
-    print(f"Enrolled relay_id={relay_id!r} peer_id={peer_id} capacity={capacity}")
-    print(f"Secret (copy to relay host ~/.baleobala/relay-secret-{relay_id}.txt):")
-    print(f"  {secret}")
-    print()
-    print(f"Secrets file: {secrets_path}")
-    return 0
-
-
-def cmd_coordinator_list_relays(args: argparse.Namespace) -> int:
-    """List enrolled relays from the local secrets file."""
-    from baleobala.control.paths import config_dir
-    import json
-
-    secrets_path = config_dir() / "coordinator-relay-secrets.json"
-    if not secrets_path.exists():
-        print("No enrolled relays (secrets file not found).")
-        return 0
-    try:
-        secrets: dict = json.loads(secrets_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"Failed to load secrets file: {exc}", file=sys.stderr)
-        return 1
-    if not secrets:
-        print("No enrolled relays.")
-        return 0
-    for relay_id, info in secrets.items():
-        peer_id = info.get("peer_id", "?")
-        capacity = info.get("capacity", "?")
-        print(f"  relay_id={relay_id!r}  peer_id={peer_id}  capacity={capacity}")
-    return 0
-
-
-def cmd_coordinator_describe(args: argparse.Namespace) -> int:
-    """Print coordinator peer_id and enrolled relays as JSON.
-
-    Used by clients during onboarding to discover the coordinator peer_id and
-    the list of relay peer_ids without any manual configuration.
-    """
-    from baleobala.control.paths import config_dir
-    from baleobala.control.coordinator_config import load_coordinator_peer_id
-    import json as _json
-
-    coordinator_peer_id = load_coordinator_peer_id()
-
-    secrets_path = config_dir() / "coordinator-relay-secrets.json"
-    relays: list[dict] = []
-    if secrets_path.exists():
-        try:
-            secrets: dict = _json.loads(secrets_path.read_text())
-            for relay_id, info in secrets.items():
-                relays.append({
-                    "relay_id": relay_id,
-                    "peer_id": info.get("peer_id"),
-                    "capacity": info.get("capacity", 1),
-                    "region": info.get("region", ""),
-                })
-        except (OSError, _json.JSONDecodeError) as exc:
-            print(f"Warning: could not read relay secrets: {exc}", file=sys.stderr)
-
-    from baleobala.control.reconnect_policy import DEFAULT_RECONNECT_POLICY
-
-    result = {
-        "coordinator_peer_id": coordinator_peer_id,
-        "relays": relays,
-        "reconnect_policy": DEFAULT_RECONNECT_POLICY.to_dict(),
-    }
-    print(_json.dumps(result, indent=2))
-    return 0
-
-
 def cmd_bench_tunnel(args: argparse.Namespace) -> int:
     """Run the UDP tunnel throughput benchmark."""
     from baleobala.bench.tunnel import run_bench
@@ -3040,31 +2892,6 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("messages", nargs="*")
     tl.set_defaults(func=cmd_tunnel_loopback)
 
-    coord = sub.add_parser("coordinator", help="manage coordinator relay enrollment and secrets")
-    coord_sub = coord.add_subparsers(dest="coord_cmd", required=True)
-
-    coord_enroll = coord_sub.add_parser(
-        "enroll",
-        help="generate a per-relay HMAC secret and persist it in the coordinator secrets file",
-    )
-    coord_enroll.add_argument("--relay-id", required=True, help="unique relay identifier (e.g. relay-ir-1)")
-    coord_enroll.add_argument("--peer-id", required=True, type=int, help="Bale user_id of the relay account")
-    coord_enroll.add_argument("--capacity", type=int, default=1, help="max concurrent sessions on this relay")
-    coord_enroll.add_argument("--force", action="store_true", help="overwrite existing secret (rotate)")
-    coord_enroll.set_defaults(func=cmd_coordinator_enroll)
-
-    coord_list = coord_sub.add_parser(
-        "list-relays",
-        help="list enrolled relays from the coordinator secrets file",
-    )
-    coord_list.set_defaults(func=cmd_coordinator_list_relays)
-
-    coord_describe = coord_sub.add_parser(
-        "describe",
-        help="print coordinator peer_id and enrolled relay list as JSON (used by client onboarding)",
-    )
-    coord_describe.set_defaults(func=cmd_coordinator_describe)
-
     bt = sub.add_parser(
         "bale-tunnel",
         help="debug: run the byte tunnel over a Bale LiveKit room",
@@ -3080,10 +2907,6 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--peer-name", default=None)
     bt.add_argument("--answer", action="store_true")
     bt.add_argument("--answer-timeout", type=float, default=120.0)
-    bt.add_argument("--coordinator-peer-id", type=int, default=None,
-                    help="Bale user_id of the coordinator (overrides config file)")
-    bt.add_argument("--no-coordinator", action="store_true",
-                    help="skip coordinator and dial --peer-id directly (legacy/dev)")
     bt.add_argument("--identity", default="baleobala")
     bt.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bt.add_argument("--volume", type=int, default=50)
@@ -3109,8 +2932,6 @@ def build_parser() -> argparse.ArgumentParser:
     bp_client.add_argument("--peer-name", default=None)
     bp_client.add_argument("--answer", action="store_true")
     bp_client.add_argument("--answer-timeout", type=float, default=120.0)
-    bp_client.add_argument("--coordinator-peer-id", type=int, default=None)
-    bp_client.add_argument("--no-coordinator", action="store_true")
     bp_client.add_argument("--identity", default="baleobala")
     bp_client.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_client.add_argument("--volume", type=int, default=50)
@@ -3143,8 +2964,6 @@ def build_parser() -> argparse.ArgumentParser:
     bp_browser.add_argument("--peer-name", default=None)
     bp_browser.add_argument("--answer", action="store_true")
     bp_browser.add_argument("--answer-timeout", type=float, default=120.0)
-    bp_browser.add_argument("--coordinator-peer-id", type=int, default=None)
-    bp_browser.add_argument("--no-coordinator", action="store_true")
     bp_browser.add_argument("--identity", default="baleobala")
     bp_browser.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_browser.add_argument("--volume", type=int, default=50)
@@ -3179,10 +2998,6 @@ def build_parser() -> argparse.ArgumentParser:
     bp_system.add_argument("--peer-name", default=None)
     bp_system.add_argument("--answer", action="store_true")
     bp_system.add_argument("--answer-timeout", type=float, default=120.0)
-    bp_system.add_argument("--coordinator-peer-id", type=int, default=None,
-                           help="Bale user_id of the coordinator. When set, calls coordinator for relay assignment.")
-    bp_system.add_argument("--no-coordinator", action="store_true",
-                           help="Skip coordinator and dial --peer-id directly even if coordinator config exists.")
     bp_system.add_argument("--identity", default="baleobala")
     bp_system.add_argument("--protocol", choices=["normal", "fast", "fastest"], default="fast")
     bp_system.add_argument("--volume", type=int, default=50)

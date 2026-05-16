@@ -37,15 +37,13 @@ log = logging.getLogger(__name__)
 
 
 # Outcomes:
-#   committed       — full tunnel up (sessions.append reached)
-#   expect_client   — coordinator dispatch handled (EXPECT_CLIENT registered)
-#   skip_probe      — call rejected because account already has a session
-#   no_capacity     — allocator full
-#   no_expect_client — coordinator never pre-approved this caller
-#   probe_error     — probe LiveKit session failed to start
-#   enable_audio_failed — audio publish raised on the promotion
-#   missing_peer_id — Bale event arrived without a canonical peer_id
-#   provision_failed — tunnel bring-up failed inside _provision_tunnel
+#   committed         — full tunnel up (sessions.append reached)
+#   slot_busy         — call refused because account already has a session
+#   no_capacity       — allocator full
+#   session_start_failed — LiveKit session failed to start
+#   no_caller_identity — couldn't read caller user_id from LiveKit participant list
+#   missing_peer_id   — Bale event arrived without a canonical peer_id
+#   provision_failed  — tunnel bring-up failed inside _provision_tunnel
 _CALLS = counter(
     "baleobala_relay_calls_total",
     "Inbound relay calls, labelled by outcome.",
@@ -92,17 +90,17 @@ class _RecvProvision(Protocol):
 class RelayCallHandler:
     """Owns the per-incoming-call state machine for one mesh relay process.
 
-    One instance is shared across all account-indexed listen callbacks;
-    the original closure was per-account in scope but stateful across
-    accounts via the `_account_active` / `expected_clients` / `sessions`
-    dicts. Behavior is preserved by keeping the same shared mutable
-    structures here.
+    Coordinator-free model: the relay accepts any inbound Bale call,
+    joins the LiveKit room, resolves the caller's user_id from the
+    participant identity, and provisions a tunnel. The PSK handshake
+    on the encrypted DataChannel authenticates the caller (without a
+    valid PSK no traffic can flow). If a per-account capacity slot is
+    free, the call becomes a tunnel; otherwise it is refused.
     """
 
     def __init__(
         self,
         *,
-        use_coordinator: bool,
         identity_prefix: str,
         pool_cidr: str,
         tun_mtu: int,
@@ -111,14 +109,12 @@ class RelayCallHandler:
         mesh: Any,
         allocator: Any,
         control: Any,
-        expected_clients: Any,
         session_map: dict[str, str],
         session_map_lock: threading.Lock,
         probe_locks: dict[int, Any],
         relay_state: RelayState,
         stale_active_flag_secs: float,
         sessions: list[tuple[int, Any, Any]],
-        reporters: list,
         livekit_session_factory: _LiveKitSessionFactory,
         keepalive_factory: _KeepaliveFactory,
         datachannel_transport_factory: _DataChannelTransportFactory,
@@ -128,7 +124,6 @@ class RelayCallHandler:
         provisioning_error_cls: type[Exception],
         log_stream=sys.stderr,
     ) -> None:
-        self._use_coordinator = use_coordinator
         self._identity_prefix = identity_prefix
         self._pool_cidr = pool_cidr
         self._tun_mtu = tun_mtu
@@ -137,14 +132,12 @@ class RelayCallHandler:
         self._mesh = mesh
         self._allocator = allocator
         self._control = control
-        self._expected_clients = expected_clients
         self._session_map = session_map
         self._session_map_lock = session_map_lock
         self._probe_locks = probe_locks
         self._relay_state = relay_state
         self._stale_active_flag_secs = stale_active_flag_secs
         self._sessions = sessions
-        self._reporters = reporters
         self._LiveKitSession = livekit_session_factory
         self._Keepalive = keepalive_factory
         self._DataChannelTransport = datachannel_transport_factory
@@ -218,30 +211,27 @@ class RelayCallHandler:
     ) -> None:
         # _state[0] := we are the caller that set _account_active=True
         # _state[1] := we reached sessions.append (commit)
-        # ── Coordinator mode: route by probing the control channel ────────
-        # parse_call_peer_id returns the CALLEE's peer_id (our own account),
-        # not the CALLER's. We cannot use peer_id to distinguish coordinator
-        # instruction calls (EXPECT_CLIENT) from VPN client calls. Instead we
-        # join the room and check if EXPECT_CLIENT arrives on "control" topic.
-        session_pre_joined: Any = None
-        session_psk: str = ""  # per-session ephemeral PSK from coordinator (B3)
-        if self._use_coordinator:
-            session_pre_joined = self._coordinator_probe(
-                event, account_index, peer_id, state, cid,
+        #
+        # event.peer_id under Bale push semantics is the CALLEE (our own
+        # account), so every caller on the same relay account would
+        # collide on mesh.issue_client. Join the LiveKit room, read the
+        # actual caller user_id from the participant identity, then
+        # promote that session to a VPN tunnel. The PSK handshake on
+        # the encrypted DataChannel is what authenticates the caller.
+        session_pre_joined = self._join_room(event, account_index, peer_id, state, cid)
+        if session_pre_joined is None:
+            return
+        resolved_peer_id = self._resolve_caller_identity(
+            session_pre_joined, peer_id, cid,
+        )
+        if resolved_peer_id is None:
+            try: session_pre_joined.stop()
+            except Exception: pass  # noqa: BLE001
+            self._relay_state.transition(
+                account_index, False, "no-caller-identity", cid=cid,
             )
-            if session_pre_joined is None:
-                return  # coordinator branch handled the call (or rejected it)
-            # Caller-identity override + EXPECT_CLIENT verification both
-            # mutate `peer_id`; keep the result here for the rest of the
-            # flow.
-            resolved = self._resolve_and_verify_caller(
-                event, account_index, peer_id, session_pre_joined, cid,
-            )
-            if resolved is None:
-                return
-            peer_id, session_psk = resolved
-
-        # ───────────────────────────────────────────────────────────────────
+            return
+        peer_id = resolved_peer_id
 
         print(
             f"[vpn-mesh] cid={cid} incoming call → peer_id={peer_id} account={account_index}",
@@ -271,39 +261,24 @@ class RelayCallHandler:
             file=self._log,
         )
 
-        self._provision_tunnel(event, account_index, peer_id, session_pre_joined, state, cid, session_psk=session_psk)
+        self._provision_tunnel(event, account_index, peer_id, session_pre_joined, state, cid)
 
-    # ---- coordinator-path probe -------------------------------------
+    # ---- join LiveKit room for the inbound call ---------------------
 
-    def _coordinator_probe(
+    def _join_room(
         self, event: Any, account_index: int, peer_id: int, state: list, cid: str,
     ) -> Any:
-        """Run the EXPECT_CLIENT probe. Returns the joined LiveKitSession
-        if the call should be promoted to a VPN session, or None if the
-        probe fully handled the call (EXPECT_CLIENT registration,
-        skip-probe, or probe error)."""
-        # If this relay account already hosts an active VPN session, skip
-        # the probe entirely. Starting a concurrent LiveKit session while
-        # a VPN session is running overloads the shared livekit-ffi Rust
-        # runtime, delaying on_data_received callbacks and causing
-        # WireGuard keepalive drops → tunnel_dead within 30 s.
-        # The coordinator will get no EXPECT_ACK and roll back, then
-        # retry via the other relay.
-        from baleobala.coordinator.protocol import (
-            CONTROL_TOPIC as _CTRL_TOPIC,
-            ControlMessage as _CM,
-            Kind as _Kind,
-            decode as _ctrl_decode,
-            encode as _ctrl_encode,
-            ControlError as _CtrlError,
-        )
-
+        """Accept the inbound Bale call by joining the LiveKit room.
+        Returns the joined session ready to be promoted to a VPN tunnel,
+        or None if the slot is busy / session start failed."""
         with self._probe_locks[account_index]:
-            # Re-check inside the lock: a duplicate Bale push (same call
-            # redelivered, or coordinator's EXPECT_CLIENT arriving while
-            # we still hold the lock for the client probe) must NOT
-            # start a second probe — it would overwrite the live VPN
-            # tunnel and silently drop every Android frame.
+            # If this relay account already hosts an active VPN session,
+            # refuse the new call. Starting a concurrent LiveKit session
+            # while a VPN session is running overloads the shared
+            # livekit-ffi Rust runtime, delaying on_data_received
+            # callbacks and causing keepalive drops → tunnel_dead within
+            # 30 s. The caller's app will fail over to the next relay
+            # peer_id in its list.
             slot = self._allocator.slots()[account_index]
             if slot.peer_ids or self._relay_state.is_active(account_index):
                 self._maybe_evict_stale_sessions(account_index, cid)
@@ -332,102 +307,72 @@ class RelayCallHandler:
                         else ""
                     )
                     print(
-                        f"[vpn-mesh] cid={cid} skipping probe for account={account_index}: "
-                        f"VPN session already active "
-                        f"(slot={slot.peer_ids} active={self._relay_state.is_active(account_index)}{age_str})",
+                        f"[vpn-mesh] cid={cid} refusing call on account={account_index}: "
+                        f"already in use (slot={slot.peer_ids} "
+                        f"active={self._relay_state.is_active(account_index)}{age_str})",
                         file=self._log,
                     )
-                    self._bump("skip_probe")
+                    self._bump("slot_busy")
                     return None
 
-            self._relay_state.transition(account_index, True, "probe-start", cid=cid)
+            self._relay_state.transition(account_index, True, "join-start", cid=cid)
             state[0] = True  # we own the flag now
-            probe = self._LiveKitSession(
+            session = self._LiveKitSession(
                 url=event.credentials.url,
                 token=event.credentials.token,
                 identity=f"{self._identity_prefix}-{account_index}-{peer_id}",
                 publish_audio=False,
             )
             try:
-                probe.start()
+                session.start()
+                # Wait briefly for the caller to join the room so we can
+                # read their identity. If they don't show up the call is
+                # spam/abandoned; bail out.
                 try:
-                    probe.wait_for_remote_participant(timeout=5.0)
+                    session.wait_for_remote_participant(timeout=5.0)
                 except (TimeoutError, RuntimeError):
                     pass
-                ctrl = probe.data_channel(topic=_CTRL_TOPIC, reliable=True)
-                # Wait long enough for the coordinator's EXPECT_CLIENT
-                # message to arrive after both sides are in the room.
-                # 1.5 s was previously too tight when the coordinator's
-                # quick_exchange ran behind audio-track setup; bumping
-                # to 5 s keeps real VPN-call latency acceptable while
-                # giving EXPECT_CLIENT a reliable window.
-                payload = ctrl.recv_bytes(timeout=5.0)
-                if payload is not None:
-                    try:
-                        msg = _ctrl_decode(payload)
-                        if msg.kind == _Kind.EXPECT_CLIENT:
-                            cpid = int(msg.get("client_peer_id", 0))
-                            csid = str(msg.get("session_id", ""))
-                            cexp = int(msg.get("expires_in_secs", 30))
-                            if cpid and csid:
-                                self._expected_clients.register(
-                                    client_peer_id=cpid,
-                                    session_id=csid,
-                                    expires_in_secs=cexp,
-                                )
-                                ctrl.send_bytes(
-                                    _ctrl_encode(_CM(kind=_Kind.EXPECT_ACK, body={}))
-                                )
-                                print(
-                                    f"[vpn-mesh] cid={cid} EXPECT_CLIENT: registered "
-                                    f"client={cpid} session={csid}",
-                                    file=self._log,
-                                )
-                            # Brief flush before tearing down the room so
-                            # the queued EXPECT_ACK actually lands on the
-                            # SFU before room.disconnect() races it.
-                            _time.sleep(0.5)
-                            # Release the per-account flag immediately so the
-                            # legitimate VPN client's inbound dial — which
-                            # arrives within ~100 ms of the coordinator sending
-                            # ASSIGN — isn't rejected via skip_probe while we
-                            # wait for the probe LiveKit session to fully tear
-                            # down (which can take up to 14 s when there is no
-                            # other live session keeping the ffi runtime warm).
-                            # The teardown is moved to a background thread; it
-                            # still completes, just without holding the lock.
-                            self._relay_state.transition(
-                                account_index, False, "expect-client-done", cid=cid,
-                            )
-                            self._bump("expect_client")
-                            def _async_stop(p=probe, _cid=cid):
-                                try:
-                                    p.stop()
-                                except Exception:  # noqa: BLE001
-                                    pass
-                            threading.Thread(
-                                target=_async_stop,
-                                name=f"probe-teardown-{cid}",
-                                daemon=True,
-                            ).start()
-                            return None  # coordinator instruction handled
-                    except _CtrlError:
-                        pass
             except Exception:  # noqa: BLE001
-                log.exception("relay: cid=%s probe session error", cid)
-                try:
-                    probe.stop()
-                except Exception:  # noqa: BLE001
-                    pass
+                log.exception("relay: cid=%s session start failed", cid)
+                try: session.stop()
+                except Exception: pass  # noqa: BLE001
                 self._relay_state.transition(
-                    account_index, False, "probe-error", cid=cid,
+                    account_index, False, "session-start-failed", cid=cid,
                 )
-                self._bump("probe_error")
+                self._bump("session_start_failed")
                 return None
-        # Falling through means "EXPECT_CLIENT probe didn't trigger early
-        # return; the caller should be a real VPN client". Promote the
-        # already-joined probe session.
-        return probe
+        return session
+
+    def _resolve_caller_identity(self, session: Any, peer_id: int, cid: str) -> int | None:
+        """Read the caller user_id from the LiveKit participant identity.
+        event.peer_id is the relay's own user_id under Bale push
+        semantics, so we MUST resolve the real caller from the room
+        participant list before issuing a /30 — otherwise every caller on
+        the same relay account would collide on mesh.issue_client."""
+        try:
+            identities = session.remote_participant_identities()
+        except Exception:  # noqa: BLE001
+            identities = []
+        for ident in identities:
+            try:
+                caller_id = int(ident)
+            except (TypeError, ValueError):
+                continue
+            if caller_id > 0 and caller_id != peer_id:
+                print(
+                    f"[vpn-mesh] cid={cid} caller resolved from LiveKit identity: {caller_id}",
+                    file=self._log,
+                )
+                return caller_id
+        # Couldn't resolve — caller didn't join the room within wait
+        # window, or only the relay itself is present.
+        print(
+            f"[vpn-mesh] cid={cid} could not resolve caller identity "
+            f"(participants={identities}); rejecting call",
+            file=self._log,
+        )
+        self._bump("no_caller_identity")
+        return None
 
     def _maybe_evict_stale_sessions(self, account_index: int, cid: str) -> None:
         """Reconnect-evict (commit 2215aee). When a fresh inbound call
@@ -464,85 +409,8 @@ class RelayCallHandler:
                 try: self._allocator.leave(ev_pid)
                 except Exception: pass  # noqa: BLE001
 
-    def _resolve_and_verify_caller(
-        self, event: Any, account_index: int, peer_id: int, probe: Any, cid: str,
-    ) -> tuple[int, str] | None:
-        """Promote the probe to a VPN session and resolve the actual
-        caller user_id from the LiveKit participant identity (commit
-        36a8579). Returns (resolved_peer_id, session_psk), or None if
-        the call was rejected (audio publish failed, or no EXPECT_CLIENT
-        pre-approval within the 5 s polling window).
-        session_psk is empty string when coordinator did not send one."""
-        # VPN client call — reuse the already-joined probe session.
-        # Publish audio now so the Bale SFU keeps this long-lived
-        # session alive (without a media track the SFU closes it
-        # after ~20 s).
-        try:
-            probe.enable_audio()
-        except Exception:  # noqa: BLE001
-            log.exception("relay: cid=%s enable_audio failed; cleaning up", cid)
-            try: probe.stop()
-            except Exception: pass  # noqa: BLE001
-            self._relay_state.transition(
-                account_index, False, "enable-audio-failed", cid=cid,
-            )
-            self._bump("enable_audio_failed")
-            return None
 
-        # Override peer_id with the ACTUAL caller user_id from the
-        # LiveKit participant identity. event.peer_id is the relay's
-        # own peer_id under Bale push semantics, so all clients on
-        # the same relay account would collide on mesh.issue_client.
-        try:
-            identities = probe.remote_participant_identities()
-        except Exception:  # noqa: BLE001
-            identities = []
-        for ident in identities:
-            try:
-                caller_id = int(ident)
-            except (TypeError, ValueError):
-                continue
-            if caller_id != peer_id and caller_id > 0:
-                print(
-                    f"[vpn-mesh] cid={cid} caller user_id resolved from LiveKit "
-                    f"identity: peer_id={peer_id} → {caller_id}",
-                    file=self._log,
-                )
-                peer_id = caller_id
-                break
-
-        # Verify the caller was pre-approved by the coordinator.
-        # Race: the Android client typically dials the relay within
-        # 100-300 ms of receiving ASSIGN, but the coordinator's
-        # quick_exchange (which registers the EXPECT_CLIENT) can take
-        # 2-5 s if the relay has to publish its audio track first.
-        # Poll briefly so the legitimate client doesn't get rejected
-        # just because EXPECT_CLIENT was racing the inbound dial.
-        expected_entry = self._expected_clients.consume(peer_id)
-        deadline = _time.monotonic() + 5.0
-        while expected_entry is None and _time.monotonic() < deadline:
-            _time.sleep(0.25)
-            expected_entry = self._expected_clients.consume(peer_id)
-        if expected_entry is None:
-            print(
-                f"[vpn-mesh] cid={cid} rejecting unknown caller={peer_id} on "
-                f"account={account_index} (no EXPECT_CLIENT pre-approval; "
-                f"likely the coordinator's dispatch call landed here)",
-                file=self._log,
-            )
-            try: probe.stop()
-            except Exception: pass  # noqa: BLE001
-            self._relay_state.transition(
-                account_index, False, "no-expect-client", cid=cid,
-            )
-            self._bump("no_expect_client")
-            return None
-        session_id, session_psk = expected_entry
-        with self._session_map_lock:
-            self._session_map[f"sess:{peer_id}"] = session_id
-        return peer_id, session_psk
-
-    # ---- post-coordinator: actually bring up the tunnel -------------
+    # ---- bring up the tunnel ---------------------------------------
 
     def _provision_tunnel(
         self,
@@ -552,8 +420,6 @@ class RelayCallHandler:
         session_pre_joined: Any,
         state: list,
         cid: str,
-        *,
-        session_psk: str = "",
     ) -> None:
         on_drop = self._make_on_drop(account_index, cid)
         try:
@@ -566,18 +432,21 @@ class RelayCallHandler:
                     identity=f"{self._identity_prefix}-{account_index}-{peer_id}",
                 )
                 session.start()
+            # Publish audio so the Bale SFU keeps this long-lived session
+            # alive (without a media track the SFU closes it after ~20s).
+            # _join_room creates the session with publish_audio=False;
+            # enabling here is the promotion to a long-lived VPN session.
+            try:
+                session.enable_audio()
+            except Exception:  # noqa: BLE001
+                log.exception("relay: cid=%s enable_audio failed", cid)
             self._Keepalive(session, interval=20.0).start()
             dc = self._DataChannelTransport(session, topic="vpn", reliable=False)
-            # B3: prefer per-session PSK from coordinator over the global PSK.
-            # The global PSK remains as a fallback for legacy relays not yet
-            # enrolled with a coordinator that sends session_psk.
-            if session_psk:
-                from baleobala.vpn.crypto import derive_key as _derive_key
-                effective_key = _derive_key(session_psk)
-            else:
-                effective_key = self._psk_key
+            # PSK authenticates the caller: if the encrypted handshake
+            # fails no data ever flows. With no PSK configured (debug
+            # only) the relay accepts plaintext.
             transport = (
-                self._EncryptedTransport(dc, effective_key) if effective_key else dc
+                self._EncryptedTransport(dc, self._psk_key) if self._psk_key else dc
             )
             # Must match the Android client's hardcoded DEFAULT_TUNNEL_SESS_ID.
             # Per-peer offsets caused frames to be silently dropped by the
@@ -659,16 +528,12 @@ class RelayCallHandler:
     def _make_on_drop(self, account_index: int, cid: str) -> Callable[[int], None]:
         def _on_drop(dropped_peer_id: int) -> None:
             # Slot freed — clear the per-account active flag so the next
-            # incoming Bale call can start a fresh probe. cid threads
+            # incoming Bale call can start a fresh join. cid threads
             # through so the journal links the drop back to the call
             # that originally created the session.
             self._relay_state.transition(
                 account_index, False, "on-drop", cid=cid,
             )
-            if not self._use_coordinator or not self._reporters:
-                return
             with self._session_map_lock:
-                sid = self._session_map.pop(f"sess:{dropped_peer_id}", None)
-            if sid is not None:
-                self._reporters[account_index].report_released(str(sid))
+                self._session_map.pop(f"sess:{dropped_peer_id}", None)
         return _on_drop

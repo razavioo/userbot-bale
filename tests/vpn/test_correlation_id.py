@@ -32,10 +32,10 @@ def _cids_in(log: str) -> list[str]:
     return _CID_RE.findall(log)
 
 
-def test_cid_appears_on_skip_probe_line():
+def test_cid_appears_on_slot_busy_refusal():
     h = _Harness()
     # Pre-populate a running session + active flag so the next call
-    # hits skip-probe.
+    # hits the slot-busy refusal path.
     from .test_relay_handler import FakeLiveKitSession
     running = FakeLiveKitSession(url="x", token="t", identity="prior")
     h.sessions.append((42, running, object()))
@@ -47,8 +47,8 @@ def test_cid_appears_on_skip_probe_line():
 
     new_log = h.log.getvalue()[len(log_before):]
     cids = _cids_in(new_log)
-    assert cids, f"no cid found on skip-probe path; log:\n{new_log}"
-    assert "skipping probe" in new_log
+    assert cids, f"no cid found on slot-busy path; log:\n{new_log}"
+    assert "refusing call" in new_log
 
 
 def test_cid_appears_on_missing_peer_id_path():
@@ -75,12 +75,11 @@ def test_each_call_gets_a_distinct_cid():
 
 
 def test_cid_threads_through_full_committed_call_lifecycle():
-    """A single committed call must use ONE cid for: incoming-call
-    line, server-jwt-assignment line, status=assigned, status=acknowledged,
-    status=active, plus the active-flag transitions (probe-start →
+    """A single committed call must use ONE cid across every line tied
+    to that call: incoming-call, server-jwt-assignment, status
+    transitions, plus the active-flag transitions (join-start →
     after-commit). All other lines without `cid=` are irrelevant."""
     h = _Harness()
-    h.expected_clients.register(client_peer_id=42, session_id="s-1", expires_in_secs=30)
     h.stage_remote_identities(["42"])
     event = _fake_event(peer_id=999)
     h.handler.handle_call(event)
@@ -97,7 +96,7 @@ def test_cid_threads_through_full_committed_call_lifecycle():
     assert f"cid={cid} peer=42 status=acknowledged" in out
     assert f"cid={cid} peer=42 status=active" in out
     # And the audit log for transitions.
-    assert f"cid={cid}" in out and "_active[0]: False→True at probe-start" in out
+    assert f"cid={cid}" in out and "_active[0]: False→True at join-start" in out
     assert f"cid={cid}" in out and "_active[0]: True→False at after-commit" in out
 
 
