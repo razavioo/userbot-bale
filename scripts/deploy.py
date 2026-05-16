@@ -82,13 +82,7 @@ def main() -> None:
     with inventory_path.open() as f:
         inv = yaml.safe_load(f)
 
-    nodes: list[dict] = []
-    coordinator = inv.get("coordinator")
-    if coordinator:
-        coordinator.setdefault("name", "coordinator")
-        nodes.append(coordinator)
-    for relay in inv.get("relays", []):
-        nodes.append(relay)
+    nodes: list[dict] = list(inv.get("relays", []))
 
     if args.node:
         nodes = [n for n in nodes if n.get("name") == args.node or n.get("role") == args.node]

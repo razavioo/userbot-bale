@@ -1,20 +1,11 @@
-# baleobala production topology
-# Edit this file to add, remove, or reconfigure nodes.
-# Run  scripts/deploy.py [--node <name>] [--dry-run]  to apply.
-
-coordinator:
-  host: 68.183.118.171
-  user: root
-  remote_path: /opt/baleobala
-  jwt_dir: /root/.baleobala/accounts
-  etc_dir: /etc/baleobala
-  # JWT file inside jwt_dir used for the coordinator identity
-  coordinator_jwt: account-1.jwt
-  install_script: scripts/install-systemd-relay.sh
-  role: coordinator
+# baleobala production topology — relay-only (no coordinator).
+# Each relay host runs one mesh exit-node that accepts inbound Bale calls
+# from any client. The PSK in /etc/baleobala/vpn.psk authenticates traffic.
+# Clients enter the per-relay Bale user_id (peer_id) in their app Settings
+# and the app dials each one in shuffled order with fallback.
 
 relays:
-  - name: relay-ir-1
+  - name: relay-1
     host: 68.183.118.171
     user: root
     remote_path: /opt/baleobala
@@ -22,9 +13,15 @@ relays:
     etc_dir: /etc/baleobala
     region: ir
     wan_interface: eth0
-    # JWT files inside jwt_dir used for relay accounts (one per concurrent client slot)
+    # JWT files in jwt_dir used by the mesh exit-node (one Bale call per JWT)
     relay_jwts:
+      - account-1.jwt
       - account-2.jwt
       - account-3.jwt
-    install_script: scripts/install-systemd-relay.sh
+      - account-4.jwt
+      - account-5.jwt
+      - account-6.jwt
+      - account-7.jwt
+      - account-8.jwt
+    install_script: scripts/install-systemd-mesh.sh
     role: relay

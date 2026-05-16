@@ -85,57 +85,10 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
     mx.add_argument("--psk", default=None)
     mx.add_argument("--psk-file", default=None)
     mx.add_argument("--provision-timeout", type=float, default=10.0)
-    mx.add_argument("--coordinator-peer-id", type=int, default=None,
-                    help="Bale user_id of the coordinator account. When set, the relay "
-                         "registers itself and only accepts calls from approved clients.")
-    mx.add_argument("--relay-peer-id", action="append", type=int, default=None,
-                    dest="relay_peer_ids",
-                    help="Bale user_id for each --bale-jwt-file in order "
-                         "(required when --coordinator-peer-id is set). Repeat once per JWT.")
-    mx.add_argument("--heartbeat-interval", type=float, default=300.0,
-                    help="seconds between HEARTBEAT messages to coordinator (default: 300). "
-                         "Each heartbeat opens a fresh Bale call + LiveKit room — too-frequent "
-                         "heartbeats keep the coordinator account saturated and starve real "
-                         "client HELLOs. Pair with coordinator's --stale-timeout >= 3x this.")
-    mx.add_argument("--relay-id-prefix", default=None,
-                    help="prefix for the coordinator relay_id (default: hostname). "
-                         "Use a unique value per process when running multiple mesh "
-                         "instances on the same host, so each instance registers as a "
-                         "distinct relay with the coordinator.")
-    mx.add_argument("--standalone", action="store_true",
-                    help="skip coordinator registration; accept any inbound call (legacy mode)")
     mx.add_argument("--metrics-port", type=int, default=9201,
                     help="bind a Prometheus /metrics + /healthz endpoint on "
                          "127.0.0.1:<port>; pass 0 to disable (default: 9201)")
     mx.set_defaults(func=cmd_vpn_exit_node_mesh)
-
-    co = vpn_sub.add_parser(
-        "coordinator",
-        help="central rendezvous: route incoming clients to free relay slots",
-    )
-    co.add_argument("--listen-jwt", default=None,
-                    help="Bale JWT clients call (the public coordinator number)")
-    co.add_argument("--listen-jwt-file", default=None,
-                    help="file containing the listen JWT")
-    co.add_argument("--dispatch-jwt", default=None,
-                    help="Bale JWT used for outbound calls to relays "
-                         "(default: same as listen-jwt; warns about race)")
-    co.add_argument("--dispatch-jwt-file", default=None,
-                    help="file containing the dispatch JWT")
-    co.add_argument("--snapshot-path", default=None,
-                    help="path to JSON state snapshot (default: "
-                         "<config_dir>/coordinator-state.json)")
-    co.add_argument("--identity-prefix", default="coordinator")
-    co.add_argument("--prune-interval", type=float, default=30.0,
-                    help="seconds between stale-relay pruning passes")
-    co.add_argument("--stale-timeout", type=float, default=900.0,
-                    help="seconds since last heartbeat before a relay is dropped (default: 900 = 15min). "
-                         "Must be > 3x the relay's --heartbeat-interval (default 300s on the relay side) "
-                         "so a single dropped heartbeat doesn't prune a healthy relay.")
-    co.add_argument("--metrics-port", type=int, default=9202,
-                    help="bind a Prometheus /metrics + /healthz endpoint on "
-                         "127.0.0.1:<port>; pass 0 to disable (default: 9202)")
-    co.set_defaults(func=cmd_vpn_coordinator)
 
     lb = vpn_sub.add_parser("loopback",
                             help="in-process tunnel self-test (no TUN, no call)")
@@ -194,9 +147,9 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     mapped to its own /30 slot inside --pool-cidr. Requires a reachable
     TUN device (see scripts/vpn-setup-tun.sh) and NAT setup (vpn-exit-node.sh).
 
-    With --coordinator-peer-id the relay registers itself and only accepts
-    calls from clients pre-approved by the coordinator (reverse-call flow).
-    Use --standalone to skip coordinator and accept any inbound call."""
+    Accepts any inbound Bale call; the PSK handshake on the encrypted
+    DataChannel authenticates the caller. Clients pick a relay peer_id
+    from their built-in list and dial it directly — no coordinator."""
     import threading
     import time
     from baleobala.bale import BaleApiClient, LiveKitSession
@@ -209,10 +162,6 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     from .provisioning import MeshProvisionMessage, ProvisioningError, recv_mesh_message
     from .tun import TunDevice
     from .transports.datachannel_transport import DataChannelTransport
-
-    coordinator_peer_id: int | None = args.coordinator_peer_id
-    relay_peer_ids: list[int] = list(args.relay_peer_ids or [])
-    use_coordinator = coordinator_peer_id is not None and not args.standalone
 
     if not args.skip_nat_setup:
         _run_nat_setup(args.tun, args.wan)
@@ -240,12 +189,6 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     if not jwts:
         raise SystemExit("--bale-jwt(-file) required in mesh mode")
 
-    if use_coordinator and relay_peer_ids and len(relay_peer_ids) != len(jwts):
-        raise SystemExit(
-            f"--relay-peer-id count ({len(relay_peer_ids)}) must match "
-            f"--bale-jwt-file count ({len(jwts)})"
-        )
-
     from .jwt_util import warn_if_near_expiry
     for jwt in jwts:
         warn_if_near_expiry(jwt)
@@ -257,11 +200,7 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         max_peers_per_server=args.max_peers_per_server_jwt,
     )
 
-    # Coordinator integration state (populated below if use_coordinator)
-    reporters: list = []
-    from baleobala.coordinator.relay_client import ExpectedClientSet, handle_coordinator_instruction
-    expected_clients = ExpectedClientSet()
-    # Maps session_id → peer_id for RELEASED reporting
+    # Maps session_id → peer_id for accounting (no coordinator reporting).
     session_map: dict[str, int] = {}
     session_map_lock = threading.Lock()
     # The probe lock used to be global, then per-account, but both
@@ -301,7 +240,6 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         add_health_hook(_relay_health)
 
     relay_handler = RelayCallHandler(
-        use_coordinator=use_coordinator,
         identity_prefix=args.identity_prefix,
         pool_cidr=args.pool_cidr,
         tun_mtu=args.tun_mtu,
@@ -310,14 +248,12 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         mesh=mesh,
         allocator=allocator,
         control=control,
-        expected_clients=expected_clients,
         session_map=session_map,
         session_map_lock=session_map_lock,
         probe_locks=_probe_locks,
         relay_state=relay_state,
         stale_active_flag_secs=STALE_ACTIVE_FLAG_SECS,
         sessions=sessions,
-        reporters=reporters,
         livekit_session_factory=LiveKitSession,
         keepalive_factory=LiveKitKeepalive,
         datachannel_transport_factory=DataChannelTransport,
@@ -330,7 +266,6 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     def on_incoming_call(event, account_index: int = 0):  # type: ignore[no-untyped-def]
         relay_handler.handle_call(event, account_index)
 
-
     for account_index, jwt in enumerate(jwts):
         bale = BaleApiClient(jwt=jwt)
         bale.start()
@@ -339,34 +274,9 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         )
         bale_clients.append(bale)
 
-        if use_coordinator and relay_peer_ids:
-            from baleobala.coordinator.relay_client import CoordinatorReporter
-            import socket as _socket
-            prefix = args.relay_id_prefix or _socket.gethostname()
-            relay_id = f"{prefix}-{account_index}"
-            reporter = CoordinatorReporter(
-                coordinator_peer_id=coordinator_peer_id,
-                relay_id=relay_id,
-                relay_peer_id=relay_peer_ids[account_index],
-                bale_client=bale,
-                identity_prefix=f"{args.identity_prefix}-reporter",
-            )
-            reporter.start()
-            reporter.report_online(capacity=args.max_peers_per_server_jwt)
-            reporter.start_heartbeat(
-                interval=args.heartbeat_interval,
-                get_in_use=lambda idx=account_index: [
-                    p for s in allocator.slots() if s.index == idx
-                    for p in s.peer_ids
-                ],
-                capacity=args.max_peers_per_server_jwt,
-            )
-            reporters.append(reporter)
-
-    mode_tag = "coordinator" if use_coordinator else "standalone"
     log.info(
-        "vpn-mesh: up mode=%s tun=%s pool=%s accounts=%d max_peers=%d capacity=%d",
-        mode_tag, args.tun, args.pool_cidr, len(bale_clients),
+        "vpn-mesh: up tun=%s pool=%s accounts=%d max_peers=%d capacity=%d",
+        args.tun, args.pool_cidr, len(bale_clients),
         args.max_peers_per_server_jwt, allocator.total_capacity,
     )
 
@@ -391,12 +301,6 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     finally:
         _reaper.stop()
         log.info("vpn-mesh: shutting down active_clients=%d", len(sessions))
-        for reporter in reporters:
-            try:
-                reporter.report_offline()
-                reporter.stop()
-            except Exception:  # noqa: BLE001
-                pass
         for peer_id, sess, _tx in sessions:
             try:
                 mesh.drop_client(peer_id)
@@ -470,97 +374,6 @@ def _first_bale_jwt_arg(args: argparse.Namespace) -> str | None:
 def _first_bale_jwt_file_arg(args: argparse.Namespace) -> str | None:
     values = _as_list(getattr(args, "bale_jwt_file", None))
     return values[0] if values else None
-
-
-def cmd_vpn_coordinator(args: argparse.Namespace) -> int:
-    """Run the central rendezvous service.
-
-    The coordinator listens on `--listen-jwt` for incoming Bale calls from
-    clients, picks a free relay slot, hands the assignment back to the client,
-    then instructs the chosen relay (via `--dispatch-jwt`) to expect the call.
-    """
-    import threading
-    import time as _time
-
-    from baleobala.coordinator import CoordinatorService, RelayRegistry, ServiceConfig
-    from baleobala.coordinator.bale_transport import BaleCoordinatorTransport
-    from baleobala.coordinator.registry import default_snapshot_path
-    from baleobala.bale.ws_client import WsTlsConfig
-
-    listen_jwt = _read_jwt_arg(args.listen_jwt, args.listen_jwt_file)
-    if not listen_jwt:
-        raise SystemExit("--listen-jwt or --listen-jwt-file required")
-    dispatch_jwt = _read_jwt_arg(args.dispatch_jwt, args.dispatch_jwt_file) or listen_jwt
-
-    snapshot_path = (
-        Path(args.snapshot_path).expanduser() if args.snapshot_path else default_snapshot_path()
-    )
-    log.info("coordinator: state snapshot at %s", snapshot_path)
-
-    ws_tls_config = WsTlsConfig.from_sources(
-        ca_file=getattr(args, "ws_ca_file", None),
-        ca_path=getattr(args, "ws_ca_path", None),
-        insecure=bool(getattr(args, "ws_ssl_no_verify", False)),
-        allow_insecure_debug=True,
-    )
-
-    registry = RelayRegistry(snapshot_path=snapshot_path)
-    transport = BaleCoordinatorTransport(
-        listen_jwt=listen_jwt,
-        dispatch_jwt=dispatch_jwt,
-        identity_prefix=args.identity_prefix,
-        ws_tls_config=ws_tls_config,
-    )
-    service = CoordinatorService(
-        transport=transport,
-        registry=registry,
-        config=ServiceConfig(stale_relay_timeout_secs=args.stale_timeout),
-    )
-    service.start()
-    log.info(
-        "coordinator: listening total_relays=%d capacity=%d in_use=%d",
-        len(registry.list_relays()), registry.total_capacity(), registry.total_in_use(),
-    )
-
-    metrics_server = _maybe_start_metrics_server(
-        getattr(args, "metrics_port", 0), tag="coordinator",
-    )
-
-    stop_event = threading.Event()
-
-    def prune_loop() -> None:
-        while not stop_event.wait(args.prune_interval):
-            try:
-                service.prune_stale()
-            except Exception:  # noqa: BLE001
-                log.exception("coordinator: prune pass failed")
-
-    pruner = threading.Thread(target=prune_loop, name="coord-prune", daemon=True)
-    pruner.start()
-
-    from .runner import wait_for_signal
-    try:
-        wait_for_signal()
-    finally:
-        stop_event.set()
-        try:
-            service.stop()
-        except Exception:  # noqa: BLE001
-            log.exception("coordinator: service.stop failed")
-        if metrics_server is not None:
-            try:
-                metrics_server.shutdown()
-            except Exception:  # noqa: BLE001
-                pass
-    return 0
-
-
-def _read_jwt_arg(value: str | None, file_path: str | None) -> str | None:
-    if value:
-        return value.strip()
-    if file_path:
-        return Path(file_path).expanduser().read_text().strip()
-    return None
 
 
 def cmd_vpn_loopback(args: argparse.Namespace) -> int:

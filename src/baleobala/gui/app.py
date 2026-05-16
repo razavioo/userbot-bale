@@ -35,8 +35,7 @@ from PySide6.QtGui import QColor, QPalette
 
 from baleobala.control import ControlService
 from baleobala.control.paths import data_dir
-from baleobala.control.coordinator_config import (
-    load_coordinator_peer_id,
+from baleobala.control.proxy_config import (
     load_proxy_config,
     save_proxy_config,
 )
@@ -540,7 +539,7 @@ class LoginView(QWidget):
 
 
 class ConnectView(QWidget):
-    """Simple connect/disconnect view for the coordinator-managed proxy."""
+    """Simple connect/disconnect view. Dials the configured relay peer_id directly."""
 
     def __init__(self, parent: "MainWindow") -> None:
         super().__init__(parent)
@@ -554,7 +553,6 @@ class ConnectView(QWidget):
 
         # Load saved proxy config
         _cfg = load_proxy_config()
-        _coord_id = load_coordinator_peer_id()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(32, 28, 32, 28)
@@ -632,17 +630,12 @@ class ConnectView(QWidget):
         self.proxy_secret.setText(_cfg.get("proxy_secret") or "")
 
         self._peer_id_edit = QLineEdit()
-        self._peer_id_edit.setPlaceholderText("Relay peer ID (optional if coordinator set)")
+        self._peer_id_edit.setPlaceholderText("Relay peer ID (required)")
         self._peer_id_edit.setText(str(_cfg.get("proxy_peer_id") or ""))
-
-        self._coordinator_edit = QLineEdit()
-        self._coordinator_edit.setPlaceholderText("Coordinator peer ID (optional)")
-        self._coordinator_edit.setText(str(_coord_id or ""))
 
         settings_form.addRow("Local SOCKS5 port", self.listen_port)
         settings_form.addRow("Shared secret", self.proxy_secret)
         settings_form.addRow("Relay peer ID", self._peer_id_edit)
-        settings_form.addRow("Coordinator peer ID", self._coordinator_edit)
 
         save_btn = QPushButton("Save settings")
         save_btn.clicked.connect(self._save_settings)
@@ -696,13 +689,6 @@ class ConnectView(QWidget):
             proxy_secret=self.proxy_secret.text().strip() or None,
             listen_port=self.listen_port.value(),
         )
-        # Also save coordinator peer_id to coordinator.json
-        try:
-            coord_id = int(self._coordinator_edit.text().strip())
-            from baleobala.control.coordinator_config import save_coordinator_peer_id
-            save_coordinator_peer_id(coord_id)
-        except (ValueError, TypeError):
-            pass
         self._append_log("Settings saved.")
 
     def _refresh_ui(self) -> None:
@@ -735,7 +721,6 @@ class ConnectView(QWidget):
         self.listen_port.setEnabled(editable)
         self.proxy_secret.setEnabled(editable)
         self._peer_id_edit.setEnabled(editable)
-        self._coordinator_edit.setEnabled(editable)
 
         # Update account label if phone changed
         if self._main.phone:
@@ -765,15 +750,8 @@ class ConnectView(QWidget):
             self._set_phase("error", "Sign in with your Bale phone number first.")
             return
 
-        # Resolve peer_id and/or coordinator_peer_id from fields
-        coordinator_peer_id: Optional[int] = None
+        # Resolve relay peer_id from the field
         peer_id: Optional[int] = None
-        try:
-            raw = self._coordinator_edit.text().strip()
-            if raw:
-                coordinator_peer_id = int(raw)
-        except ValueError:
-            pass
         try:
             raw = self._peer_id_edit.text().strip()
             if raw:
@@ -781,8 +759,8 @@ class ConnectView(QWidget):
         except ValueError:
             pass
 
-        if coordinator_peer_id is None and peer_id is None:
-            self._set_phase("error", "Set a relay peer ID or coordinator peer ID in Settings.")
+        if peer_id is None:
+            self._set_phase("error", "Set a relay peer ID in Settings.")
             return
 
         self.logs.clear()
@@ -791,7 +769,6 @@ class ConnectView(QWidget):
         worker = DirectProxyWorker(
             jwt=self._main.jwt,
             peer_id=peer_id,
-            coordinator_peer_id=coordinator_peer_id,
             proxy_secret=self.proxy_secret.text().strip() or None,
             listen_host="127.0.0.1",
             listen_port=self.listen_port.value(),

@@ -46,8 +46,10 @@
     <string name="settings_reconnect">Reconnect when app opens</string>
     <string name="settings_auto_reconnect">Auto-reconnect after drop</string>
     <string name="settings_logs">Show live logs on dashboard</string>
-    <string name="settings_exit_peer_hint">Bale relay peer ID</string>
     <string name="settings_dns_hint">Primary DNS server</string>
+    <string name="settings_relays_title">Relay peer IDs</string>
+    <string name="settings_relays_hint">Bale user IDs of the relay accounts to connect through. One per line or comma-separated. The app tries them in a per-device order and falls back when one is busy.</string>
+    <string name="settings_relays_input_hint">e.g. 1956473507, 1685402741</string>
     <string name="settings_save">Save</string>
     <string name="settings_close">Close</string>
 

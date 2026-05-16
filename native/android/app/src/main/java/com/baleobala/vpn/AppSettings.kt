@@ -1,8 +1,17 @@
 package com.baleobala.vpn
 
 import android.content.Context
-import com.baleobala.vpn.BuildConfig
 
+/**
+ * App-level settings persisted in SharedPreferences.
+ *
+ * Relay peer_ids are user-managed: the user enters them in the Settings
+ * screen and they live in `KEY_RELAY_PEER_IDS` as a comma-separated list
+ * of decimal Bale user_ids. The client tries each in order, with a
+ * deterministic per-device shuffle for load distribution, falling back
+ * to the next when one is busy or unreachable. There is no coordinator
+ * and no bundled relay list.
+ */
 class AppSettings(ctx: Context) {
     private val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -30,15 +39,30 @@ class AppSettings(ctx: Context) {
         set(value) { prefs.edit().putString(KEY_DNS, value).apply() }
 
     /**
-     * The coordinator peer_id this client should call to get a relay assignment.
-     * Read-only in production: value comes from [BuildConfig.COORDINATOR_PEER_ID].
-     * In debug builds it can be overridden via SharedPreferences (dev/staging).
+     * Ordered list of relay peer_ids the user has added. The client
+     * dials these in order (with a per-device shuffle for fairness)
+     * and falls back when one is busy or unreachable.
      */
-    val coordinatorPeerId: Long
+    var relayPeerIds: List<Long>
         get() {
-            val override = prefs.getLong(KEY_COORDINATOR_PEER_ID, 0L)
-            return if (override > 0L) override else BuildConfig.COORDINATOR_PEER_ID
+            val raw = prefs.getString(KEY_RELAY_PEER_IDS, "") ?: ""
+            if (raw.isBlank()) return emptyList()
+            return raw.split(",").mapNotNull { it.trim().toLongOrNull() }
+                .filter { it > 0L }
         }
+        set(value) {
+            val cleaned = value.filter { it > 0L }.distinct().joinToString(",")
+            prefs.edit().putString(KEY_RELAY_PEER_IDS, cleaned).apply()
+        }
+
+    fun addRelayPeerId(peerId: Long) {
+        if (peerId <= 0L) return
+        relayPeerIds = relayPeerIds + peerId
+    }
+
+    fun removeRelayPeerId(peerId: Long) {
+        relayPeerIds = relayPeerIds.filterNot { it == peerId }
+    }
 
     companion object {
         private const val PREFS = "baleobala_settings"
@@ -47,6 +71,6 @@ class AppSettings(ctx: Context) {
         private const val KEY_LOGS = "show_logs"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_DNS = "primary_dns"
-        private const val KEY_COORDINATOR_PEER_ID = "coordinator_peer_id"
+        private const val KEY_RELAY_PEER_IDS = "relay_peer_ids"
     }
 }

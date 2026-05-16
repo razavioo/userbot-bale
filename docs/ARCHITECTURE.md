@@ -170,63 +170,41 @@ The tunnel only sees opaque byte frames. It does not know whether the bytes came
 
 The tunnel consumes IP packets from the kernel TUN device and writes reassembled packets back to it. This is the only place where kernel packet handling appears in the main user-space runtime.
 
-## Coordinator and Multi-Relay Topology
+## Topology (post-v0.4: no coordinator)
 
-In production the system runs as three tiers communicating through short-lived LiveKit rooms:
+The system is two tiers: clients and relays. There is no rendezvous service. Each client app keeps a user-managed list of relay Bale `peer_id`s; to connect it picks one, places a Bale call to it, and runs the PSK handshake. If that fails it falls back to the next peer_id in the list.
 
 ```text
-Client ──HELLO──► Coordinator ──EXPECT_CLIENT──► Relay
-                   └──ASSIGN──► Client ◄──────────────┘ (relay calls back)
+Client (app holds list of relay peer_ids)
+   │
+   │ pick → Bale StartCall → LiveKit DataChannel
+   │ PSK handshake → BBMESH1 ack → tunnel up
+   ▼
+Relay (mesh exit-node) — one per Bale JWT, all on one VPS
+   • accepts any inbound call (PSK authenticates)
+   • resolves caller user_id from LiveKit participant identity
+   • allocates a /30 from the pool, issues client via MeshExitNode
+   • MASQUERADEs egress to eth0
 ```
-
-### Coordinator (`src/baleobala/coordinator/`)
-
-A single Bale account that listens for inbound calls, runs the control-message protocol defined in `coordinator/protocol.py`, and assigns clients to relays.
-
-**HELLO → ASSIGN flow:**
-
-1. Client dials coordinator, sends `HELLO` with its `client_peer_id` and optional `client_region`.
-2. Coordinator calls `pick_relay()` (`coordinator/policy.py`) — region-affinity first, then lowest load fraction, tie-break by `relay_id`.
-3. Coordinator generates a 64-char hex ephemeral PSK (`session_psk`) for the session.
-4. Coordinator dials the chosen relay, sends `EXPECT_CLIENT` (carrying `client_peer_id`, `session_id`, `session_psk`, TTL). Relay sends `EXPECT_ACK`.
-5. Only after `EXPECT_ACK` does the coordinator send `ASSIGN` to the client (carrying `relay_peer_id`, `session_psk`). This ordering prevents the dial-race where the client arrives at the relay before the relay knows to expect it.
-6. Client dials relay directly. Relay's `ExpectedClientSet` (TTL-gated) approves the call.
-
-**Relay lifecycle messages** (sent from relay → coordinator via `CoordinatorReporter`):
-
-| Kind          | When                                          |
-| ------------- | --------------------------------------------- |
-| `ONLINE`      | relay startup, per JWT slot                   |
-| `HEARTBEAT`   | every 60 s (default); updates `in_use` list   |
-| `RELEASED`    | VPN session ends                              |
-| `OFFLINE`     | relay shutdown                                |
-
-Each message carries an HMAC-SHA256 signature (`coordinator/auth.py`) keyed to a per-relay secret stored in the `RelayRegistry`. Unenrolled relays are accepted with a WARNING to allow incremental migration.
-
-**Registry snapshot** (`coordinator/registry.py`) is written to disk after every state change so coordinator restarts don't lose relay enrollments or in-use counts.
 
 ### Relay (`src/baleobala/vpn/relay_handler.py`)
 
-Each relay JWT maps to one `RelayCallHandler` instance. The handler is a state machine with a correlation ID (`cid`, 8-char hex UUID prefix) threaded through every log call for tracing.
+Each relay JWT maps to one `RelayCallHandler` instance shared across all account-indexed listen callbacks. The handler is a state machine with a correlation ID (`cid`, 8-char hex UUID prefix) threaded through every log call for tracing.
 
 **Per-call lifecycle:**
 
-1. Inbound Bale call arrives → handler picks the least-loaded JWT slot.
-2. Probe phase: joins the LiveKit room, reads the control channel. If the coordinator's `EXPECT_CLIENT` was pre-sent, reads a direct VPN call and promotes to tunnel. If the call is from the coordinator itself, registers the expected client and hangs up (probe-only).
-3. Tunnel phase: issues a mesh assignment (`MeshExitNode.issue_client()`), starts the `EncryptedTransport` with the session PSK, sends provisioning ACK.
-4. Session reaper (`SessionReaper`) runs one teardown per cycle to avoid FFI contention in the livekit-rtc Rust runtime.
+1. Inbound Bale call arrives. If the per-account active flag is set (a previous session in flight) the new call is refused with `slot_busy` — the client will fall back to the next peer_id in its list.
+2. Join phase: opens a LiveKit session (publish_audio=False) and waits for the caller to join the room.
+3. Identity resolution: reads the caller's real user_id from `LiveKitSession.remote_participant_identities()`. `event.peer_id` from Bale is the relay's own user_id under push semantics, so this step is mandatory — without it every caller on the same relay account would collide on `mesh.issue_client`.
+4. Tunnel phase: issues a mesh assignment (`MeshExitNode.issue_client()`), enables audio on the session (so the SFU keeps it alive past ~20 s), starts the `EncryptedTransport` with the global PSK, sends provisioning ACK.
+5. Session reaper (`SessionReaper`) runs one teardown per cycle to avoid FFI contention in the livekit-rtc Rust runtime.
 
 ### Metrics and observability
 
 - Relay: `http://127.0.0.1:9201/metrics` and `/healthz`
-- Coordinator: `http://127.0.0.1:9202/metrics` and `/healthz`
-- Prometheus counters: `baleobala_relay_calls_total{result}`, `baleobala_relay_evictions_total`, `baleobala_relay_stale_recovery_total`, `baleobala_coordinator_assigns_total{result}`, `baleobala_coordinator_relay_events_total{kind}`
-- Gauges: `baleobala_relay_sessions_active`, `baleobala_coordinator_relays_online`, `baleobala_coordinator_relays_capacity`
+- Prometheus counters: `baleobala_relay_calls_total{outcome}` (committed, slot_busy, no_caller_identity, provision_failed, …), `baleobala_relay_evictions_total`, `baleobala_relay_stale_recovery_total`
+- Gauges: `baleobala_relay_sessions_active`, `baleobala_relay_in_use_per_account{account}`, `baleobala_account_active_age_seconds{account}`
 - Log format: `BALEOBALA_LOG_FORMAT=text` (default) or `json` for journald / log aggregators.
-
-### Wire protocol
-
-All coordinator control messages use the format defined in `coordinator/protocol.py`: a JSON-encoded dict with a `kind` field (one of `ONLINE`, `HEARTBEAT`, `RELEASED`, `OFFLINE`, `HELLO`, `ASSIGN`, `DENY`, `EXPECT_CLIENT`, `EXPECT_ACK`) transmitted over a LiveKit DataChannel with topic `"control"`.
 
 ## Operational Notes
 
