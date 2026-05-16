@@ -1,16 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand_primary">#1249FF</color>
-    <color name="brand_primary_dark">#0A2DA8</color>
+    <!-- Premium-minimal palette: violet accent on deep neutral. -->
+    <color name="brand_primary">#7C5CFF</color>
+    <color name="brand_primary_dark">#6948E8</color>
+    <color name="brand_primary_hover">#8E73FF</color>
     <color name="brand_on_primary">#FFFFFFFF</color>
 
-    <color name="state_idle">#1F2A44</color>
-    <color name="state_connecting">#F59E0B</color>
-    <color name="state_connected">#16A34A</color>
-    <color name="state_error">#DC2626</color>
+    <color name="accent_soft">#1A1530</color>
 
-    <color name="surface_dark">#0B1020</color>
-    <color name="surface_dark_elevated">#111733</color>
-    <color name="text_primary_on_dark">#F5F7FB</color>
-    <color name="text_secondary_on_dark">#A8B0C8</color>
+    <color name="state_idle">#16181D</color>
+    <color name="state_connecting">#7C5CFF</color>
+    <color name="state_connected">#3FE0A0</color>
+    <color name="state_error">#FF5C7C</color>
+    <color name="state_warning">#FFC066</color>
+
+    <color name="surface_dark">#08090C</color>
+    <color name="surface_dark_elevated">#101114</color>
+    <color name="surface_dark_raised">#16181D</color>
+
+    <color name="text_primary_on_dark">#F4F5F8</color>
+    <color name="text_secondary_on_dark">#9BA1AE</color>
+    <color name="text_tertiary_on_dark">#5C606A</color>
+
+    <color name="border_subtle">#1F232C</color>
+    <color name="border_strong">#262A33</color>
+
+    <!-- Gradient stops used by drawables. -->
+    <color name="gradient_dashboard_top">#08090C</color>
+    <color name="gradient_dashboard_mid">#11102A</color>
+    <color name="gradient_dashboard_bottom">#1B1438</color>
 </resources>

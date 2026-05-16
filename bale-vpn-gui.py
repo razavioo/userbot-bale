@@ -7,28 +7,81 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+from tkinter import font as tkfont
+from tkinter import ttk
 from pathlib import Path
 
-# Colors close to macOS dark system UI
-BG_COLOR = "#0f0f0f"
-CARD_BG = "#1a1a1a"
-ACCENT_COLOR = "#007aff"
-SUCCESS_COLOR = "#28cd41"
-WARNING_COLOR = "#ffcc00"
-ERROR_COLOR = "#ff3b30"
-TEXT_COLOR = "#ffffff"
-TEXT_DIM = "#888888"
-TEXT_MUTED = "#a3a3a3"
-BUTTON_DIM = "#2c2c2e"
+# Premium-minimal palette (Linear/Vercel-inspired, dark only)
+BG_BASE = "#08090C"
+BG_SURFACE = "#101114"
+BG_ELEVATED = "#16181D"
+BORDER_SUBTLE = "#1C1F26"
+BORDER_STRONG = "#262A33"
+ACCENT = "#7C5CFF"
+ACCENT_HOVER = "#8E73FF"
+ACCENT_PRESSED = "#6948E8"
+ACCENT_SOFT = "#1A1530"
+SUCCESS = "#3FE0A0"
+SUCCESS_SOFT = "#0F2A22"
+WARNING = "#FFC066"
+WARNING_SOFT = "#2A2014"
+ERROR = "#FF5C7C"
+ERROR_SOFT = "#2A1620"
+TEXT_PRIMARY = "#F4F5F8"
+TEXT_SECONDARY = "#9BA1AE"
+TEXT_TERTIARY = "#5C606A"
+
+# Aliases used downstream
+BG_COLOR = BG_BASE
+CARD_BG = BG_SURFACE
+ACCENT_COLOR = ACCENT
+SUCCESS_COLOR = SUCCESS
+WARNING_COLOR = WARNING
+ERROR_COLOR = ERROR
+TEXT_COLOR = TEXT_PRIMARY
+TEXT_DIM = TEXT_TERTIARY
+TEXT_MUTED = TEXT_SECONDARY
+BUTTON_DIM = BG_ELEVATED
 STATUS_CONNECT_TIMEOUT = 40
+
+# Glyphs that render on every platform (Linux/macOS/Windows) — no SF Symbol PUA.
+GLYPH_OFFLINE = "⏻"   # ⏻ power symbol
+GLYPH_CONNECTING = "◐"  # ◐ half circle
+GLYPH_CONNECTED = "✔"   # ✔ heavy checkmark
+GLYPH_WARNING = "⚠"     # ⚠ warning
+GLYPH_RELAY = "⦿"       # ⦿ bullseye
+GLYPH_ENDPOINT = "◇"    # ◇ diamond
+GLYPH_TRANSPORT = "⇄"   # ⇄ arrows
+GLYPH_HEALTH = "◎"      # ◎ circle
+
+
+def _pick_font(candidates, size, weight="normal"):
+    """Return the first family from candidates that the system has, else default."""
+    available = set(tkfont.families())
+    for fam in candidates:
+        if fam in available:
+            return (fam, size, weight)
+    return ("TkDefaultFont", size, weight)
+
 
 class BaleVPNApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Baleobala Proxy")
-        self.root.geometry("470x690")
-        self.root.configure(bg=BG_COLOR)
-        
+        self.root.title("Baleobala")
+        self.root.geometry("470x720")
+        self.root.configure(bg=BG_BASE)
+        self.root.minsize(420, 680)
+
+        # Pre-resolve font triples so we don't keep guessing at draw time.
+        self.f_display = _pick_font(("Inter Display", "Inter", "SF Pro Display", "Segoe UI", "Helvetica Neue"), 22, "bold")
+        self.f_ui = _pick_font(("Inter", "SF Pro Text", "Segoe UI", "Helvetica Neue"), 11)
+        self.f_ui_bold = _pick_font(("Inter", "SF Pro Text", "Segoe UI", "Helvetica Neue"), 11, "bold")
+        self.f_eyebrow = _pick_font(("Inter", "SF Pro Text", "Segoe UI", "Helvetica Neue"), 8, "bold")
+        self.f_chip = _pick_font(("Inter", "SF Pro Text", "Segoe UI", "Helvetica Neue"), 9, "bold")
+        self.f_mono = _pick_font(("JetBrains Mono", "SF Mono", "Menlo", "Consolas"), 10)
+        self.f_icon_lg = _pick_font(("Inter", "SF Pro Display", "Segoe UI Symbol", "DejaVu Sans"), 56)
+        self.f_icon_sm = _pick_font(("Inter", "SF Pro Display", "Segoe UI Symbol", "DejaVu Sans"), 14)
+
         self.process = None
         self.phase = "disconnected"
         self.started_at = None
@@ -36,13 +89,48 @@ class BaleVPNApp:
         self.connected_marker_seen = False
         self.last_runtime_line = ""
         self._lock = threading.Lock()
-        
+
         self.settings = self._load_settings()
-        
+
+        self._setup_styles()
         self._setup_ui()
         self._refresh_cards()
         self._update_loop()
-    
+
+    def _setup_styles(self):
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        # Combobox — replaces the old OptionMenu for a cleaner look.
+        style.configure(
+            "Premium.TCombobox",
+            fieldbackground=BG_ELEVATED,
+            background=BG_ELEVATED,
+            foreground=TEXT_PRIMARY,
+            bordercolor=BORDER_STRONG,
+            lightcolor=BORDER_STRONG,
+            darkcolor=BORDER_STRONG,
+            arrowcolor=TEXT_SECONDARY,
+            relief="flat",
+            padding=(10, 6, 10, 6),
+        )
+        style.map(
+            "Premium.TCombobox",
+            fieldbackground=[("readonly", BG_ELEVATED), ("focus", BG_ELEVATED)],
+            foreground=[("readonly", TEXT_PRIMARY)],
+            bordercolor=[("focus", ACCENT)],
+            lightcolor=[("focus", ACCENT)],
+            darkcolor=[("focus", ACCENT)],
+        )
+        self.root.option_add("*TCombobox*Listbox.background", BG_ELEVATED)
+        self.root.option_add("*TCombobox*Listbox.foreground", TEXT_PRIMARY)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        self.root.option_add("*TCombobox*Listbox.borderWidth", 0)
+        self.root.option_add("*TCombobox*Listbox.relief", "flat")
+
     def _load_settings(self):
         home = Path.home()
         secret_dir = home / ".config" / "baleobala" / "secrets"
@@ -82,138 +170,201 @@ class BaleVPNApp:
                 pass
         return defaults
 
+    def _hairline(self, parent, color=BORDER_SUBTLE):
+        """A 1-pixel separator line."""
+        return tk.Frame(parent, bg=color, height=1, bd=0, highlightthickness=0)
+
     def _setup_ui(self):
-        title_frame = tk.Frame(self.root, bg=BG_COLOR, padx=22, pady=15)
+        # Title bar
+        title_frame = tk.Frame(self.root, bg=BG_BASE, padx=24, pady=18)
         title_frame.pack(fill="x")
+        wordmark = tk.Frame(title_frame, bg=BG_BASE)
+        wordmark.pack(side="left")
         tk.Label(
-            title_frame,
-            text="Baleobala Proxy",
-            bg=BG_COLOR,
-            fg="#d1d1d6",
-            font=("SF Pro Text", 12, "bold"),
+            wordmark,
+            text="Baleobala",
+            bg=BG_BASE,
+            fg=TEXT_PRIMARY,
+            font=self.f_ui_bold,
+        ).pack(side="left")
+        tk.Label(
+            wordmark,
+            text="  proxy",
+            bg=BG_BASE,
+            fg=TEXT_TERTIARY,
+            font=self.f_ui,
         ).pack(side="left")
         self.state_chip = tk.Label(
             title_frame,
             text="OFFLINE",
-            bg=BUTTON_DIM,
-            fg=TEXT_MUTED,
-            font=("SF Pro Text", 9, "bold"),
+            bg=BG_ELEVATED,
+            fg=TEXT_SECONDARY,
+            font=self.f_chip,
             padx=10,
-            pady=3,
+            pady=4,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=BORDER_STRONG,
+            highlightcolor=BORDER_STRONG,
         )
         self.state_chip.pack(side="right")
 
-        self.main_container = tk.Frame(self.root, bg=BG_COLOR)
-        self.main_container.pack(fill="both", expand=True, padx=24)
+        self._hairline(self.root).pack(fill="x")
 
-        mode_row = tk.Frame(self.main_container, bg=BG_COLOR)
-        mode_row.pack(fill="x", pady=(0, 8))
+        self.main_container = tk.Frame(self.root, bg=BG_BASE)
+        self.main_container.pack(fill="both", expand=True, padx=24, pady=(8, 0))
+
+        # Mode row
+        mode_row = tk.Frame(self.main_container, bg=BG_BASE)
+        mode_row.pack(fill="x", pady=(12, 4))
         tk.Label(
             mode_row,
-            text="Mode",
-            bg=BG_COLOR,
-            fg=TEXT_MUTED,
-            font=("SF Pro Text", 10, "bold"),
+            text="MODE",
+            bg=BG_BASE,
+            fg=TEXT_TERTIARY,
+            font=self.f_eyebrow,
         ).pack(side="left")
         self.mode_var = tk.StringVar(value=str(self.settings.get("mode", "proxy")))
-        self.mode_menu = tk.OptionMenu(
+        self.mode_menu = ttk.Combobox(
             mode_row,
-            self.mode_var,
-            "proxy",
-            "tunnel",
-            command=self._on_mode_changed,
+            textvariable=self.mode_var,
+            values=("proxy", "tunnel"),
+            state="readonly",
+            width=10,
+            style="Premium.TCombobox",
         )
-        self.mode_menu.config(
-            bg=BUTTON_DIM,
-            fg=TEXT_COLOR,
-            activebackground=BUTTON_DIM,
-            activeforeground=TEXT_COLOR,
-            borderwidth=0,
-            highlightthickness=0,
-            font=("SF Pro Text", 10),
-        )
-        self.mode_menu["menu"].config(
-            bg=BUTTON_DIM,
-            fg=TEXT_COLOR,
-            activebackground=ACCENT_COLOR,
-            activeforeground=TEXT_COLOR,
-        )
+        self.mode_menu.bind("<<ComboboxSelected>>", lambda e: self._on_mode_changed(self.mode_var.get()))
         self.mode_menu.pack(side="right")
 
-        self.status_icon = tk.Label(
-            self.main_container,
-            text="􀙇",
-            bg=BG_COLOR,
-            fg=TEXT_DIM,
-            font=("SF Pro", 58),
+        # Hero status block
+        hero = tk.Frame(self.main_container, bg=BG_BASE)
+        hero.pack(fill="x", pady=(28, 8))
+
+        # Outer canvas acts as a soft accent halo behind the status glyph.
+        self.halo = tk.Canvas(
+            hero, width=160, height=160, bg=BG_BASE, bd=0, highlightthickness=0
         )
-        self.status_icon.pack(pady=30)
+        self.halo.pack()
+        self._draw_halo(BORDER_STRONG)
 
         self.phase_label = tk.Label(
             self.main_container,
             text="Disconnected",
-            bg=BG_COLOR,
-            fg=TEXT_COLOR,
-            font=("SF Pro Display", 20, "bold"),
+            bg=BG_BASE,
+            fg=TEXT_PRIMARY,
+            font=self.f_display,
         )
-        self.phase_label.pack()
-        
+        self.phase_label.pack(pady=(18, 4))
+
         self.timer_label = tk.Label(
             self.main_container,
-            text="--:--:--",
-            bg=BG_COLOR,
-            fg=TEXT_DIM,
-            font=("SF Mono", 11),
+            text="——:——:——",
+            bg=BG_BASE,
+            fg=TEXT_TERTIARY,
+            font=self.f_mono,
         )
-        self.timer_label.pack(pady=5)
+        self.timer_label.pack()
 
+        # Hero action button — flat, generous padding, accent fill.
         self.action_btn = tk.Button(
             self.main_container,
             text="Connect",
             command=self.toggle_connection,
-            bg=ACCENT_COLOR,
-            fg="#fff",
-            font=("SF Pro Text", 13, "bold"),
-            activebackground="#005ecb",
-            activeforeground="#fff",
+            bg=ACCENT,
+            fg="#FFFFFF",
+            font=self.f_ui_bold,
+            activebackground=ACCENT_PRESSED,
+            activeforeground="#FFFFFF",
             padx=40,
-            pady=11,
+            pady=14,
             borderwidth=0,
+            highlightthickness=0,
             cursor="hand2",
+            relief="flat",
         )
-        self.action_btn.pack(pady=30, fill="x")
+        self.action_btn.pack(pady=24, fill="x")
+        self.action_btn.bind("<Enter>", lambda e: self._btn_hover(True))
+        self.action_btn.bind("<Leave>", lambda e: self._btn_hover(False))
 
-        self.cards_frame = tk.Frame(self.main_container, bg=BG_COLOR)
-        self.cards_frame.pack(fill="x", pady=10)
-        
-        self.card_peer = self._create_info_card(self.cards_frame, "Relay Peer", "-", "􀤆")
-        self.card_endpoint = self._create_info_card(self.cards_frame, "Endpoint", "-", "􀙇")
-        self.card_transport = self._create_info_card(self.cards_frame, "Transport", "-", "􀊫")
-        self.card_health = self._create_info_card(self.cards_frame, "Health", "Idle", "􀙥")
+        # Info card stack
+        self.cards_frame = tk.Frame(self.main_container, bg=BG_BASE)
+        self.cards_frame.pack(fill="x", pady=(4, 0))
 
+        self.card_peer = self._create_info_card(self.cards_frame, "Relay Peer", "-", GLYPH_RELAY)
+        self.card_endpoint = self._create_info_card(self.cards_frame, "Endpoint", "-", GLYPH_ENDPOINT)
+        self.card_transport = self._create_info_card(self.cards_frame, "Transport", "-", GLYPH_TRANSPORT)
+        self.card_health = self._create_info_card(self.cards_frame, "Health", "Idle", GLYPH_HEALTH)
+
+        # Status bar
+        self._hairline(self.root).pack(fill="x", side="bottom")
         self.status_bar = tk.Label(
             self.root,
             text="Ready to connect",
-            bg="#151515",
-            fg="#7d7d7d",
-            font=("SF Pro Text", 10),
+            bg=BG_BASE,
+            fg=TEXT_SECONDARY,
+            font=self.f_ui,
             anchor="w",
-            padx=15,
-            pady=6,
+            padx=20,
+            pady=10,
         )
         self.status_bar.pack(side="bottom", fill="x")
 
+    def _draw_halo(self, ring_color, glyph=GLYPH_OFFLINE, glyph_color=TEXT_TERTIARY):
+        """Render the soft ring + centred glyph on the hero canvas."""
+        c = self.halo
+        c.delete("all")
+        # Multi-pass ring to fake a glow without compositing.
+        for radius, color in (
+            (78, BORDER_SUBTLE),
+            (66, ring_color),
+        ):
+            c.create_oval(80 - radius, 80 - radius, 80 + radius, 80 + radius,
+                          outline=color, width=1)
+        c.create_text(80, 84, text=glyph, fill=glyph_color, font=self.f_icon_lg)
+
+    def _btn_hover(self, hovering: bool):
+        # Hover state mirrors the accent token without dancing with ACTIVE_BG.
+        if self.phase == "disconnected":
+            self.action_btn.config(bg=ACCENT_HOVER if hovering else ACCENT)
+        elif self.phase in ("connecting", "connected", "unhealthy"):
+            self.action_btn.config(bg="#FF7E96" if hovering else ERROR)
+
     def _create_info_card(self, parent, title, value, icon):
-        card = tk.Frame(parent, bg=CARD_BG, padx=12, pady=10)
-        card.pack(fill="x", pady=4)
-        tk.Label(card, text=icon, bg=CARD_BG, fg="#6a6a6d", font=("SF Pro", 13)).pack(side="left")
-        info_v = tk.Frame(card, bg=CARD_BG)
-        info_v.pack(side="left", padx=10)
-        tk.Label(info_v, text=title.upper(), bg=CARD_BG, fg="#6a6a6d", font=("SF Pro Text", 8, "bold")).pack(anchor="w")
-        val_label = tk.Label(info_v, text=value, bg=CARD_BG, fg="#e5e5ea", font=("SF Pro Text", 11))
-        val_label.pack(anchor="w")
+        # Wrap in a border frame to fake a 1px hairline outline.
+        outer = tk.Frame(parent, bg=BORDER_SUBTLE)
+        outer.pack(fill="x", pady=4)
+        card = tk.Frame(outer, bg=BG_SURFACE, padx=14, pady=12)
+        card.pack(fill="x", padx=1, pady=1)
+
+        icon_holder = tk.Frame(card, bg=BG_SURFACE)
+        icon_holder.pack(side="left", padx=(0, 12))
+        tk.Label(
+            icon_holder,
+            text=icon,
+            bg=BG_SURFACE,
+            fg=ACCENT,
+            font=self.f_icon_sm,
+        ).pack()
+
+        info_v = tk.Frame(card, bg=BG_SURFACE)
+        info_v.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            info_v,
+            text=title.upper(),
+            bg=BG_SURFACE,
+            fg=TEXT_TERTIARY,
+            font=self.f_eyebrow,
+        ).pack(anchor="w")
+        val_label = tk.Label(
+            info_v,
+            text=value,
+            bg=BG_SURFACE,
+            fg=TEXT_PRIMARY,
+            font=self.f_ui,
+        )
+        val_label.pack(anchor="w", pady=(2, 0))
         return val_label
-    
+
     def _refresh_cards(self):
         mode = str(self.settings.get("mode", "proxy"))
         if mode == "proxy":
@@ -224,7 +375,7 @@ class BaleVPNApp:
             self.card_peer.config(text=str(self.settings.get("profile_id") or "active-profile"))
             self.card_endpoint.config(text="vpn0 (linux-tun)")
             self.card_transport.config(text="tunnel/linux-tun")
-    
+
     def _on_mode_changed(self, selected):
         if self.phase in {"connecting", "connected"}:
             self.status_bar.config(text="Disconnect current session before switching mode.")
@@ -243,36 +394,40 @@ class BaleVPNApp:
             h = elapsed // 3600
             m = (elapsed % 3600) // 60
             s = elapsed % 60
-            self.timer_label.config(text=f"{h:02d}:{m:02d}:{s:02d}")
+            self.timer_label.config(text=f"{h:02d}:{m:02d}:{s:02d}", fg=TEXT_SECONDARY)
         else:
-            self.timer_label.config(text="--:--:--")
+            self.timer_label.config(text="——:——:——", fg=TEXT_TERTIARY)
 
         if self.phase == "disconnected":
-            self.status_icon.config(text="􀙇", fg=TEXT_DIM)
-            self.phase_label.config(text="Disconnected", fg=TEXT_COLOR)
-            self.action_btn.config(text="Connect", bg=ACCENT_COLOR)
-            self.state_chip.config(text="OFFLINE", bg=BUTTON_DIM, fg=TEXT_MUTED)
+            self._draw_halo(BORDER_STRONG, GLYPH_OFFLINE, TEXT_TERTIARY)
+            self.phase_label.config(text="Disconnected", fg=TEXT_PRIMARY)
+            self.action_btn.config(text="Connect", bg=ACCENT, activebackground=ACCENT_PRESSED)
+            self.state_chip.config(text="OFFLINE", bg=BG_ELEVATED, fg=TEXT_SECONDARY,
+                                   highlightbackground=BORDER_STRONG)
             self.card_health.config(text="Idle")
         elif self.phase == "connecting":
-            self.status_icon.config(text="􀐊", fg=ACCENT_COLOR)
-            self.phase_label.config(text="Connecting...", fg=ACCENT_COLOR)
-            self.action_btn.config(text="Cancel", bg=ERROR_COLOR)
-            self.state_chip.config(text="CONNECTING", bg="#11375d", fg="#9fd0ff")
+            self._draw_halo(ACCENT, GLYPH_CONNECTING, ACCENT)
+            self.phase_label.config(text="Connecting…", fg=ACCENT)
+            self.action_btn.config(text="Cancel", bg=ERROR, activebackground="#E64868")
+            self.state_chip.config(text="CONNECTING", bg=ACCENT_SOFT, fg=ACCENT,
+                                   highlightbackground=ACCENT)
             self.card_health.config(text="Dialing relay")
             if self.connecting_started_at and (time.time() - self.connecting_started_at > STATUS_CONNECT_TIMEOUT):
                 self.phase = "unhealthy"
                 self.status_bar.config(text="Connection timeout. Check peer/jwt/transport.")
         elif self.phase == "connected":
-            self.status_icon.config(text="􀎡", fg=SUCCESS_COLOR)
-            self.phase_label.config(text="Protected", fg=SUCCESS_COLOR)
-            self.action_btn.config(text="Disconnect", bg=ERROR_COLOR)
-            self.state_chip.config(text="CONNECTED", bg="#12381e", fg="#98f5aa")
+            self._draw_halo(SUCCESS, GLYPH_CONNECTED, SUCCESS)
+            self.phase_label.config(text="Protected", fg=SUCCESS)
+            self.action_btn.config(text="Disconnect", bg=ERROR, activebackground="#E64868")
+            self.state_chip.config(text="CONNECTED", bg=SUCCESS_SOFT, fg=SUCCESS,
+                                   highlightbackground=SUCCESS)
             self.card_health.config(text="Healthy tunnel")
         elif self.phase == "unhealthy":
-            self.status_icon.config(text="􀇿", fg=WARNING_COLOR)
-            self.phase_label.config(text="Needs Attention", fg=WARNING_COLOR)
-            self.action_btn.config(text="Disconnect", bg=ERROR_COLOR)
-            self.state_chip.config(text="DEGRADED", bg="#3d3100", fg="#ffea8c")
+            self._draw_halo(WARNING, GLYPH_WARNING, WARNING)
+            self.phase_label.config(text="Needs Attention", fg=WARNING)
+            self.action_btn.config(text="Disconnect", bg=ERROR, activebackground="#E64868")
+            self.state_chip.config(text="DEGRADED", bg=WARNING_SOFT, fg=WARNING,
+                                   highlightbackground=WARNING)
             self.card_health.config(text="Started but not stable")
 
         self.root.after(1000, self._update_loop)
@@ -350,7 +505,7 @@ class BaleVPNApp:
         if psk:
             cmd.extend(["--proxy-secret", psk])
         return cmd
-    
+
     def _build_tunnel_command(self):
         cli_bin = os.environ.get("BALEOBALA_BIN")
         if cli_bin:
@@ -428,7 +583,7 @@ class BaleVPNApp:
         self.connecting_started_at = time.time()
         self.connected_marker_seen = False
         self.last_runtime_line = ""
-        self.status_bar.config(text="Dialing relay..." if mode == "proxy" else "Bringing linux-tun up...")
+        self.status_bar.config(text="Dialing relay…" if mode == "proxy" else "Bringing linux-tun up…")
         self.card_health.config(text="Waiting for relay")
         def run_proc():
             try:
@@ -497,7 +652,7 @@ class BaleVPNApp:
         if previous_phase == "connecting" and code != 0:
             self.phase = "unhealthy"
             detail = self.last_runtime_line or "no runtime details"
-            self.status_bar.config(text=f"Failed to connect (exit={code}) - {detail}")
+            self.status_bar.config(text=f"Failed to connect (exit={code}) — {detail}")
             self.card_health.config(text="Connection failed")
             return
         if previous_phase == "connected" and code != 0 and not self.connected_marker_seen:

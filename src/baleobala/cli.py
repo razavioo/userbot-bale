@@ -3486,8 +3486,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     level = logging.WARNING - 10 * min(args.verbose, 2)
-    from baleobala.runtime.logging_config import configure_logging
+    from baleobala.runtime.logging_config import configure_logging, print_banner
     configure_logging(level=level)
+    subcommand = getattr(args, "cmd", None) or getattr(args, "vpn_cmd", None)
+    print_banner(subtitle=subcommand)
     try:
         return int(args.func(args) or 0)
     except Exception as e:  # noqa: BLE001
