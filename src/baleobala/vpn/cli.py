@@ -94,6 +94,11 @@ def add_tunnel_subparser(sub: "argparse._SubParsersAction") -> None:
                          "(required when --coordinator-peer-id is set). Repeat once per JWT.")
     mx.add_argument("--heartbeat-interval", type=float, default=60.0,
                     help="seconds between HEARTBEAT messages to coordinator (default: 60)")
+    mx.add_argument("--relay-id-prefix", default=None,
+                    help="prefix for the coordinator relay_id (default: hostname). "
+                         "Use a unique value per process when running multiple mesh "
+                         "instances on the same host, so each instance registers as a "
+                         "distinct relay with the coordinator.")
     mx.add_argument("--standalone", action="store_true",
                     help="skip coordinator registration; accept any inbound call (legacy mode)")
     mx.add_argument("--metrics-port", type=int, default=9201,
@@ -332,8 +337,8 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
         if use_coordinator and relay_peer_ids:
             from baleobala.coordinator.relay_client import CoordinatorReporter
             import socket as _socket
-            hostname = _socket.gethostname()
-            relay_id = f"{hostname}-{account_index}"
+            prefix = args.relay_id_prefix or _socket.gethostname()
+            relay_id = f"{prefix}-{account_index}"
             reporter = CoordinatorReporter(
                 coordinator_peer_id=coordinator_peer_id,
                 relay_id=relay_id,
