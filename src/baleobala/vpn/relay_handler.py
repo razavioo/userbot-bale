@@ -325,11 +325,14 @@ class RelayCallHandler:
             )
             try:
                 session.start()
-                # Wait briefly for the caller to join the room so we can
-                # read their identity. If they don't show up the call is
-                # spam/abandoned; bail out.
+                # Wait for the caller to join the room so we can read
+                # their identity. The Android client takes 5–12 s
+                # post-StartCall to complete the LiveKit handshake under
+                # Iranian-carrier conditions, so a tight 5 s window was
+                # consistently rejecting legitimate clients with
+                # `no-caller-identity`. Give it 20 s.
                 try:
-                    session.wait_for_remote_participant(timeout=5.0)
+                    session.wait_for_remote_participant(timeout=20.0)
                 except (TimeoutError, RuntimeError):
                     pass
             except Exception:  # noqa: BLE001
