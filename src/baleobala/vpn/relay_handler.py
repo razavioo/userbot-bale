@@ -444,7 +444,13 @@ class RelayCallHandler:
             except Exception:  # noqa: BLE001
                 log.exception("relay: cid=%s enable_audio failed", cid)
             self._Keepalive(session, interval=20.0).start()
-            dc = self._DataChannelTransport(session, topic="vpn", reliable=False)
+            # reliable=True so the LiveKit SFU doesn't silently drop frames
+            # mid-flight. The tunnel's own ARQ still handles end-to-end
+            # ack/retry, but reliable transport removes the SFU-level loss
+            # that was making the ARQ retry-loop fire constantly. The old
+            # "reliable goes silent" complaint was for proxy-relay, not
+            # mesh-VPN, on an older Bale SFU version.
+            dc = self._DataChannelTransport(session, topic="vpn", reliable=True)
             # PSK authenticates the caller: if the encrypted handshake
             # fails no data ever flows. With no PSK configured (debug
             # only) the relay accepts plaintext.

@@ -70,8 +70,8 @@ class Tunnel:
         *,
         sess_id: int,
         window: int = 32,
-        ack_timeout: float = 0.5,
-        max_retries: int = 8,
+        ack_timeout: float = 1.5,
+        max_retries: int = 16,
         recv_timeout: float = 0.2,
         mtu_override: int | None = None,
         reassembly_timeout: float | None = None,
@@ -112,7 +112,13 @@ class Tunnel:
         # dead LiveKit DataChannel that's silently failing every send.
         self._consecutive_drops = 0
         self._dead_emitted = False
-        self._dead_threshold = 8
+        # Bigger threshold: with ack_timeout=1.5s and max_retries=16, each
+        # dropped frame represents ~24s of dead silence. Setting the
+        # threshold to 4 lets one transient ~90s glitch slip past before
+        # we tear down. Bale's SFU has 30–60s "soft" stalls under load
+        # that recover on their own; declaring tunnel_dead too eagerly
+        # causes the user-visible flap.
+        self._dead_threshold = 4
 
         self._seq_next = 0
         self._pending: dict[int, _Pending] = {}
