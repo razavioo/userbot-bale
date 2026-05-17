@@ -10,10 +10,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class LiveKitDataChannelTransport(
@@ -68,6 +72,18 @@ class LiveKitDataChannelTransport(
     @Volatile var prefixLen: Int = 0
         private set
 
+    // --- Throughput instrumentation ---
+    // Bandwidth-cap test: counts bytes/msgs in each direction and logs a
+    // rolling rate every 5s. Compare numbers between reliable=true and
+    // reliable=false runs to tell whether the cap is SFU-side or
+    // client-side.
+    private val txBytes = AtomicLong(0)
+    private val txMsgs = AtomicLong(0)
+    private val txMaxMsg = AtomicInteger(0)
+    private val rxBytes = AtomicLong(0)
+    private val rxMsgs = AtomicLong(0)
+    private val rxMaxMsg = AtomicInteger(0)
+
     fun connect(timeoutMs: Long = 30_000): LiveKitDataChannelTransport {
         val r = LiveKit.create(appContext)
         room = r
@@ -108,6 +124,9 @@ class LiveKitDataChannelTransport(
                                 onLog("LiveKit data topic=${event.topic}; ignoring non-VPN payload")
                                 return@collect
                             }
+                            rxBytes.addAndGet(event.data.size.toLong())
+                            rxMsgs.incrementAndGet()
+                            rxMaxMsg.accumulateAndGet(event.data.size) { a, b -> if (b > a) b else a }
                             inbox.offer(event.data)
                         }
                         is RoomEvent.FailedToConnect -> {
@@ -165,7 +184,9 @@ class LiveKitDataChannelTransport(
             close()
             throw RuntimeException("LiveKit peer did not join within ${timeoutMs}ms")
         }
-        onLog("LiveKit peer ready")
+        onLog("LiveKit peer ready (reliable=$reliable)")
+        startThroughputLogger()
+        maybeStartSaturationTest()
 
         // Mesh provisioning handshake — the relay sends BBMESH1:{kind:"assign",...}
         // immediately after joining. We must ACK it before VPN traffic can flow.
@@ -251,7 +272,12 @@ class LiveKitDataChannelTransport(
                 lastFailure = RuntimeException("LiveKit publishData timed out")
             } else {
                 val res = publishResult.get()
-                if (res != null && res.isSuccess) return
+                if (res != null && res.isSuccess) {
+                    txBytes.addAndGet(data.size.toLong())
+                    txMsgs.incrementAndGet()
+                    txMaxMsg.accumulateAndGet(data.size) { a, b -> if (b > a) b else a }
+                    return
+                }
                 lastFailure = res?.exceptionOrNull() ?: RuntimeException("publishData returned null")
             }
             if (attempt < 2) Thread.sleep(150L * (attempt + 1))
@@ -268,6 +294,78 @@ class LiveKitDataChannelTransport(
         try { room?.disconnect() } catch (_: Throwable) {}
         room = null
         scope.cancel()
+    }
+
+    // Saturation lab: when `setprop debug.baleobala.saturate 1` is set,
+    // publishes max-size synthetic frames to a side topic ("satlab") for
+    // 30s as fast as publishData allows. Measures the raw SFU acceptance
+    // ceiling independently of TUN/app traffic. Uses a different topic so
+    // the relay's VPN path ignores the frames (DataReceived handler
+    // filters by topic on both ends).
+    private fun maybeStartSaturationTest() {
+        val enabled = try {
+            val cls = Class.forName("android.os.SystemProperties")
+            val get = cls.getMethod("get", String::class.java, String::class.java)
+            (get.invoke(null, "debug.baleobala.saturate", "") as? String) == "1"
+        } catch (_: Throwable) { false }
+        if (!enabled) return
+        val r = room ?: return
+        scope.launch {
+            // small delay so connect/provisioning settles
+            delay(2_000)
+            onLog("SATLAB: starting saturation test reliable=$reliable size=${mtu}B duration=30s topic=satlab")
+            val payload = ByteArray(mtu) { 0xA5.toByte() }
+            val reliability = if (reliable) DataPublishReliability.RELIABLE else DataPublishReliability.LOSSY
+            val tStart = System.currentTimeMillis()
+            var sent = 0L
+            var bytes = 0L
+            var failures = 0L
+            while (isActive && !closed && System.currentTimeMillis() - tStart < 30_000) {
+                val res = try {
+                    r.localParticipant.publishData(payload, reliability = reliability, topic = "satlab")
+                } catch (t: Throwable) { Result.failure<Unit>(t) }
+                if (res.isSuccess) {
+                    sent++; bytes += payload.size
+                } else {
+                    failures++
+                    if (failures % 50L == 1L) onLog("SATLAB: publish failure #$failures: ${res.exceptionOrNull()?.message}")
+                }
+            }
+            val elapsed = (System.currentTimeMillis() - tStart) / 1000.0
+            val kbs = bytes / 1024.0 / elapsed
+            val msgPerS = sent / elapsed
+            onLog(
+                "SATLAB: done reliable=$reliable elapsed=${"%.1f".format(elapsed)}s " +
+                "sent=$sent msgs (${"%.0f".format(msgPerS)} msg/s) " +
+                "bytes=$bytes (${"%.1f".format(kbs)} KB/s) failures=$failures"
+            )
+        }
+    }
+
+    private fun startThroughputLogger() {
+        scope.launch {
+            var prevTxB = 0L; var prevTxM = 0L
+            var prevRxB = 0L; var prevRxM = 0L
+            val intervalMs = 5_000L
+            while (isActive && !closed) {
+                delay(intervalMs)
+                val txB = txBytes.get(); val txM = txMsgs.get(); val txMax = txMaxMsg.get()
+                val rxB = rxBytes.get(); val rxM = rxMsgs.get(); val rxMax = rxMaxMsg.get()
+                val dTxB = txB - prevTxB; val dTxM = txM - prevTxM
+                val dRxB = rxB - prevRxB; val dRxM = rxM - prevRxM
+                prevTxB = txB; prevTxM = txM; prevRxB = rxB; prevRxM = rxM
+                val secs = intervalMs / 1000.0
+                val txKBs = dTxB / 1024.0 / secs
+                val rxKBs = dRxB / 1024.0 / secs
+                val txAvg = if (dTxM > 0) dTxB / dTxM else 0
+                val rxAvg = if (dRxM > 0) dRxB / dRxM else 0
+                onLog(
+                    "throughput[reliable=$reliable] " +
+                    "tx=${"%.1f".format(txKBs)}KB/s (${dTxM}msg, avg=${txAvg}B, max=${txMax}B) " +
+                    "rx=${"%.1f".format(rxKBs)}KB/s (${dRxM}msg, avg=${rxAvg}B, max=${rxMax}B)"
+                )
+            }
+        }
     }
 
     private fun fireDisconnected(reason: String) {

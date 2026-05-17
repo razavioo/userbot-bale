@@ -241,16 +241,24 @@ class BaleVpnService : VpnService() {
             }
             inflightWs = null
             broadcast("log", "joining LiveKit room=${creds.room.ifEmpty { "(unknown)" }}")
+            // A/B test toggle for the SFU bandwidth-cap investigation —
+            // override at runtime with `adb shell setprop debug.baleobala.lossy 1`
+            // (then restart the VPN) to publish DataChannel frames in LOSSY
+            // mode instead of RELIABLE. Default stays RELIABLE so the SFU
+            // doesn't silently drop frames mid-flight.
+            val lossyOverride = try {
+                val cls = Class.forName("android.os.SystemProperties")
+                val get = cls.getMethod("get", String::class.java, String::class.java)
+                (get.invoke(null, "debug.baleobala.lossy", "") as? String) == "1"
+            } catch (_: Throwable) { false }
+            val reliableMode = !lossyOverride
+            broadcast("log", "transport reliable=$reliableMode (lossyOverride=$lossyOverride)")
             val tx = LiveKitDataChannelTransport(
                 appContext = applicationContext,
                 url = creds.url,
                 token = creds.token,
                 topic = "vpn",
-                // reliable=true so the Bale SFU doesn't silently drop
-                // frames mid-flight. The tunnel's own ARQ still does end-
-                // to-end ack/retry, but reliable transport eliminates the
-                // SFU-level loss that was driving tunnel_dead within ~60s.
-                reliable = true,
+                reliable = reliableMode,
                 onLog = { broadcast("log", it) },
                 onDisconnected = { handleTunnelDrop("LiveKit DataChannel disconnected") },
             )

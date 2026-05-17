@@ -23,9 +23,17 @@ import kotlin.concurrent.withLock
 class Tunnel(
     transport: Transport,
     val sessId: Int,
+    // Aligned to the python relay's tunnel.py (window=32, ack_timeout=1.5,
+    // max_retries=16). Android previously used ackTimeoutMs=500 and
+    // maxRetries=8, which caused a retry storm under load: Android would
+    // retransmit a frame 3× before python's slower timeout even fired,
+    // tripling outbound pressure on the SFU and starving the return-ACK
+    // path. Raising the window above 32 was tried (64 and 128) but
+    // overwhelmed the python-side _send_ack loop — see TUNSAT logs in
+    // /tmp/bale-throughput/dev2-tunsat-w{64,128}-*.log.
     private val window: Int = 32,
-    private val ackTimeoutMs: Long = 500,
-    private val maxRetries: Int = 8,
+    private val ackTimeoutMs: Long = 1500,
+    private val maxRetries: Int = 16,
     private val recvTimeoutMs: Long = 200,
     private val mtuOverride: Int? = null,
 ) {
