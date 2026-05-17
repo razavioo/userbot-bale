@@ -71,6 +71,13 @@ class LiveKitDataChannelTransport(
      *  wants 24 to share the gateway in the same broadcast domain). */
     @Volatile var prefixLen: Int = 0
         private set
+    /** TUN MTU advertised by the relay in BBMESH1. 0 if absent; the
+     *  carrier falls back to its built-in default in that case. Honoring
+     *  this lets the operator raise the path MTU on the server side
+     *  (--tun-mtu 9000) to multiply per-frame goodput, since the SFU
+     *  rate-limits frames-per-second rather than bytes-per-second. */
+    @Volatile var tunMtu: Int = 0
+        private set
 
     // --- Throughput instrumentation ---
     // Bandwidth-cap test: counts bytes/msgs in each direction and logs a
@@ -225,6 +232,11 @@ class LiveKitDataChannelTransport(
                         .find(provStr)?.groupValues?.get(1)
                     if (prefixStr != null) {
                         prefixLen = prefixStr.toIntOrNull() ?: 0
+                    }
+                    val tunMtuStr = Regex(""""tun_mtu"\s*:\s*(\d+)""")
+                        .find(provStr)?.groupValues?.get(1)
+                    if (tunMtuStr != null) {
+                        tunMtu = tunMtuStr.toIntOrNull() ?: 0
                     }
                     if (sessionId != null) {
                         val ack = "BBMESH1:{\"kind\":\"ack\",\"session_id\":$sessionId}".toByteArray(Charsets.UTF_8)

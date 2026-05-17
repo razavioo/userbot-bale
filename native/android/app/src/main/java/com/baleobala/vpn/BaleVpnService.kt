@@ -163,11 +163,20 @@ class BaleVpnService : VpnService() {
         // widen to /24 (the same /24 covers all the per-client /30s in
         // 10.77.0.0/16 and the relay's vpn0 is .1).
         val tunPrefix = 24
-        broadcast("log", "preflight: assigned client_ip=$tunIp gateway=${preTransport.gatewayIp}")
+        // Honor the server-advertised tun_mtu from BBMESH1; fall back to
+        // 1400 if absent (older relay). Clamped to [1280, 14000]: 1280
+        // is the IPv6 minimum, 14000 keeps single-frame headroom under
+        // the DataChannel's 14336-byte ceiling. Larger TUN MTU multiplies
+        // per-frame goodput, since the SFU rate-limits frames-per-second
+        // rather than bytes-per-second.
+        val tunMtu = preTransport.tunMtu.let {
+            if (it <= 0) 1400 else it.coerceIn(1280, 14000)
+        }
+        broadcast("log", "preflight: assigned client_ip=$tunIp gateway=${preTransport.gatewayIp} tun_mtu=$tunMtu")
 
         val builder = Builder()
             .setSession("Baleobala VPN")
-            .setMtu(1400)
+            .setMtu(tunMtu)
             .addAddress(tunIp, tunPrefix)
             .addRoute("0.0.0.0", 0)
         dnsServers().forEach { builder.addDnsServer(it) }
@@ -208,7 +217,7 @@ class BaleVpnService : VpnService() {
         startedAt.set(System.currentTimeMillis())
         updateNotification("connected", connectedDetail())
         broadcastSnapshot("connected")
-        broadcast("log", "tun up: $tunIp/$tunPrefix mtu 1400")
+        broadcast("log", "tun up: $tunIp/$tunPrefix mtu $tunMtu")
     }
 
     private fun makeBaleTransport(): Transport {

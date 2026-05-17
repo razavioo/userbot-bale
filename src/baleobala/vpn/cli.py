@@ -126,8 +126,14 @@ def _add_tun_opts(sp: argparse.ArgumentParser, *, default_addr: str = "10.77.0.2
                          "scripts/vpn-setup-tun.sh)")
     sp.add_argument("--tun-addr", default=default_addr,
                     help="for diagnostics / setup hint only")
-    sp.add_argument("--tun-mtu", type=int, default=1400,
-                    help="for diagnostics / setup hint only")
+    sp.add_argument("--tun-mtu", type=int, default=9000,
+                    help="TUN MTU advertised to clients in BBMESH1 and used "
+                         "to configure the relay's own TUN. Default 9000 "
+                         "because the DataChannel transport rate-limits "
+                         "frames-per-second (~50/s sustained on Bale's SFU), "
+                         "not bytes-per-second; larger IP packets multiply "
+                         "goodput. Capped to fit the 14336-byte DataChannel "
+                         "MTU minus ARQ/IP overhead.")
 
 
 # --- commands -------------------------------------------------------------
@@ -171,6 +177,24 @@ def cmd_vpn_exit_node_mesh(args: argparse.Namespace) -> int:
     except (PermissionError, RuntimeError, OSError) as e:
         log.error("vpn-mesh: cannot open TUN %s: %s", args.tun, e)
         return 3
+    # Set the relay's own TUN MTU to match what we advertise to clients.
+    # Without this the systemd TUN created by vpn-setup-tun.sh stays at
+    # 1400 even when we advertise 9000, causing return packets to be
+    # silently fragmented or dropped. Best-effort: log on failure but
+    # don't abort (admin can fix manually with `ip link set <tun> mtu N`).
+    import shutil as _shutil
+    import subprocess as _subprocess
+    _ip = _shutil.which("ip")
+    if _ip is not None:
+        _r = _subprocess.run(
+            [_ip, "link", "set", "dev", args.tun, "mtu", str(args.tun_mtu)],
+            capture_output=True, text=True, check=False,
+        )
+        if _r.returncode != 0:
+            log.warning("vpn-mesh: could not set %s mtu=%d: %s",
+                        args.tun, args.tun_mtu, _r.stderr.strip() or "?")
+        else:
+            log.info("vpn-mesh: %s mtu set to %d", args.tun, args.tun_mtu)
 
     psk_key = _resolve_psk(args)
     mesh = MeshExitNode(tun, pool_cidr=args.pool_cidr)

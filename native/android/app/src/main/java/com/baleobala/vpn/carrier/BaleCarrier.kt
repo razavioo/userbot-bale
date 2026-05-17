@@ -71,7 +71,16 @@ class BaleCarrier(
             try { Thread.sleep(3_000) } catch (_: InterruptedException) { return@thread }
             // 1400 byte payload, first byte 0x00 so the remote kernel
             // drops it as malformed IP (version field = 0).
-            val pkt = ByteArray(1400) { if (it == 0) 0x00 else 0xC3.toByte() }
+            // Size matches a typical "big" IP packet expected from a high
+            // MTU TUN; mimics what TCP would emit after PMTU discovery.
+            // Keep below 14336B DataChannel ceiling minus ARQ header(8).
+            val pktSize = try {
+                val cls = Class.forName("android.os.SystemProperties")
+                val get = cls.getMethod("get", String::class.java, String::class.java)
+                ((get.invoke(null, "debug.baleobala.tunsat_size", "") as? String) ?: "")
+                    .toIntOrNull() ?: 1400
+            } catch (_: Throwable) { 1400 }
+            val pkt = ByteArray(pktSize) { if (it == 0) 0x00 else 0xC3.toByte() }
             val durationMs = try {
                 val cls = Class.forName("android.os.SystemProperties")
                 val get = cls.getMethod("get", String::class.java, String::class.java)
