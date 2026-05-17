@@ -28,6 +28,7 @@ stop-and-wait; the logic is identical.
 
 from __future__ import annotations
 
+import collections
 import logging
 import threading
 import time
@@ -112,13 +113,13 @@ class Tunnel:
         # dead LiveKit DataChannel that's silently failing every send.
         self._consecutive_drops = 0
         self._dead_emitted = False
-        # Bigger threshold: with ack_timeout=1.5s and max_retries=16, each
-        # dropped frame represents ~24s of dead silence. Setting the
-        # threshold to 4 lets one transient ~90s glitch slip past before
-        # we tear down. Bale's SFU has 30–60s "soft" stalls under load
-        # that recover on their own; declaring tunnel_dead too eagerly
-        # causes the user-visible flap.
-        self._dead_threshold = 4
+        # Raised 4 → 24 in concert with window=128 + MULTI_ACK. The
+        # wider window means more in-flight frames can simultaneously
+        # exhaust their retries after a brief glitch; 4 tripped tunnel_dead
+        # mid-stream during otherwise-healthy 240+ KB/s soaks. 24 lets a
+        # ~10-minute true silence elapse before we tear down (each retry
+        # cycle is ack_timeout×(max_retries+1) = 25s).
+        self._dead_threshold = 24
 
         self._seq_next = 0
         self._pending: dict[int, _Pending] = {}
@@ -129,6 +130,18 @@ class Tunnel:
         self._stop = threading.Event()
         self._rx_thread: threading.Thread | None = None
         self._retry_thread: threading.Thread | None = None
+        # Batched ACK sender. The rx loop enqueues acked seqs and a
+        # short-flush thread drains them into a single MULTI_ACK frame
+        # carrying up to ~4750 acks per frame (header=8B + 3B/seq within
+        # 14336B DataChannel MTU). The SFU's frames-per-second cap is
+        # the binding constraint on ack delivery; batching cuts the ack
+        # frame rate by ~20× and unblocks the inbound-ack path that
+        # starved at >1 KB/s under heavy device→relay TX. Flush window
+        # 25ms — small enough not to add visible latency to ARQ retries.
+        self._ack_queue: collections.deque[int] = collections.deque()
+        self._ack_event = threading.Event()
+        self._ack_thread: threading.Thread | None = None
+        self._ack_flush_interval = 0.025
 
         # Receive-side packet reassembly. Keyed by the seq of the first
         # SPLIT fragment in a packet; LAST closes the packet.
@@ -160,8 +173,12 @@ class Tunnel:
         self._retry_thread = threading.Thread(
             target=self._run_retry, name="vpn-tun-retry", daemon=True
         )
+        self._ack_thread = threading.Thread(
+            target=self._run_ack, name="vpn-tun-ack", daemon=True
+        )
         self._rx_thread.start()
         self._retry_thread.start()
+        self._ack_thread.start()
 
     def add_event_handler(self, handler: OnEvent) -> None:
         self._event_handlers.append(handler)
@@ -174,10 +191,13 @@ class Tunnel:
                 self._send_slot.release()
             except ValueError:
                 pass
+        self._ack_event.set()
         if self._rx_thread:
             self._rx_thread.join(timeout=2)
         if self._retry_thread:
             self._retry_thread.join(timeout=2)
+        if self._ack_thread:
+            self._ack_thread.join(timeout=2)
 
     def send_packet(self, packet: bytes) -> None:
         """Split `packet` into one or more frames and transmit with ARQ."""
@@ -232,8 +252,17 @@ class Tunnel:
                 continue
             if VpnFlag.ACK in frame.flags:
                 self._handle_ack(frame.seq)
+                # MULTI_ACK: payload is 3-byte little-endian seqs.
+                # Backward compat: old peers don't set MULTI_ACK and
+                # have no payload on ACK frames, so this branch is a
+                # no-op for them.
+                if VpnFlag.MULTI_ACK in frame.flags and frame.payload:
+                    pl = frame.payload
+                    for i in range(0, len(pl) - 2, 3):
+                        extra = pl[i] | (pl[i + 1] << 8) | (pl[i + 2] << 16)
+                        self._handle_ack(extra)
                 continue
-            # Data frame — ACK it first (cheap), then process.
+            # Data frame — enqueue ACK (a batch flusher drains them).
             self._send_ack(frame.seq)
             with self._seen_lock:
                 if frame.seq in self._seen:
@@ -331,11 +360,67 @@ class Tunnel:
         self._dead_emitted = False
 
     def _send_ack(self, seq: int) -> None:
-        ack = VpnFrame(
-            sess_id=self._sess_id, seq=seq, flags=VpnFlag.ACK, payload=b""
-        )
-        with self._tx_lock:
-            self._tx.send_bytes(ack.encode())
+        # Non-blocking: append + signal. The dedicated _run_ack thread
+        # batches and emits a MULTI_ACK frame.
+        self._ack_queue.append(seq)
+        self._ack_event.set()
+
+    def _run_ack(self) -> None:
+        # Periodic drain: always sleep the flush interval at the top of
+        # the loop so acks accumulate into a batch. Earlier attempt used
+        # `event.wait()` to return immediately on the first ack, which
+        # defeats batching — every wake drained just 1 ack and we emitted
+        # mostly single-ack frames, leaving MULTI_ACK unused under load.
+        while not self._stop.is_set():
+            time.sleep(self._ack_flush_interval)
+            if self._stop.is_set():
+                return
+            # Drain everything queued in one pass.
+            batch: list[int] = []
+            seen: set[int] = set()
+            while True:
+                try:
+                    s = self._ack_queue.popleft()
+                except IndexError:
+                    break
+                if s not in seen:
+                    seen.add(s)
+                    batch.append(s)
+            if not batch:
+                continue
+            # Each extra seq is 3 bytes; header is HEADER_SIZE (8) bytes.
+            # Cap at transport MTU to avoid a fragmentation error from the
+            # underlying datachannel (DC MTU is 14336B → ~4775 extras).
+            mtu = getattr(self._tx, "mtu", 14336)
+            max_extras_per_frame = max(0, (mtu - HEADER_SIZE) // 3)
+            chunk_size = max_extras_per_frame + 1  # +1 for header.seq
+            for start in range(0, len(batch), chunk_size):
+                chunk = batch[start : start + chunk_size]
+                primary = chunk[0]
+                extras = chunk[1:]
+                if extras:
+                    payload = b"".join(
+                        e.to_bytes(3, "little") for e in extras
+                    )
+                    flags = VpnFlag.ACK | VpnFlag.MULTI_ACK
+                else:
+                    payload = b""
+                    flags = VpnFlag.ACK
+                frame = VpnFrame(
+                    sess_id=self._sess_id, seq=primary,
+                    flags=flags, payload=payload,
+                )
+                try:
+                    with self._tx_lock:
+                        self._tx.send_bytes(frame.encode())
+                except Exception as exc:  # noqa: BLE001
+                    self._emit(
+                        "transport_ack_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        seq=primary,
+                    )
+                    return
 
     def swap_transport(self, new_transport: Transport) -> Transport:
         """Atomically swap the underlying byte carrier. Pending ARQ
