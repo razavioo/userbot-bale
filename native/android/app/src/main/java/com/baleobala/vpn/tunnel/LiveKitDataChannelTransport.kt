@@ -91,29 +91,6 @@ class LiveKitDataChannelTransport(
     private val rxMsgs = AtomicLong(0)
     private val rxMaxMsg = AtomicInteger(0)
 
-    // --- Send pacing ---
-    // Bale's SFU evicts participants that publishData faster than ~50/s
-    // sustained (observed: 8KB packets at full rate killed the tunnel
-    // within ~48s with tunnel_dead). Pace publishData at the transport
-    // layer to stay under that threshold. 20_000us = 20ms minimum
-    // interval = 50 publishes/sec ceiling, which empirically holds the
-    // tunnel alive indefinitely while still letting MTU-9000 carry
-    // ~450 KB/s of payload. Override at runtime with `setprop
-    // debug.baleobala.pace_us N`; 0 disables pacing.
-    private val pacingMutex = Object()
-    @Volatile private var lastSendNanos: Long = 0
-    private val pacingIntervalNanos: Long = run {
-        val override = try {
-            val cls = Class.forName("android.os.SystemProperties")
-            val get = cls.getMethod("get", String::class.java, String::class.java)
-            ((get.invoke(null, "debug.baleobala.pace_us", "") as? String) ?: "")
-                .toLongOrNull()
-        } catch (_: Throwable) { null }
-        (override ?: 20_000L) * 1_000L  // micros → nanos
-    }
-    private val pacedSleeps = AtomicLong(0)
-    private val pacedSleepNanos = AtomicLong(0)
-
     fun connect(timeoutMs: Long = 30_000): LiveKitDataChannelTransport {
         val r = LiveKit.create(appContext)
         room = r
@@ -282,27 +259,6 @@ class LiveKitDataChannelTransport(
         if (closed) throw IllegalStateException("LiveKit transport closed")
         if (data.size > mtu) throw IllegalArgumentException("frame ${data.size} > LiveKit MTU $mtu")
         val r = room ?: throw IllegalStateException("LiveKit room not connected")
-        // Pace publishData so we never exceed the SFU's per-participant
-        // rate limit. Synchronized block: callers serialize against the
-        // last send timestamp. The actual publishData happens after the
-        // lock is released so we don't hold it for the full publish.
-        if (pacingIntervalNanos > 0) {
-            synchronized(pacingMutex) {
-                val now = System.nanoTime()
-                val nextOk = lastSendNanos + pacingIntervalNanos
-                if (now < nextOk) {
-                    val sleepNs = nextOk - now
-                    pacedSleeps.incrementAndGet()
-                    pacedSleepNanos.addAndGet(sleepNs)
-                    val ms = sleepNs / 1_000_000L
-                    val ns = (sleepNs % 1_000_000L).toInt()
-                    try { Thread.sleep(ms, ns) } catch (_: InterruptedException) { return }
-                    lastSendNanos = System.nanoTime()
-                } else {
-                    lastSendNanos = now
-                }
-            }
-        }
         val reliability = if (reliable) DataPublishReliability.RELIABLE else DataPublishReliability.LOSSY
         var lastFailure: Throwable? = null
         repeat(3) { attempt ->
@@ -415,15 +371,10 @@ class LiveKitDataChannelTransport(
                 val rxKBs = dRxB / 1024.0 / secs
                 val txAvg = if (dTxM > 0) dTxB / dTxM else 0
                 val rxAvg = if (dRxM > 0) dRxB / dRxM else 0
-                val pSleeps = pacedSleeps.getAndSet(0)
-                val pNanos = pacedSleepNanos.getAndSet(0)
-                val pAvgMs = if (pSleeps > 0) (pNanos / pSleeps) / 1_000_000.0 else 0.0
-                val paceMs = pacingIntervalNanos / 1_000_000.0
                 onLog(
-                    "throughput[reliable=$reliable,pace=${"%.1f".format(paceMs)}ms] " +
+                    "throughput[reliable=$reliable] " +
                     "tx=${"%.1f".format(txKBs)}KB/s (${dTxM}msg, avg=${txAvg}B, max=${txMax}B) " +
-                    "rx=${"%.1f".format(rxKBs)}KB/s (${dRxM}msg, avg=${rxAvg}B, max=${rxMax}B) " +
-                    "paced=$pSleeps sleeps avg=${"%.1f".format(pAvgMs)}ms"
+                    "rx=${"%.1f".format(rxKBs)}KB/s (${dRxM}msg, avg=${rxAvg}B, max=${rxMax}B)"
                 )
             }
         }

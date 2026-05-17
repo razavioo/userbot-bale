@@ -25,11 +25,6 @@ object VpnFraming {
         const val RETRY: Int = 0x02
         const val LAST: Int = 0x04
         const val SPLIT: Int = 0x08
-        // Batched/piggyback ACK. When set on an ACK frame, the payload
-        // is a series of 3-byte little-endian seqs that are also acked
-        // (in addition to the seq in the frame header). Old peers ignore
-        // the flag and the payload, processing only the header seq.
-        const val MULTI_ACK: Int = 0x10
     }
 
     data class Frame(val sessId: Int, val seq: Int, val flags: Int, val payload: ByteArray) {
