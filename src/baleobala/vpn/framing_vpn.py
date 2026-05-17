@@ -40,15 +40,6 @@ class VpnFlag(IntFlag):
     RETRY = 0x02
     LAST = 0x04
     SPLIT = 0x08
-    # Batched / piggyback ACK. When set on an ACK frame, the payload
-    # contains additional acked seqs encoded as little-endian 3-byte
-    # integers (matching the on-the-wire seq encoding). The seq in the
-    # frame header is the FIRST acked seq; payload acks come after.
-    # Old peers that don't know this flag simply ignore the payload and
-    # process the header seq as a normal single ACK — those acks beyond
-    # the first will be retransmitted by the sender after timeout, so
-    # mixed-version deployments remain correct (just slower).
-    MULTI_ACK = 0x10
 
 
 @dataclass(frozen=True)
