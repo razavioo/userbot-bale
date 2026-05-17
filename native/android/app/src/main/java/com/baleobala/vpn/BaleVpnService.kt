@@ -246,11 +246,11 @@ class BaleVpnService : VpnService() {
                 url = creds.url,
                 token = creds.token,
                 topic = "vpn",
-                // Let the tunnel's own ARQ provide reliability. Bale's LiveKit
-                // SFU has repeatedly accepted reliable publishData calls while
-                // delivering no DataReceived events to the peer, which leaves
-                // both ends in seq=0..N max-retry/tunnel_dead loops.
-                reliable = false,
+                // reliable=true so the Bale SFU doesn't silently drop
+                // frames mid-flight. The tunnel's own ARQ still does end-
+                // to-end ack/retry, but reliable transport eliminates the
+                // SFU-level loss that was driving tunnel_dead within ~60s.
+                reliable = true,
                 onLog = { broadcast("log", it) },
                 onDisconnected = { handleTunnelDrop("LiveKit DataChannel disconnected") },
             )
