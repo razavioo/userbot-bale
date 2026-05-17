@@ -130,6 +130,21 @@ class LiveKitDataChannelTransport(
             try {
                 r.connect(url, token)
                 connectedOnce.set(true)
+                // Publish a microphone track so Bale's SFU keeps this
+                // participant alive. Without an audio publish the SFU
+                // evicts the participant in ~10–15s ("LiveKit remote
+                // participant disconnected" on the relay side), which
+                // killed the tunnel within ~12s of every connect. The
+                // mic data is irrelevant — only the published track's
+                // existence matters to the SFU.
+                if (topic == "vpn") {
+                    try {
+                        r.localParticipant.setMicrophoneEnabled(true)
+                        onLog("LiveKit microphone published (keeps SFU participant alive)")
+                    } catch (t: Throwable) {
+                        onLog("warn: setMicrophoneEnabled failed: ${t.message} (tunnel may drop after ~15s)")
+                    }
+                }
                 if (r.remoteParticipants.isNotEmpty()) peerReady.countDown()
                 onLog("LiveKit connected; remoteParticipants=${r.remoteParticipants.size}")
                 ready.countDown()
