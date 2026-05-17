@@ -73,6 +73,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* granted-or-not handled when the user next presses Connect */ }
+
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val kind = intent.getStringExtra("kind") ?: return
@@ -98,6 +102,7 @@ class MainActivity : AppCompatActivity() {
         settings = AppSettings(this)
 
         maybeRequestNotificationPermission()
+        maybeRequestMicPermission()
         refreshSettingsUi()
         // Recover state from the running Service (survives Activity recreation
         // on rotation, returning from background, or process restart while the
@@ -317,6 +322,19 @@ class MainActivity : AppCompatActivity() {
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (granted) return
         notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    // --- Microphone permission ---
+    // RECORD_AUDIO is requested so LiveKit can publish a (never-streamed)
+    // mic track that keeps Bale's SFU from evicting our participant.
+    // Without it sessions die in ~12 s. The audio bytes are dropped at
+    // the LiveKit layer; no actual mic data ever leaves the device.
+    private fun maybeRequestMicPermission() {
+        val granted = ActivityCompat.checkSelfPermission(
+            this, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
     }
 
     private fun openAppSettings() {
