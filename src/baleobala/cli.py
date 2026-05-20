@@ -2077,6 +2077,12 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
     for attempt in range(max_retries):
         _emit_marker(f"bonded_transport_connecting attempt={attempt+1}/{max_retries}")
         client = BaleApiClient(jwt=jwt, ws_tls_config=ws_tls_config)
+        # The caller must NOT auto-accept the echo of its own outgoing call:
+        # doing so opens a duplicate LiveKit session that evicts the relay with
+        # DuplicateIdentity. The callee (--answer) still needs to auto-accept to
+        # obtain credentials. (Mirrors _resolve_livekit_credentials_keep_alive.)
+        if not is_answer:
+            client.suppress_auto_accept = True
         try:
             client.start()
             if is_answer:
@@ -2098,13 +2104,19 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
                 creds = client.fetch_livekit_credentials(peer_id, creds_timeout=creds_timeout)
             break
         except Exception:  # noqa: BLE001
+            # Tear down only the failed attempt's WS before retrying. On
+            # success we deliberately keep the WS alive (see note below).
+            client.stop()
             if attempt == max_retries - 1:
                 raise
             time.sleep(2.0)
-        finally:
-            client.stop()
     else:  # pragma: no cover - loop either breaks or raises
         raise RuntimeError("bonded transport credential resolution failed")
+
+    # NOTE: do NOT stop `client` here. The Bale signalling WS must stay up for
+    # the lifetime of the call — if it closes, Bale tears the call down and the
+    # remote participant is evicted from the LiveKit room (handshake then times
+    # out). It is stopped in cleanup() when the transport closes.
 
     identity = f"{args.identity}-client" if args.identity == "baleobala" else args.identity
     session = LiveKitSession(url=creds.url, token=creds.token, identity=identity)
@@ -2137,6 +2149,11 @@ def _open_bonded_proxy_transport(args: argparse.Namespace, role, n_channels: int
             pass
         try:
             session.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        # Release the Bale signalling WS that we kept alive for the call.
+        try:
+            client.stop()
         except Exception:  # noqa: BLE001
             pass
 
