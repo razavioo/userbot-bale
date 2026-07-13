@@ -5,6 +5,7 @@ The main user journey is `doctor -> auth -> pair -> connect`.
 
 For production-facing setup, prefer `baleobala doctor`, `baleobala auth bale-login`,
 `baleobala pair ...`, `baleobala relay ...`, `baleobala vpn ...`, and `baleobala gui`.
+For local messaging automation, use the separate `baleobala userbot` and `baleobala mcp` surfaces.
 The lower-level transport commands below remain available as engineering and debug tools.
 
 ## Install
@@ -21,6 +22,12 @@ If you want Bale LiveKit support:
 pip install -e ".[dev,bale]"
 ```
 
+For the userbot and local MCP server:
+
+```bash
+pip install -e ".[dev,bale,mcp]"
+```
+
 If you want the desktop-app stack that is planned for the VPN release:
 
 ```bash
@@ -30,6 +37,8 @@ pip install -e ".[dev,bale,desktop]"
 ## What works today
 
 - `baleobala auth`, `pair`, `relay`, and `vpn` manage the product control plane and saved state.
+- `baleobala userbot` persists inbound text events locally and dispatches explicit plugins.
+- `baleobala mcp serve` exposes allowlist-gated messaging tools over stdio.
 - On Linux, `baleobala vpn up` defaults to the native `linux-tun` backend.
 - On macOS, `baleobala vpn agent install` creates a LaunchAgent that can start `vpn up` automatically at login.
 
@@ -42,8 +51,8 @@ pip install -e ".[dev,bale,desktop]"
 - `baleobala bale-tunnel` runs the tunnel over Bale LiveKit.
 - `baleobala bale-proxy` exposes a local SOCKS5/HTTP CONNECT endpoint over the tunnel.
 
-These commands still need either explicit LiveKit credentials or the Bale auth flow that is being
-finished for the desktop product, so they should not be treated as the primary production path.
+These commands use the authenticated Bale WebSocket path when supplied a saved session or an
+explicit JWT. They remain lower-level transport tools and are not the primary first-run path.
 
 ## Linux audio path
 
@@ -64,7 +73,8 @@ For browser or conferencing-app flows, continue to use the existing docs:
 
 The repo already treats macOS as a first-class target for the desktop product, and the packet-tunnel scaffold now consumes shared route and DNS configuration from the same profile data as the CLI.
 
-For now, macOS users should treat the proxy path as fallback/debug mode and the packet-tunnel path as the primary release path in [VPN_PLAN.md](VPN_PLAN.md).
+For now, macOS users should treat the proxy path as fallback/debug mode and the packet-tunnel path
+as the primary release path described in [Architecture](ARCHITECTURE.md) and [VPN](VPN.md).
 
 ## Windows notes
 
@@ -76,7 +86,7 @@ Use the Windows-specific runbook in [WINDOWS_DEVELOPMENT.md](WINDOWS_DEVELOPMENT
 
 ```bash
 baleobala doctor
-baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save --no-print-jwt
 baleobala pair enroll --name home-relay
 baleobala vpn status
 ```
@@ -87,7 +97,9 @@ If these pass, the machine is ready for the main sign-in, pairing, and secure-co
 
 - If `sounddevice` cannot see your devices, install the system audio backend packages for your distro.
 - If `pactl` is missing, install `pulseaudio-utils` or the PipeWire Pulse compatibility package.
-- If Bale LiveKit setup fails, start by verifying the current `baleobala bale-call` path with explicit LiveKit credentials before moving to the automated auth work.
+- If Bale WebSocket or LiveKit setup fails, confirm `baleobala auth status` first, then use the
+  relevant VPN or call command with verbose logging. Phone/SMS login is already supported through
+  the browser and gRPC-Web flows.
 - If `baleobala doctor` reports missing `sounddevice`, re-check the Python environment that is currently active.
 - If `baleobala doctor` is green but the proxy still fails, test `baleobala tunnel-loopback` first so we know the byte-tunnel core is healthy.
 - If `baleobala vpn up` complains about auth or your stored JWT has expired, run `baleobala auth bale-login --phone ... --save` first and then retry with the saved session.
@@ -95,9 +107,12 @@ If these pass, the machine is ready for the main sign-in, pairing, and secure-co
 - If a paired relay already exists locally, `baleobala vpn up` will use the most recently used paired relay automatically.
 - If you want the app to come back on login on macOS, run `baleobala vpn agent install` once after pairing.
 - On macOS, `vpn up` now prefers the packet-tunnel backend recorded in the saved profile. If you explicitly choose the proxy fallback, `vpn down` restores the stored system proxy settings.
+- For messaging automation, approve each destination first with `baleobala userbot allow-peer <peer_id>`.
+  MCP runs only over stdio and exposes messages, dialogs, and sends for approved peers.
 
 ## Where to go next
 
-- [Desktop VPN Plan](VPN_PLAN.md)
+- [VPN Transport](VPN.md)
+- [Userbot and MCP](USERBOT.md)
 - [Bale Headless Notes](BALE_HEADLESS.md)
 - [Native macOS Scaffold](../native/macos/README.md)

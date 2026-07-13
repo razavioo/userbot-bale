@@ -1,5 +1,24 @@
 # baleobala Operations Guide
 
+## Userbot And MCP Operations
+
+The userbot and MCP server are local, single-account messaging integrations. They are separate
+from the relay/VPN topology below and do not expose relay provisioning, proxy control, VPN routing,
+contact import, raw RPCs, or call acceptance.
+
+- Authenticate once with `baleobala auth bale-login --phone ... --save --no-print-jwt`.
+- Add every peer that automation may access with `baleobala userbot allow-peer <peer_id>`.
+- Run one messaging worker per account. Do not run the userbot and MCP server as independent
+  long-lived workers for the same account if reliable delivery matters; they would maintain separate
+  WebSocket sessions and separate process lifecycles.
+- Start MCP only through `baleobala mcp serve` over stdio. It has no network listener and limits
+  dialog/message access and outbound text to the local allowlist.
+- Outbound automation is capped at 20 messages per peer per minute. A failed network send consumes
+  a slot deliberately, preventing retry loops from creating a burst.
+
+Userbot state and audit records are stored in `state/userbot.sqlite3` under the Baleobala app
+directory. JWTs are not stored in that database.
+
 ## Architecture (post-v0.4)
 
 No coordinator. The deployment is just **one or more relay (mesh exit-node) hosts**, each running one Python process that owns a pool of Bale JWTs. Each JWT can host one concurrent Bale call.

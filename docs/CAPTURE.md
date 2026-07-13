@@ -1,14 +1,12 @@
 # Capturing Bale wire traffic
 
-The headless Bale client's auth and call layers need a small number
-of real mitmproxy captures to finalize. The captures anchor the
-framing, the auth-key derivation, and the protobuf envelope against
-ground truth — shipping without them means writing code that's
-probably right, which for a crypto handshake is worse than writing
-no code at all.
+The supported WebSocket and gRPC-Web client already provides phone auth, calls, and text
+messaging. Captures are now a maintenance and MTProto-research tool: use them to validate a Bale
+protocol change, replace heuristic parsers with structural decoders, or complete the experimental
+Nasim-MTProto implementation. They are not required to run the VPN, userbot, or MCP server.
 
 This doc is the reproducible workflow for producing those captures.
-A single successful run yields everything Phases 5–7 need.
+A single successful run yields a useful regression corpus for the experimental protocol work.
 
 ## Required captures
 
@@ -120,15 +118,16 @@ flows and writes each RPC request/response payload to
 `captures/<ts>/<rpc_name>.bin`. Those bins become the corpus for the
 replay tests in `tests/test_bale_mtproto.py`.
 
-## What the captures unblock
+## What the captures validate or unblock
 
 | Capture                       | Unblocks                                  |
 | ----------------------------- | ----------------------------------------- |
 | Endpoint bootstrap            | Already verified; confirms pin parsing    |
-| RequestStartPhoneAuth         | Phase 5 (framing) + Phase 6 (auth)        |
-| RequestValidateCode           | Phase 6 (auth completion, JWT shape)      |
-| RequestStartLiveKitCall       | Phase 7 (call init, LiveKit token shape)  |
-| UpdateCallAction              | Phase 7 (inbound call handling)           |
+| RequestStartPhoneAuth         | Browser/gRPC-Web auth regression coverage |
+| RequestValidateCode           | JWT response and session regression coverage |
+| RequestStartLiveKitCall       | Call credential parser regression coverage |
+| UpdateCallAction              | Inbound-call parser regression coverage |
+| Native MTProto session        | Auth-key and authenticated-frame research |
 
 Capture once, code for a week. The captures should be kept in
 `captures/` (gitignored; contains your own session secrets).

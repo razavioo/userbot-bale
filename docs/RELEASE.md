@@ -7,6 +7,9 @@ the user flow on `doctor`, `auth bale-login`, `pair`, `relay`, `vpn`, and `gui`.
 transport commands remain available for compatibility or debugging, but should not be presented as
 parallel first-run paths.
 
+The optional MCP distribution must include the `mcp` extra. Its supported transport is stdio only;
+do not package it as a network service without an authentication and authorization boundary.
+
 The preferred first-run story should always read as `doctor -> auth -> pair -> connect`.
 
 ## macOS direct-distribution release
@@ -63,6 +66,8 @@ Ship the wheel alongside system packages for:
 
 - `baleobala doctor` passes on the target machine.
 - `baleobala auth bale-login --phone ... --save` stores auth locally and expired sessions are treated as missing.
+- `baleobala userbot` and `baleobala mcp` require an explicit per-peer allowlist before they can
+  read dialogs/messages or send text for that peer.
 - A relay pairing exists or can be created on first run.
 - `vpn up` or `gui` starts the correct platform connection flow.
 - The first-run smoke tests pass in CI before publishing.

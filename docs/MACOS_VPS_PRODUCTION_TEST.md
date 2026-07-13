@@ -101,7 +101,7 @@ Sign in with the macOS Bale account, create/sync a pairing for the VPS Bale
 peer, and install the dev-signed native app:
 
 ```bash
-baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save --no-print-jwt
 ./scripts/run-macos.sh
 ```
 

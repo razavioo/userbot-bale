@@ -18,6 +18,18 @@ def test_top_level_help_prioritizes_core_commands() -> None:
     assert "bale-proxy          debug:" in help_text
     assert "tunnel-loopback     debug:" in help_text
 
+
+def test_userbot_and_mcp_commands_are_exposed() -> None:
+    from baleobala.cli import build_parser
+
+    parser = build_parser()
+    userbot_args = parser.parse_args(["userbot", "allow-peer", "123"])
+    mcp_args = parser.parse_args(["mcp", "serve"])
+
+    assert userbot_args.userbot_cmd == "allow-peer"
+    assert userbot_args.peer_id == 123
+    assert mcp_args.mcp_cmd == "serve"
+
 def test_auth_subcommand_help_text() -> None:
     from baleobala.cli import build_parser
 

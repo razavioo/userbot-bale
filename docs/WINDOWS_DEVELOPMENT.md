@@ -33,7 +33,7 @@ baleobala doctor
 ## Sign-in and pairing
 
 ```powershell
-baleobala auth bale-login --phone +98912xxxxxxx --method browser --save
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --save --no-print-jwt
 baleobala pair enroll --name home-relay --role client
 baleobala pair request-access --profile-id "<profile-id>"
 baleobala pair approve --profile-id "<profile-id>"

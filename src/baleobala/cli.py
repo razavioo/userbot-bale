@@ -2598,8 +2598,8 @@ def build_parser() -> argparse.ArgumentParser:
     auth_bale_login.add_argument(
         "--print-jwt",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="print JWT to stdout (default: true)",
+        default=False,
+        help="print JWT to stdout (default: false)",
     )
     auth_bale_login.set_defaults(func=cmd_auth)
 
@@ -2608,6 +2608,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_status = auth_sub.add_parser("status", help="show stored auth state")
     auth_status.set_defaults(func=cmd_auth)
+
+    userbot = sub.add_parser("userbot", help="run local Bale message automation")
+    userbot_sub = userbot.add_subparsers(dest="userbot_cmd", required=True)
+    userbot_run = userbot_sub.add_parser("run", help="run the userbot until interrupted")
+    userbot_run.add_argument("--echo", action="store_true", help="echo messages from approved peers")
+    userbot_run.set_defaults(func=cmd_userbot)
+    userbot_allow = userbot_sub.add_parser("allow-peer", help="allow outbound messages to a peer")
+    userbot_allow.add_argument("peer_id", type=int)
+    userbot_allow.set_defaults(func=cmd_userbot)
+    userbot_disallow = userbot_sub.add_parser("disallow-peer", help="remove a peer from the outbound allowlist")
+    userbot_disallow.add_argument("peer_id", type=int)
+    userbot_disallow.set_defaults(func=cmd_userbot)
+    userbot_peers = userbot_sub.add_parser("peers", help="list allowed outbound peers")
+    userbot_peers.set_defaults(func=cmd_userbot)
+
+    mcp = sub.add_parser("mcp", help="serve Bale tools over Model Context Protocol")
+    mcp_sub = mcp.add_subparsers(dest="mcp_cmd", required=True)
+    mcp_serve = mcp_sub.add_parser("serve", help="run an stdio MCP server")
+    mcp_serve.set_defaults(func=cmd_mcp)
 
     pair = sub.add_parser("pair", help="enroll, authorize, and inspect relay pairings")
     pair_sub = pair.add_subparsers(dest="pair_cmd", required=True)
@@ -3312,6 +3331,57 @@ def cmd_gui(args: argparse.Namespace) -> int:
             f"(import failed: {e})"
         )
     return run()
+
+
+def cmd_userbot(args: argparse.Namespace) -> int:
+    from baleobala.control.auth import AuthStore
+    from baleobala.userbot import BaleUserClient, EchoPlugin, UserbotRuntime, UserbotStore
+
+    store = UserbotStore()
+    if args.userbot_cmd == "allow-peer":
+        store.allow_peer(args.peer_id)
+        print(f"allowed peer {args.peer_id}")
+        return 0
+    if args.userbot_cmd == "disallow-peer":
+        store.disallow_peer(args.peer_id)
+        print(f"removed peer {args.peer_id} from allowlist")
+        return 0
+    if args.userbot_cmd == "peers":
+        for peer_id in store.allowed_peers():
+            print(peer_id)
+        return 0
+
+    record = AuthStore().load()
+    if record is None:
+        raise RuntimeError("no valid Bale session; run 'baleobala auth bale-login --save' first")
+    plugins = [EchoPlugin()] if args.echo else []
+    runtime = UserbotRuntime(BaleUserClient(jwt=record.jwt, store=store), plugins)
+    stopped = threading.Event()
+
+    def stop(_signum, _frame) -> None:  # type: ignore[no-untyped-def]
+        stopped.set()
+
+    previous_int = signal.signal(signal.SIGINT, stop)
+    previous_term = signal.signal(signal.SIGTERM, stop)
+    try:
+        runtime.start()
+        log.info("userbot running plugins=%s", [type(plugin).__name__ for plugin in plugins])
+        while not stopped.wait(1.0):
+            pass
+    finally:
+        runtime.stop()
+        signal.signal(signal.SIGINT, previous_int)
+        signal.signal(signal.SIGTERM, previous_term)
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    if args.mcp_cmd != "serve":
+        raise RuntimeError(f"unsupported MCP command: {args.mcp_cmd}")
+    from baleobala.mcp.server import serve
+
+    serve()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

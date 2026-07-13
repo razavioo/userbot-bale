@@ -1,6 +1,9 @@
 # Architecture
 
-This document describes the product layers from the user-facing control plane down to the kernel TUN device. It focuses on the runtime path used by `vpn up`, `vpn exit-node`, mesh mode, and the packet-tunnel backend scaffold.
+This document describes the product layers for the VPN/relay path and the separate messaging
+automation path. The VPN sections focus on `vpn up`, `vpn exit-node`, mesh mode, and the
+packet-tunnel backend scaffold. Userbot and MCP use the authenticated Bale WebSocket API and do
+not enter the carrier, transport, or kernel layers.
 
 ## End-To-End Data Flow
 
@@ -34,6 +37,35 @@ The important rule is that each layer owns one boundary:
 - The runner connects the tunnel to the kernel TUN device.
 
 ## Layer Map
+
+### Bale API And Automation Layer
+
+Source files:
+
+- `src/baleobala/bale/auth.py`
+- `src/baleobala/bale/ws_client.py`
+- `src/baleobala/bale/api.py`
+- `src/baleobala/userbot/`
+- `src/baleobala/mcp/server.py`
+
+Responsibilities:
+
+- Authenticate a locally owned Bale account with phone/SMS and retain the JWT in the configured
+  secret backend.
+- Keep one authenticated WebSocket session alive, re-subscribe to updates after reconnect, and
+  decode text-message pushes.
+- Persist userbot messages, deduplicate inbound deliveries across restarts, and dispatch plugins.
+- Offer a narrow local MCP interface for account status, approved dialogs/messages, and approved
+  outbound text.
+
+Boundaries:
+
+- `BaleUserClient` disables call auto-accept; calls remain a carrier/VPN concern.
+- `UserbotStore` persists message and audit data in SQLite but never stores a JWT.
+- MCP is stdio-only, restricts reads and sends to the local peer allowlist, and applies the same
+  20-message-per-peer-per-minute outbound cap as the userbot.
+- Neither the userbot nor MCP exposes VPN routing, proxy setup, contact import, raw RPC payloads,
+  pairing, or call control.
 
 ### Control Plane
 
@@ -142,6 +174,8 @@ Responsibilities:
 | `VpnBackend` | `src/baleobala/control/backend.py` | Platform backend with `up`, `down`, `status`, and `probe`. |
 | `TunnelBridge` | `src/baleobala/control/tunnel_service.py` | Minimal bridge used by the packet-tunnel scaffold to exchange bytes with the carrier/runtime. |
 | `TunnelService` | `src/baleobala/control/tunnel_service.py` | IPC-facing service that owns lifecycle and state for the future native extension. |
+| `BaleUserClient` | `src/baleobala/userbot/client.py` | One-account messaging lifecycle, durable inbound events, peer policy, and bounded outbound text. |
+| `BaleMcpService` | `src/baleobala/mcp/server.py` | Stdio MCP tool boundary over the allowlist-gated userbot surface. |
 
 ## Data Boundaries
 
@@ -169,6 +203,19 @@ The tunnel only sees opaque byte frames. It does not know whether the bytes came
 ### Tunnel And TUN
 
 The tunnel consumes IP packets from the kernel TUN device and writes reassembled packets back to it. This is the only place where kernel packet handling appears in the main user-space runtime.
+
+### Userbot And MCP
+
+The messaging path is intentionally independent of the VPN runtime:
+
+```text
+Bale phone/SMS auth -> secret backend -> BaleApiClient / WebSocket updates
+                                      -> BaleUserClient -> SQLite state -> plugins
+                                                                   -> MCP stdio tools
+```
+
+An approved peer is required before the MCP server can read that peer's local messages or expose
+its dialog metadata. The same allowlist is required for every outbound send.
 
 ## Topology (post-v0.4: no coordinator)
 

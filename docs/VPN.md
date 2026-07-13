@@ -19,8 +19,9 @@ the public internet.
 
 - Linux (client and exit node). Kernel `tun` module, iproute2, iptables.
 - Python 3.9+, `pip install -e ".[bale]"` on both ends.
-- Bale accounts on both ends, each with a JWT access-token saved in a
-  file (see [BALE_HEADLESS.md](./BALE_HEADLESS.md) for capturing one).
+- Bale accounts on both ends. Obtain a session with `baleobala auth bale-login --phone ... --save`.
+  File-based JWT inputs remain available for relay and automation deployments; protect them with
+  mode `0600` and do not print or commit them.
 - On the exit node: know your public interface name (`ip route show default`).
 
 ## Normal Linux Session Runner Flow
@@ -207,11 +208,12 @@ Bootstrap a JWT for either side with phone-SMS login (live-verified
 against Bale Web's browser/web flow or the older gRPC-Web path):
 
 ```bash
-baleobala auth bale-login --phone +989XXXXXXXXX --method browser --save --jwt-out ~/.bale_jwt
+baleobala auth bale-login --phone +989XXXXXXXXX --method browser --save --no-print-jwt --jwt-out ~/.bale_jwt
 chmod 0600 ~/.bale_jwt
 ```
 
-The older `baleobala bale-auth --phone ...` command is still available
+`--jwt-out` is an explicit compatibility export for file-based tunnel and relay commands. The
+normal saved session is retained in the configured secret backend. The older `baleobala bale-auth --phone ...` command is still available
 for backwards compatibility, but `auth bale-login` is the preferred
 entry point because it can force the real browser login path that we
 verified against the GUI flow.

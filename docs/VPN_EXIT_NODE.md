@@ -17,8 +17,8 @@ pip install -e ".[bale]"
 
 ## 2. Bale JWT
 
-Acquire an access-token JWT for the exit-node's Bale account (see
-[BALE_HEADLESS.md](./BALE_HEADLESS.md)) and store it outside $HOME:
+Acquire an access-token JWT for the exit-node's Bale account with `baleobala auth bale-login` on
+a trusted machine. Export it only for this file-based service, then store it outside `$HOME`:
 
 ```bash
 sudo install -m 0600 -o root -g root /dev/null /etc/baleobala/jwt.txt

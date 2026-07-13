@@ -141,6 +141,7 @@ class BaleApiClient:
         self._ws = WsClient(
             jwt=self._jwt,
             on_update=self._dispatch_update,
+            on_reconnect=self._subscribe_updates,
             tls_config=self._ws_tls_config,
             **kwargs,
         )
@@ -468,6 +469,15 @@ class BaleApiClient:
         unique inbound rid."""
         self._message_subs[peer_id] = callback
 
+    def listen_all_messages(self, callback: Callable[[InboundMessage], None]) -> None:
+        """Subscribe to decoded inbound text messages from every peer.
+
+        This is intended for user-facing automation.  VPN transports should
+        continue using ``listen_messages`` so their traffic remains scoped to
+        the configured peer.
+        """
+        self._all_messages_callback = callback
+
     # ------------------------------------------------------------------ call helpers
 
     def receive_call(self, call_id: int) -> None:
@@ -607,7 +617,7 @@ class BaleApiClient:
                     name="baleobala-accept-call",
                 ).start()
 
-        if self._message_subs:
+        if self._message_subs or getattr(self, "_all_messages_callback", None) is not None:
             self._dispatch_inbound_messages(resp.raw)
 
     def _deliver_creds(self, creds: CallCredentials, *, source: str = "push") -> None:
@@ -645,20 +655,26 @@ class BaleApiClient:
         messages = find_inbound_messages(raw)
         for m in messages:
             if m.rid:
+                dedup_key = (m.sender_uid or m.peer_user_id, m.rid)
                 with self._seen_rids_lock:
-                    if m.rid in self._seen_rids:
+                    if dedup_key in self._seen_rids:
                         continue
-                    self._remember_rid_locked(m.rid)
+                    self._remember_rid_locked(dedup_key)
             cb = (
                 self._message_subs.get(m.sender_uid)
                 or self._message_subs.get(m.peer_user_id)
             )
-            if cb is None:
-                continue
-            try:
-                cb(m.text.encode("utf-8"))
-            except Exception:  # noqa: BLE001
-                log.exception("inbound-message callback failed")
+            if cb is not None:
+                try:
+                    cb(m.text.encode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    log.exception("inbound-message callback failed")
+            all_messages_callback = getattr(self, "_all_messages_callback", None)
+            if all_messages_callback is not None:
+                try:
+                    all_messages_callback(m)
+                except Exception:  # noqa: BLE001
+                    log.exception("all inbound-message callback failed")
 
     def _remember_rid_locked(self, rid: int) -> None:
         """Caller must hold self._seen_rids_lock."""

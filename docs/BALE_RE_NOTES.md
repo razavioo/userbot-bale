@@ -34,6 +34,11 @@ The real stack:
 
 ## What this means for the headless client
 
+The supported headless integration is now Bale's Web-compatible path: gRPC-Web phone auth, JWT,
+and `wss://next-ws.bale.ai/ws/` RPC/push updates. It powers calls, messaging, the local userbot,
+and the MCP server. The direct Nasim-MTProto implementation below remains experimental and must
+not be selected for userbot or MCP messaging.
+
 The RE work divides cleanly:
 
 | Target                           | Needs RE? | State          |
@@ -154,13 +159,13 @@ This aligns with upstream Actor Platform where `Endpoint.key` carries
 the MTProto server identity. `src/baleobala/bale/mtproto/endpoint.py`
 is updated accordingly: TLS is plain, pin flows into the next layer.
 
-## RE milestones to finish the headless client
+## Remaining MTProto research milestones
 
 1. ✅ **Endpoint bootstrap.** Done — see `endpoints.py`. Live-tested
    against bale.ai on 2026-04-19.
 2. ✅ **Live TLS endpoint connect.** Done — see
    `src/baleobala/bale/mtproto/endpoint.py`. Live-tested same day.
-3. **Extract the client identifier (api_id / device_hash).** Not
+3. **Extract the MTProto client identifier (api_id / device_hash).** Not
    found as a literal in the decompile; likely derived at runtime in
    `ir.nasim.core.modules.*` initialization or passed as a
    session-negotiated value. Needs a mitmproxy capture to confirm.
@@ -174,9 +179,9 @@ is updated accordingly: TLS is plain, pin flows into the next layer.
    AuthKey negotiation, message-id, and the frame format. Nasim's
    upstream (Actor Platform) is on GitHub and its MTProto variant
    is documented, so this is a porting job, not a full RE.
-5. **Wire up `BaleAuth.start_phone_auth` /
-   `BaleApiClient.fetch_livekit_credentials`** using the protos
-   cataloged above. The JSON-equivalent shapes are:
+5. **Keep the WebSocket and gRPC-Web client capture-validated.** `BaleAuth` and
+   `BaleApiClient.fetch_livekit_credentials` are implemented on that path. Fresh captures should
+   validate protocol changes before updating parsers. The relevant request shape is:
 
    ```python
    # Fetch
@@ -194,9 +199,8 @@ is updated accordingly: TLS is plain, pin flows into the next layer.
        identity=str(resp.user_id),
    )
    ```
-5. **Replace the `--livekit-url` / `--livekit-token` CLI options with
-   a `--peer` option** once the credentials fetch works end-to-end.
-   Keep the manual-token path around for debugging.
+6. **Do not promote MTProto to a user-facing backend** until auth-key negotiation, authenticated
+   framing, and a capture-backed interoperability suite are complete.
 
 ## Legality
 

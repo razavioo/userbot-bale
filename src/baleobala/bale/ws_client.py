@@ -308,11 +308,6 @@ class WsClient:
             # will see _ws is None and refuse cleanly.
             self._ws = None
             self._connected.clear()
-            if self._on_reconnect is not None:
-                try:
-                    self._on_reconnect()
-                except Exception:  # noqa: BLE001
-                    log.exception("on_reconnect callback failed")
         self._stopped.set()
 
     async def _sleep_until_stopped(self, seconds: float) -> None:
@@ -374,6 +369,11 @@ class WsClient:
                 except asyncio.TimeoutError:
                     log.warning("no init-ack within 5s; continuing anyway")
                 self._connected.set()
+                if not is_first_attempt and self._on_reconnect is not None:
+                    try:
+                        self._on_reconnect()
+                    except Exception:  # noqa: BLE001
+                        log.exception("on_reconnect callback failed")
                 async for msg in ws:
                     log.debug("WS rx: %dB", len(msg) if isinstance(msg, (bytes, bytearray)) else -1)
                     if isinstance(msg, (bytes, bytearray)):

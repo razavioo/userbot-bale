@@ -8,9 +8,10 @@ from baleobala.bale.api import BaleApiClient, LiveKitCredentials
 from baleobala.bale.endpoints import Endpoint
 from baleobala.bale.messaging_backend import MessagingBackend
 from baleobala.bale.protos import (
-    CallCredentials, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
+    CallCredentials, InboundMessage, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
     parse_incoming_call_offer,
 )
+from baleobala.bale.rpc_envelope import Response
 
 
 def test_livekit_credentials_shape() -> None:
@@ -217,3 +218,40 @@ def test_api_client_bootstrap_caches_endpoint_fetch(monkeypatch) -> None:
 def test_bale_api_client_satisfies_messaging_backend_protocol() -> None:
     client = BaleApiClient(jwt="token")
     assert isinstance(client, MessagingBackend)
+
+
+def test_listen_all_messages_receives_decoded_events(monkeypatch) -> None:
+    client = BaleApiClient(jwt="token")
+    received: list[InboundMessage] = []
+    client.listen_all_messages(received.append)
+    inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
+    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
+
+    client._dispatch_inbound_messages(b"update")
+
+    assert received == [inbound]
+
+
+def test_all_message_subscription_runs_through_update_dispatch(monkeypatch) -> None:
+    client = BaleApiClient(jwt="token")
+    received: list[InboundMessage] = []
+    client.listen_all_messages(received.append)
+    inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
+    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
+
+    client._dispatch_update(Response(seq=None, payload=b"", raw=b"update"))
+
+    assert received == [inbound]
+
+
+def test_message_deduplication_keeps_equal_rids_from_distinct_peers(monkeypatch) -> None:
+    client = BaleApiClient(jwt="token")
+    received: list[InboundMessage] = []
+    client.listen_all_messages(received.append)
+    first = InboundMessage(peer_user_id=7, sender_uid=7, rid=9, text="first")
+    second = InboundMessage(peer_user_id=8, sender_uid=8, rid=9, text="second")
+    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [first, second])
+
+    client._dispatch_inbound_messages(b"update")
+
+    assert received == [first, second]

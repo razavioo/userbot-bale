@@ -1,10 +1,17 @@
 # Bale Headless Notes
 
-These notes document the Bale carrier work and how it maps into the desktop VPN/product plan.
+These notes document the Bale carrier and authenticated WebSocket client work and how they map
+into the VPN, userbot, and MCP product surfaces.
 
 ## What is implemented
 
 - Bale LiveKit credential bootstrap is wired through the WS API client.
+- Phone/SMS sign-in is live through the browser and gRPC-Web paths; saved sessions are used by the
+  VPN, userbot, and MCP commands.
+- The userbot runtime persists text events, deduplicates them across restarts, applies an outbound
+  peer allowlist and rate limit, and never auto-accepts calls.
+- The MCP server is stdio-only and exposes only approved Bale peers; it cannot invoke calls, VPN,
+  proxy, contact-import, or raw RPC operations.
 - Audio transport is abstracted behind `AudioSink` and `AudioSource`.
 - The byte tunnel, proxy transport, and carrier adapters are split into separate runtime layers.
 - The CLI can exercise the carrier stack, tunnel core, and proxy fallback without the future desktop shell.
@@ -17,7 +24,6 @@ These notes document the Bale carrier work and how it maps into the desktop VPN/
 
 ## What remains for the full product
 
-- Bale phone/SMS auth and token refresh need to be completed in the transport/auth layer.
 - Relay pairing should become a first-class concept instead of a manual peer-id flow.
 - The desktop app should call the same service layer as the CLI.
 - System VPN plumbing now has Linux TUN and a macOS packet-tunnel scaffold; the remaining work is hardening and release packaging.
@@ -31,9 +37,11 @@ The current headless path is useful for:
 - keeping the tunnel core testable,
 - and giving us a fallback transport for early development.
 
-It is not the final user-facing product shell. The final release target is the desktop VPN flow described in [VPN_PLAN.md](VPN_PLAN.md).
+It is not limited to the desktop VPN shell: the same authenticated API layer now also supports
+local userbot and MCP integrations. MTProto remains experimental and is not used by those paths.
 
 ## References
 
 - [Bale RE notes](BALE_RE_NOTES.md)
 - [Getting Started](SETUP.md)
+- [Userbot and MCP](USERBOT.md)

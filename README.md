@@ -4,7 +4,7 @@
 
 # baleobala
 
-`baleobala` is the communication core for Bale — a SOCKS5 proxy that tunnels network traffic through the DataChannel of a Bale call between two user accounts. No separate relay server is needed; the channel is the most direct path possible.
+`baleobala` is a Bale integration framework. It provides a call-backed VPN and proxy transport, a durable single-account messaging userbot runtime, and an allowlist-gated MCP server for local AI integrations. The VPN path uses a Bale LiveKit call; the userbot and MCP path use Bale's authenticated WebSocket API.
 
 ---
 
@@ -152,8 +152,14 @@ ssh root@<VPS-IP> systemctl status baleobala-relay.service
 
 ```bash
 # Authentication
-baleobala auth bale-login --phone +98912xxxxxxx --method browser --headful --save
+baleobala auth bale-login --phone +98912xxxxxxx --method browser --headful --save --no-print-jwt
 baleobala auth status
+
+# Userbot and MCP
+baleobala userbot allow-peer 123456789
+baleobala userbot run
+pip install -e ".[mcp]"
+baleobala mcp serve
 
 # Health check
 baleobala doctor
@@ -223,6 +229,9 @@ baleobala tunnel-loopback
 - [Bale Headless Notes](docs/BALE_HEADLESS.md)
 - [Native macOS Scaffold](native/macos/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Userbot and MCP](docs/USERBOT.md)
+- [VPN Operations](docs/OPERATIONS.md)
+- [VPN Transport](docs/VPN.md)
 - [macOS client + Linux VPS production-test](docs/MACOS_VPS_PRODUCTION_TEST.md)
 
 ---
