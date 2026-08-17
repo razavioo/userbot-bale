@@ -134,12 +134,37 @@ class BaleAuthBrowser:
         return "browser"
 
     async def _async_validate_code(self, code: str) -> str:
+        # A person may complete the OTP in the visible browser rather than
+        # typing it again at the terminal prompt. In that case the login page
+        # has already navigated away and the OTP textbox no longer exists.
+        # Always inspect the browser-owned session before touching the page.
+        jwt = await self._async_get_jwt()
+        if jwt:
+            log.warning("Browser: accepted manually completed web login")
+            return jwt
+
+        code = code.strip()
+        if not code:
+            raise RuntimeError(
+                "no SMS code entered and the browser has no completed login; "
+                "enter the code in either the terminal or the visible browser first"
+            )
+
         page = self._page
         code_input = page.get_by_role("textbox", name="کد ورود", exact=True).first
-        await code_input.click(timeout=_TIMEOUT)
+        try:
+            await code_input.click(timeout=_TIMEOUT)
+        except Exception:
+            # The page may have navigated between the initial cookie check
+            # and this click. Prefer the successfully established session.
+            jwt = await self._async_get_jwt()
+            if jwt:
+                log.warning("Browser: accepted manually completed web login")
+                return jwt
+            raise
         # Keep real key events: the web app enables its submit button from
         # React input events, which is more reliable than setting the value.
-        await code_input.press_sequentially(code.strip(), delay=40)
+        await code_input.press_sequentially(code, delay=40)
         await page.wait_for_timeout(500)
 
         log.warning("Browser: submitting SMS code")
