@@ -16,7 +16,8 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _ORIGIN = "https://web.bale.ai"
-_TIMEOUT = 45_000  # ms; web.bale.ai can be slow.
+_LOGIN_URL = f"{_ORIGIN}/login"
+_TIMEOUT = 75_000  # ms; web.bale.ai can be slow.
 
 
 def _new_loop() -> asyncio.AbstractEventLoop:
@@ -80,7 +81,7 @@ class BaleAuthBrowser:
     async def _dismiss_overlays(self) -> None:
         """Dismiss the PWA-install guide when it obscures the login button."""
         page = self._page
-        for _ in range(20):
+        for _ in range(8):
             for label in ("متوجه شدم", "باشه", "OK", "Accept"):
                 try:
                     button = page.get_by_role("button", name=label, exact=True).first
@@ -91,16 +92,16 @@ class BaleAuthBrowser:
                         return
                 except Exception:
                     pass
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(300)
         log.warning("Browser: no dismissible overlay appeared")
 
     async def _async_start_phone_auth(self, phone_number: int) -> str:
         page = self._page
         phone = _iran_local(phone_number)
 
-        log.warning("Browser: navigating to %s", _ORIGIN)
+        log.warning("Browser: navigating to %s", _LOGIN_URL)
         try:
-            await page.goto(_ORIGIN, wait_until="domcontentloaded", timeout=_TIMEOUT)
+            await page.goto(_LOGIN_URL, wait_until="domcontentloaded", timeout=_TIMEOUT)
         except Exception:
             pass
         await page.wait_for_timeout(3000)
@@ -112,10 +113,10 @@ class BaleAuthBrowser:
         await login_button.click(timeout=_TIMEOUT, force=True)
         await page.wait_for_timeout(1500)
 
-        # This test-id hierarchy is exposed by the current React phone form.
-        phone_input = page.locator(
-            "[data-testid='phone-input'] [data-testid='textfield-single-line-input'], "
-            "[data-testid='phone-input'] input"
+        # The current React form exposes this field through its accessible
+        # label, but not via a stable ``phone-input`` test id.
+        phone_input = page.get_by_role(
+            "textbox", name="شماره همراه", exact=True,
         ).first
         await phone_input.wait_for(state="visible", timeout=_TIMEOUT)
         log.warning("Browser: entering phone %s", phone)
