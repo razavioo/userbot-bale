@@ -1031,45 +1031,38 @@ class HistoryMessage:
 
 
 def parse_load_history_response(buf: bytes) -> list[HistoryMessage]:
-    """Parse ResponseLoadHistory — repeated Message entries.
+    """Parse ``ResponseLoadHistory.history``.
 
-    The response carries a list of Message sub-messages. Each contains
-    at least: rid (field 4), sender_uid (field 2), date (field 3),
-    message body (field 5, same shape as UpdateMessage). We walk the
-    top-level buffer collecting every sub-message that looks like a
-    Message and has a text body.
+    APK schema (Bale 2026-08-17): ``ResponseLoadHistory.history`` is
+    repeated field 1, containing ``MessageContainer`` messages. Its
+    relevant fields are ``sender_uid=1``, ``rid=2``, ``date=3``, and
+    ``message=4``. Keep the parser scoped to field 1 so user/group
+    metadata elsewhere in the response cannot be reported as a message.
     """
-    out: list[HistoryMessage] = []
 
-    def _try_message(b: bytes) -> HistoryMessage | None:
+    def _try_container(b: bytes) -> HistoryMessage | None:
         rid = sender_uid = date = 0
         text: str | None = None
         for fn, val, wt in _walk_len_delim(b):
             if wt == 0:
-                if fn == 2:
+                if fn == 1:
                     sender_uid = val
+                elif fn == 2:
+                    rid = val
                 elif fn == 3:
                     date = val
-                elif fn == 4:
-                    rid = val
-            elif wt == 2 and fn == 5:
+            elif wt == 2 and fn == 4:
                 text = _parse_text_from_message(val)
         if rid and text is not None:
             return HistoryMessage(rid=rid, sender_uid=sender_uid, date=date, text=text)
         return None
 
+    out: list[HistoryMessage] = []
     for fn, val, wt in _walk_len_delim(buf):
-        if wt == 2 and isinstance(val, (bytes, bytearray)):
-            msg = _try_message(val)
+        if fn == 1 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            msg = _try_container(val)
             if msg is not None:
                 out.append(msg)
-            else:
-                # one level of unwrapping for server envelope
-                for fn2, val2, wt2 in _walk_len_delim(val):
-                    if wt2 == 2 and isinstance(val2, (bytes, bytearray)):
-                        msg2 = _try_message(val2)
-                        if msg2 is not None:
-                            out.append(msg2)
     return out
 
 
@@ -1101,13 +1094,12 @@ class DialogInfo:
 
 
 def parse_load_dialogs_response(buf: bytes) -> list[DialogInfo]:
-    """Parse ResponseLoadDialogs — repeated Dialog entries.
+    """Parse ``ResponseLoadDialogs.dialogs``.
 
-    Each Dialog sub-message carries at minimum:
-        field 1: peer (OutPeer { type, id })
-        field 3: unreadCount (varint)
-        field 5: date / lastMessageDate (varint)
-    We collect every sub-message that has a non-zero peer_id.
+    APK schema (Bale 2026-08-17): dialogs are repeated field 3 of the
+    response. A ``Dialog`` has ``peer=1`` (``Peer {type=1, id=2}``),
+    ``unread_count=2``, and ``date=6``. The response's other repeated
+    fields contain users and groups, so they must not be treated as dialogs.
     """
     out: list[DialogInfo] = []
 
@@ -1118,9 +1110,9 @@ def parse_load_dialogs_response(buf: bytes) -> list[DialogInfo]:
                 pt, pid = _parse_out_peer(val)
                 peer_type, peer_id = pt, pid
             elif wt == 0:
-                if fn == 3:
+                if fn == 2:
                     unread = val
-                elif fn == 5:
+                elif fn == 6:
                     date = val
         if peer_id:
             return DialogInfo(
@@ -1130,16 +1122,10 @@ def parse_load_dialogs_response(buf: bytes) -> list[DialogInfo]:
         return None
 
     for fn, val, wt in _walk_len_delim(buf):
-        if wt == 2 and isinstance(val, (bytes, bytearray)):
+        if fn == 3 and wt == 2 and isinstance(val, (bytes, bytearray)):
             d = _try_dialog(val)
             if d is not None:
                 out.append(d)
-            else:
-                for fn2, val2, wt2 in _walk_len_delim(val):
-                    if wt2 == 2 and isinstance(val2, (bytes, bytearray)):
-                        d2 = _try_dialog(val2)
-                        if d2 is not None:
-                            out.append(d2)
     return out
 
 

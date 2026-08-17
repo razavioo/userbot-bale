@@ -243,14 +243,13 @@ def test_parse_load_history_response_empty():
 
 
 def _build_fake_history_message(*, rid: int, sender_uid: int, date: int, text: str) -> bytes:
-    """Construct a fake history-message blob matching the expected field layout:
-    sender_uid=2, date=3, rid=4, message-body=5."""
+    """Construct a MessageContainer from ResponseLoadHistory.history."""
     msg_bytes = _encode_message_with_text(text)
     body = bytearray()
-    body += _enc_tag(2, 0) + _enc_varint(sender_uid)
+    body += _enc_tag(1, 0) + _enc_varint(sender_uid)
+    body += _enc_tag(2, 0) + _enc_varint(rid)
     body += _enc_tag(3, 0) + _enc_varint(date)
-    body += _enc_tag(4, 0) + _enc_varint(rid)
-    body += _enc_len_delim(5, msg_bytes)
+    body += _enc_len_delim(4, msg_bytes)
     return bytes(body)
 
 
@@ -278,18 +277,18 @@ def test_parse_load_history_response_ignores_non_message_blobs():
     # A sub-message without rid + text_message should be silently skipped.
     noise = _enc_tag(1, 0) + _enc_varint(42)  # just a varint field, not a message
     msg = _build_fake_history_message(rid=5, sender_uid=9, date=9000, text="keep")
-    buf = _enc_len_delim(99, noise) + _enc_len_delim(1, msg)
+    buf = _enc_len_delim(2, noise) + _enc_len_delim(1, msg)
     results = parse_load_history_response(buf)
     assert any(r.text == "keep" for r in results)
 
 
-def test_parse_load_history_response_descends_one_envelope_level():
+def test_parse_load_history_response_ignores_user_metadata():
     """Server may wrap the message list in an outer envelope field."""
     inner_msg = _build_fake_history_message(rid=7, sender_uid=3, date=500, text="deep")
     # Two levels: outer field 2 → inner field 1 → message
-    buf = _enc_len_delim(2, _enc_len_delim(1, inner_msg))
+    buf = _enc_len_delim(2, inner_msg) + _enc_len_delim(1, inner_msg)
     results = parse_load_history_response(buf)
-    assert any(r.text == "deep" for r in results)
+    assert [r.text for r in results] == ["deep"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,20 +315,20 @@ def test_parse_load_dialogs_response_empty():
 
 
 def _build_fake_dialog(*, peer_id: int, peer_type: int = 1, unread: int = 0, date: int = 0) -> bytes:
-    """Dialog: field 1=OutPeer, field 3=unreadCount, field 5=date."""
+    """Dialog: field 1=Peer, field 2=unreadCount, field 6=date."""
     peer_bytes = OutPeer(user_id=peer_id, type=peer_type).encode()
     body = bytearray()
     body += _enc_len_delim(1, peer_bytes)
     if unread:
-        body += _enc_tag(3, 0) + _enc_varint(unread)
+        body += _enc_tag(2, 0) + _enc_varint(unread)
     if date:
-        body += _enc_tag(5, 0) + _enc_varint(date)
+        body += _enc_tag(6, 0) + _enc_varint(date)
     return bytes(body)
 
 
 def test_parse_load_dialogs_response_single_dialog():
     dlg = _build_fake_dialog(peer_id=12345, unread=3, date=9000)
-    buf = _enc_len_delim(1, dlg)
+    buf = _enc_len_delim(3, dlg)
     results = parse_load_dialogs_response(buf)
     assert len(results) == 1
     assert results[0].peer_id == 12345
@@ -339,7 +338,7 @@ def test_parse_load_dialogs_response_single_dialog():
 
 def test_parse_load_dialogs_response_multiple_dialogs():
     dlgs = [_build_fake_dialog(peer_id=i * 1000) for i in range(1, 4)]
-    buf = b"".join(_enc_len_delim(1, d) for d in dlgs)
+    buf = b"".join(_enc_len_delim(3, d) for d in dlgs)
     results = parse_load_dialogs_response(buf)
     peer_ids = {r.peer_id for r in results}
     assert {1000, 2000, 3000}.issubset(peer_ids)
@@ -347,19 +346,19 @@ def test_parse_load_dialogs_response_multiple_dialogs():
 
 def test_parse_load_dialogs_response_skips_zero_peer_id():
     # A sub-message with no OutPeer should not appear in results.
-    noise = _enc_tag(3, 0) + _enc_varint(5)  # just unreadCount, no peer
+    noise = _enc_tag(2, 0) + _enc_varint(5)  # just unreadCount, no peer
     dlg = _build_fake_dialog(peer_id=777)
-    buf = _enc_len_delim(1, noise) + _enc_len_delim(1, dlg)
+    buf = _enc_len_delim(3, noise) + _enc_len_delim(3, dlg)
     results = parse_load_dialogs_response(buf)
     assert all(r.peer_id != 0 for r in results)
     assert any(r.peer_id == 777 for r in results)
 
 
-def test_parse_load_dialogs_response_descends_one_envelope_level():
+def test_parse_load_dialogs_response_ignores_user_metadata():
     inner_dlg = _build_fake_dialog(peer_id=99999, unread=1)
-    buf = _enc_len_delim(2, _enc_len_delim(1, inner_dlg))
+    buf = _enc_len_delim(2, inner_dlg) + _enc_len_delim(3, inner_dlg)
     results = parse_load_dialogs_response(buf)
-    assert any(r.peer_id == 99999 for r in results)
+    assert [r.peer_id for r in results] == [99999]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
