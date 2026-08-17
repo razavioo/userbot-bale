@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -136,7 +137,10 @@ class AuthStore:
             secret_name=self._secret_name,
         )
         self.save(record)
-        self._export_to_accounts(jwt)
+        if os.environ.get("BALEOBALA_EXPORT_ACCOUNT_JWT", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            self._export_to_accounts(jwt)
         return record
 
     def _export_to_accounts(self, jwt: str) -> None:

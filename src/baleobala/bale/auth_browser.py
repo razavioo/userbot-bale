@@ -1,29 +1,22 @@
-"""
-Playwright-based Bale auth — drives the real web.bale.ai UI in headless
-Chromium so every cookie, JS session, and TLS/HTTP2 fingerprint is
-authentic. Uses the async Playwright API with an explicit new event
-loop so it runs cleanly inside QThread workers.
+"""Browser-driven Bale phone authentication.
 
-UI flow on web.bale.ai (2026-04-21):
-    1. goto https://web.bale.ai → lands on /login
-    2. click "متوجه شدم" (dismiss privacy dialog, if shown)
-    3. click "ورود" (reveal phone form)
-    4. fill phone input (id = "شماره همراه"), 10-digit local Iran format
-    5. click "تایید و ادامه" → SMS sent
-    6. fill code input (maxlength=5 or 6)
-    7. click "تایید و ادامه" again → page navigates on success
-    8. read `access_token` cookie from the browser context
+This follows the live ``web.bale.ai`` login UI so the browser owns the
+cookies, JavaScript session, and transport fingerprint. The selectors below
+were checked against the current UI on 2026-08-17.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
+import time
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 _ORIGIN = "https://web.bale.ai"
-_TIMEOUT = 45_000  # ms; web.bale.ai is slow sometimes
+_TIMEOUT = 45_000  # ms; web.bale.ai can be slow.
 
 
 def _new_loop() -> asyncio.AbstractEventLoop:
@@ -33,21 +26,15 @@ def _new_loop() -> asyncio.AbstractEventLoop:
 
 
 def _iran_local(phone_number: int) -> str:
-    """Convert any international Iran phone (with/without country code)
-    to the 10-digit local format the UI's phone field expects
-    ('9120000000'). Drops leading 98 if present."""
-    s = str(phone_number).lstrip("0")
-    if s.startswith("98"):
-        s = s[2:]
-    return s
+    """Return the 10-digit local Iran number expected by the web form."""
+    number = str(phone_number).lstrip("0")
+    if number.startswith("98"):
+        number = number[2:]
+    return number
 
 
 class BaleAuthBrowser:
-    """Phone-auth flow driven through a headless Chromium page.
-
-    Call close() when done (or use as a context manager).
-    Public methods are synchronous; they run their async impl on a
-    dedicated event loop owned by this instance."""
+    """Run one complete Bale web login and return its access-token cookie."""
 
     def __init__(self) -> None:
         try:
@@ -64,21 +51,16 @@ class BaleAuthBrowser:
         self._page = None
         self._loop.run_until_complete(self._async_start())
 
-    # ------------------------------------------------------------------
-    # Async internals
-    # ------------------------------------------------------------------
-
     async def _async_start(self) -> None:
         import os
+
         from playwright.async_api import async_playwright
+
         headless = os.environ.get("BALE_HEADLESS", "1") != "0"
         self._pw = await async_playwright().start()
         try:
-            # Prefer Playwright-managed Chromium when available.
             self._browser = await self._pw.chromium.launch(headless=headless)
         except Exception as e:
-            # In restricted networks, `playwright install chromium` may fail.
-            # Fall back to a system-installed Chrome channel so auth still works.
             log.warning(
                 "Browser: bundled Chromium unavailable (%s); "
                 "falling back to system Chrome channel",
@@ -96,126 +78,94 @@ class BaleAuthBrowser:
         log.warning("Browser: launched (headless=%s)", headless)
 
     async def _dismiss_overlays(self) -> None:
-        """Dismiss the PWA InstallGuide / privacy overlays that block clicks
-        on 'ورود'. Target by aria-label for stability across RTL/LTR renders."""
+        """Dismiss the PWA-install guide when it obscures the login button."""
         page = self._page
         for _ in range(20):
             for label in ("متوجه شدم", "باشه", "OK", "Accept"):
                 try:
-                    btn = page.locator(f"button[aria-label='{label}']").first
-                    if await btn.count() > 0 and await btn.is_visible():
-                        await btn.click()
-                        log.warning("Browser: dismissed overlay '%s'", label)
+                    button = page.get_by_role("button", name=label, exact=True).first
+                    if await button.count() > 0 and await button.is_visible():
+                        await button.click()
+                        log.warning("Browser: dismissed overlay %r", label)
                         await page.wait_for_timeout(800)
                         return
                 except Exception:
                     pass
             await page.wait_for_timeout(500)
-        log.warning("Browser: no dismiss-overlay button appeared")
+        log.warning("Browser: no dismissible overlay appeared")
 
     async def _async_start_phone_auth(self, phone_number: int) -> str:
         page = self._page
-        phone_str = _iran_local(phone_number)
+        phone = _iran_local(phone_number)
 
         log.warning("Browser: navigating to %s", _ORIGIN)
         try:
             await page.goto(_ORIGIN, wait_until="domcontentloaded", timeout=_TIMEOUT)
         except Exception:
             pass
-        # The PWA InstallGuide overlay appears a few seconds after load.
         await page.wait_for_timeout(3000)
-
         await self._dismiss_overlays()
 
-        # Click "ورود" (Login) to reveal the phone form. Match by
-        # data-testid/aria-label so we don't hit any other element that
-        # happens to contain the word.
-        log.warning("Browser: clicking ورود")
-        login_btn = page.locator(
-            "button[data-testid='submit-button'][aria-label='ورود']"
-        ).first
-        await login_btn.wait_for(state="visible", timeout=_TIMEOUT)
-        await login_btn.click(timeout=_TIMEOUT, force=True)
+        log.warning("Browser: opening the phone form")
+        login_button = page.get_by_role("button", name="ورود", exact=True).first
+        await login_button.wait_for(state="visible", timeout=_TIMEOUT)
+        await login_button.click(timeout=_TIMEOUT, force=True)
         await page.wait_for_timeout(1500)
 
-        # Fill the phone input. The field's id contains Persian characters
-        # and a space ("شماره همراه"), so use an attribute selector.
-        # press_sequentially triggers real keystrokes so React sees every
-        # keydown/input event and enables the submit button.
-        log.warning("Browser: typing phone %s", phone_str)
-        phone_input = page.locator("input[id='شماره همراه']").first
-        await phone_input.click(timeout=_TIMEOUT)
-        await phone_input.press_sequentially(phone_str, delay=40)
+        # This test-id hierarchy is exposed by the current React phone form.
+        phone_input = page.locator(
+            "[data-testid='phone-input'] [data-testid='textfield-single-line-input'], "
+            "[data-testid='phone-input'] input"
+        ).first
+        await phone_input.wait_for(state="visible", timeout=_TIMEOUT)
+        log.warning("Browser: entering phone %s", phone)
+        await phone_input.fill(phone, timeout=_TIMEOUT)
         await page.wait_for_timeout(500)
 
-        # Click "تایید و ادامه" (Confirm and continue)
-        log.warning("Browser: clicking تایید و ادامه (send SMS)")
-        continue_btn = page.locator(
-            "button[data-testid='submit-button']:not([disabled])"
-        ).first
-        await continue_btn.wait_for(state="visible", timeout=_TIMEOUT)
-        await continue_btn.click(timeout=_TIMEOUT)
+        submit = page.locator("button[data-testid='submit-button']:not([disabled])").first
+        await submit.wait_for(state="visible", timeout=_TIMEOUT)
+        log.warning("Browser: requesting an SMS code")
+        await submit.click(timeout=_TIMEOUT)
 
-        # Wait for the SMS-code input to appear. Its id is "کد ورود"
-        # (login code); placeholder is the 6-digit template "۱۲۳۴۵۶".
-        log.warning("Browser: waiting for SMS-code input")
-        await page.wait_for_selector(
-            "input[id='کد ورود']", timeout=_TIMEOUT,
-        )
+        code_input = page.get_by_role("textbox", name="کد ورود", exact=True).first
+        await code_input.wait_for(state="visible", timeout=_TIMEOUT)
         log.warning("Browser: SMS-code input visible")
         return "browser"
 
     async def _async_validate_code(self, code: str) -> str:
         page = self._page
-
-        log.warning("Browser: typing code %s", code)
-        code_input = page.locator("input[id='کد ورود']").first
+        code_input = page.get_by_role("textbox", name="کد ورود", exact=True).first
         await code_input.click(timeout=_TIMEOUT)
-        # Real keystrokes so React fires its onChange and re-enables the
-        # submit button; .fill() set the DOM value directly but did not
-        # trigger the keystroke events React relies on.
+        # Keep real key events: the web app enables its submit button from
+        # React input events, which is more reliable than setting the value.
         await code_input.press_sequentially(code.strip(), delay=40)
         await page.wait_for_timeout(500)
 
-        # Prefer clicking the (now-enabled) submit button. If something
-        # keeps it disabled (e.g. 2FA prompt we don't know about), fall
-        # back to pressing Enter which the form's onSubmit accepts.
-        log.warning("Browser: submitting verify")
-        # Try three ways in order: enabled-submit click → Enter key →
-        # force-click on the (possibly disabled) submit button. Any of
-        # them may have already triggered the submit; the cookie poll
-        # below decides success.
+        log.warning("Browser: submitting SMS code")
         submitted = False
         try:
-            verify_btn = page.locator(
-                "button[data-testid='submit-button']:not([disabled])"
-            ).first
-            await verify_btn.wait_for(state="visible", timeout=5_000)
-            await verify_btn.click(timeout=5_000)
+            submit = page.locator("button[data-testid='submit-button']:not([disabled])").first
+            await submit.wait_for(state="visible", timeout=5_000)
+            await submit.click(timeout=5_000)
             submitted = True
-            log.warning("Browser: clicked (enabled) submit")
         except Exception:
             pass
         if not submitted:
             try:
                 await code_input.press("Enter", timeout=3_000)
                 submitted = True
-                log.warning("Browser: submitted via Enter key")
             except Exception:
                 pass
         if not submitted:
             try:
                 await page.locator("button[data-testid='submit-button']").first.click(
-                    force=True, timeout=3_000,
+                    force=True,
+                    timeout=3_000,
                 )
-                submitted = True
-                log.warning("Browser: force-clicked submit")
             except Exception:
                 pass
 
-        # Poll for up to 20s: JWT cookie arrives OR the URL navigates
-        # away from /login. Also bail early if the page shows an error.
-        for i in range(20):
+        for _ in range(20):
             await page.wait_for_timeout(1000)
             jwt = await self._async_get_jwt()
             if jwt:
@@ -224,60 +174,53 @@ class BaleAuthBrowser:
             if jwt:
                 return jwt
             if "login" not in page.url:
-                # Page navigated away — cookie should be there now.
                 await page.wait_for_timeout(1000)
                 jwt = await self._async_get_jwt()
                 if jwt:
                     return jwt
                 break
-
-            # Look for an error toast/text on the page (e.g. wrong code)
-            err_txt = await self._check_error_text()
-            if err_txt:
-                raise RuntimeError(f"Bale rejected: {err_txt}")
+            error_text = await self._check_error_text()
+            if error_text:
+                raise RuntimeError(f"Bale rejected: {error_text}")
 
         jwt = await self._maybe_complete_signup_profile()
         if jwt:
             return jwt
 
-        # Diagnostic dump
-        shot = f"/tmp/bale-verify-{int(__import__('time').time())}.png"
+        screenshot = Path(tempfile.gettempdir()) / f"bale-verify-{int(time.time())}.png"
         try:
-            await page.screenshot(path=shot)
+            await page.screenshot(path=str(screenshot))
         except Exception:
             pass
-        cookies = [(c["name"], c.get("domain"), c.get("path")) for c in await self._ctx.cookies()]
-        log.warning("Browser: no JWT yet. url=%s cookies=%s screenshot=%s",
-                    page.url, cookies, shot)
+        cookies = [
+            (cookie["name"], cookie.get("domain"), cookie.get("path"))
+            for cookie in await self._ctx.cookies()
+        ]
+        log.warning(
+            "Browser: no JWT yet. url=%s cookies=%s screenshot=%s",
+            page.url,
+            cookies,
+            screenshot,
+        )
         raise RuntimeError(
-            f"Browser auth: no access_token cookie after verification. "
-            f"Screenshot: {shot}"
+            "Browser auth: no access_token cookie after verification. "
+            f"Screenshot: {screenshot}"
         )
 
     async def _maybe_complete_signup_profile(self) -> str | None:
-        """Complete the web signup profile step for newly registered phones."""
+        """Complete the optional profile-name step for a fresh phone number."""
         import os
 
         page = self._page
         try:
-            name_input = page.locator(
-                "input[data-testid='textfield-single-line-input'][aria-label='نام'], "
-                "input[id='نام'], "
-                "input[placeholder*='نام']"
-            ).first
+            name_input = page.get_by_role("textbox", name="نام", exact=True).first
             if await name_input.count() == 0 or not await name_input.is_visible():
                 return None
             display_name = os.environ.get("BALE_SIGNUP_NAME", "Baleobala")
             log.warning("Browser: completing signup profile name=%s", display_name)
-            await name_input.click(timeout=5_000)
             await name_input.fill(display_name, timeout=5_000)
-            await name_input.dispatch_event("input")
-            await name_input.dispatch_event("change")
             await page.wait_for_timeout(500)
-            submit = page.locator(
-                "button[aria-label='تایید و ادامه']:not([disabled]), "
-                "button[data-testid='submit-button']:not([disabled])"
-            ).first
+            submit = page.locator("button[data-testid='submit-button']:not([disabled])").first
             await submit.wait_for(state="visible", timeout=10_000)
             await submit.click(timeout=10_000, force=True)
             for _ in range(25):
@@ -295,29 +238,26 @@ class BaleAuthBrowser:
             return None
 
     async def _check_error_text(self) -> str | None:
-        """Return any visible error message on the login page, or None."""
         page = self._page
-        # Common error containers on the Bale login page
-        selectors = [
+        for selector in (
             "[role='alert']",
             ".error, .errorMessage, .text-error",
             "span[class*='error' i], div[class*='error' i]",
-        ]
-        for sel in selectors:
+        ):
             try:
-                loc = page.locator(sel).first
-                if await loc.count() > 0 and await loc.is_visible():
-                    txt = (await loc.inner_text()).strip()
-                    if txt:
-                        return txt
+                element = page.locator(selector).first
+                if await element.count() > 0 and await element.is_visible():
+                    text = (await element.inner_text()).strip()
+                    if text:
+                        return text
             except Exception:
                 pass
         return None
 
     async def _async_get_jwt(self) -> str | None:
-        for c in await self._ctx.cookies():
-            if c["name"] == "access_token" and c.get("value"):
-                return c["value"]
+        for cookie in await self._ctx.cookies():
+            if cookie["name"] == "access_token" and cookie.get("value"):
+                return cookie["value"]
         return None
 
     async def _async_close(self) -> None:
@@ -329,17 +269,12 @@ class BaleAuthBrowser:
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # Public synchronous interface
-    # ------------------------------------------------------------------
-
     def start_phone_auth(self, phone_number: int) -> str:
-        return self._loop.run_until_complete(
-            self._async_start_phone_auth(phone_number)
-        )
+        return self._loop.run_until_complete(self._async_start_phone_auth(phone_number))
 
     def validate_code(self, code: str, **_) -> "AuthSession":
         from baleobala.bale.auth import AuthSession
+
         jwt = self._loop.run_until_complete(self._async_validate_code(code))
         log.warning("Browser: JWT obtained, length=%d", len(jwt))
         return AuthSession(jwt=jwt, response_body=b"")

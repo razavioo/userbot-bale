@@ -26,11 +26,16 @@ Typical lifecycle:
 from __future__ import annotations
 
 import errno
-import fcntl
 import logging
 import os
 import struct
+import sys
 from typing import Optional
+
+try:
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - unavailable on Windows
+    fcntl = None  # type: ignore[assignment]
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +62,8 @@ class TunDevice:
 
     @classmethod
     def open(cls, name: str) -> "TunDevice":
+        if fcntl is None or not sys.platform.startswith("linux"):
+            raise RuntimeError("TunDevice is available only on Linux")
         if len(name.encode()) >= IFNAMSIZ:
             raise ValueError(f"device name too long: {name!r}")
         try:

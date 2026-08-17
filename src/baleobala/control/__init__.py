@@ -12,7 +12,7 @@ from baleobala.control.android import (
 )
 from baleobala.control.auth import AuthRecord, AuthStore
 from baleobala.control.backend import AndroidVpnBackend, BackendState, MacOSPacketTunnelBackend, ProxyFallbackBackend, VpnBackend, backend_for_profile, default_backend_name
-from baleobala.control.keychain import FileSecretBackend, KeychainSecretBackend, SecretBackend
+from baleobala.control.keychain import FileSecretBackend, KeychainSecretBackend, KeyringSecretBackend, SecretBackend
 from baleobala.control.credential_watcher import CredentialWatcher
 from baleobala.control.mesh import MeshProvisionRecord, MeshProvisionStore
 from baleobala.control.pairing import PairingExchange, PairingRecord, PairingStore
@@ -125,6 +125,7 @@ __all__ = [
     "SecretBackend",
     "FileSecretBackend",
     "KeychainSecretBackend",
+    "KeyringSecretBackend",
     "TunnelService",
     "TunnelServiceState",
     "TunnelBridge",

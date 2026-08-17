@@ -129,11 +129,56 @@ class KeychainSecretBackend(SecretBackend):
         return f"{self.account}:{name}"
 
 
+class KeyringSecretBackend(SecretBackend):
+    """Credential-manager backed storage through the optional ``keyring`` package.
+
+    On Windows this uses Windows Credential Manager when the standard
+    ``keyring`` backend is installed.  Keeping the import inside the methods
+    lets non-Windows installs continue to use the dependency-free fallback.
+    """
+
+    def __init__(self, service: str = "com.baleobala.auth") -> None:
+        self.service = service
+
+    @staticmethod
+    def available() -> bool:
+        try:
+            import keyring
+
+            keyring.get_keyring()
+        except ImportError:
+            return False
+        return True
+
+    def load(self, name: str) -> str | None:
+        import keyring
+
+        value = keyring.get_password(self.service, name)
+        return value or None
+
+    def save(self, name: str, value: str) -> None:
+        import keyring
+
+        keyring.set_password(self.service, name, value)
+
+    def delete(self, name: str) -> None:
+        import keyring
+
+        try:
+            keyring.delete_password(self.service, name)
+        except keyring.errors.PasswordDeleteError:
+            pass
+
+
 def default_secret_backend() -> SecretBackend:
     if os.environ.get("BALEOBALA_SECRET_BACKEND") == "file":
         return FileSecretBackend()
     if os.environ.get("BALEOBALA_SECRET_BACKEND") == "keychain":
         return KeychainSecretBackend()
+    if os.environ.get("BALEOBALA_SECRET_BACKEND") == "keyring":
+        return KeyringSecretBackend()
     if sys.platform == "darwin":
         return KeychainSecretBackend()
+    if sys.platform == "win32" and KeyringSecretBackend.available():
+        return KeyringSecretBackend()
     return FileSecretBackend()
