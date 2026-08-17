@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Dict
 
@@ -72,7 +73,13 @@ def _dec_tag(buf: bytes, pos: int) -> tuple[int, int, int]:
     return (tag >> 3), (tag & 7), pos
 
 
-# Client info headers observed on every WS RPC from web.bale.ai.
+# Client info headers observed on every WS RPC from web.bale.ai. The web
+# client keeps one timestamp-like session id for the life of its page and
+# includes it twice (once under the ``mt_`` compatibility name) on every
+# request. Keep the same shape so read and write RPCs share one consistent
+# session fingerprint.
+DEFAULT_SESSION_ID = str(int(time.time() * 1_000))
+
 DEFAULT_METADATA: Dict[str, str] = {
     "app_version": "151668",
     "browser_type": "1",
@@ -82,6 +89,8 @@ DEFAULT_METADATA: Dict[str, str] = {
     "mt_browser_type": "1",
     "mt_browser_version": "147.0.0.0",
     "mt_os_type": "4",
+    "session_id": DEFAULT_SESSION_ID,
+    "mt_session_id": DEFAULT_SESSION_ID,
 }
 
 

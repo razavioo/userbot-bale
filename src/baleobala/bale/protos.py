@@ -20,7 +20,7 @@ APK decompile and verified byte-for-byte against live WS captures on
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from baleobala.bale.rpc_envelope import (
     _dec_tag, _dec_varint, _enc_len_delim, _enc_tag, _enc_varint,
@@ -42,11 +42,14 @@ class OutPeer:
     """
     user_id: int
     type: int = PEER_TYPE_PRIVATE
+    access_hash: int = 0
 
     def encode(self) -> bytes:
         out = bytearray()
         out += _enc_tag(1, 0) + _enc_varint(self.type)
         out += _enc_tag(2, 0) + _enc_varint(self.user_id)
+        if self.access_hash:
+            out += _enc_tag(3, 0) + _enc_varint(self.access_hash)
         return bytes(out)
 
 
@@ -984,7 +987,7 @@ class RequestLeaveGroupCall:
 
 
 # ============================================================
-# Messaging: LoadHistory, LoadDialogs, MessageRead
+# Messaging: LoadHistory, LoadGroupedDialogs, LoadDialogs, MessageRead
 # ============================================================
 # Field numbers from:
 #   re/jadx-out/sources/ai/bale/proto/MessagingOuterClass$RequestLoadHistory.java
@@ -994,22 +997,29 @@ class RequestLeaveGroupCall:
 # NOTE: outer RPC tag unverified — no wrapper used; correct if server rejects.
 
 LOAD_HISTORY_METHOD = "LoadHistory"
+LOAD_GROUPED_DIALOGS_METHOD = "LoadGroupedDialogs"
 LOAD_DIALOGS_METHOD = "LoadDialogs"
 MESSAGE_READ_METHOD = "MessageRead"
+NEWEST_HISTORY_DATE = (1 << 63) - 1
 
 
 @dataclass(frozen=True)
 class RequestLoadHistory:
     """MessagingOuterClass.RequestLoadHistory
         field 1: peer     (OutPeer)
-        field 2: date     (int64; 0 = from newest)
-        field 4: loadMode (varint enum; 0=FORWARD)
+        field 2: date     (int64; Long.MAX_VALUE = from newest)
+        field 4: loadMode (varint enum; BACKWARD=2)
         field 5: limit    (int32)
     """
     peer: OutPeer
-    date: int = 0
-    load_mode: int = 0
+    date: int = NEWEST_HISTORY_DATE
+    # ``BACKWARD`` with Long.MAX_VALUE is the Android client's initial
+    # page-from-newest request. Date zero selects a different paging path.
+    load_mode: int = 2
     limit: int = 20
+    # APK: C20626lG.f118675d = STRIP_COUNTERS, STRIP_ENTITIES,
+    # COMPACT_USERS. The server still returns MessageContainer entries.
+    optimizations: tuple[int, ...] = (5, 2, 6)
 
     def encode(self) -> bytes:
         out = bytearray()
@@ -1019,6 +1029,9 @@ class RequestLoadHistory:
         if self.load_mode:
             out += _enc_tag(4, 0) + _enc_varint(self.load_mode)
         out += _enc_tag(5, 0) + _enc_varint(self.limit)
+        if self.optimizations:
+            packed = b"".join(_enc_varint(value) for value in self.optimizations)
+            out += _enc_len_delim(6, packed)
         return bytes(out)
 
 
@@ -1086,11 +1099,35 @@ class RequestLoadDialogs:
 
 
 @dataclass(frozen=True)
+class RequestLoadGroupedDialogs:
+    """Current ``Messaging/LoadGroupedDialogs`` request from the APK.
+
+    ``optimizations`` is field 1 (packed ``UpdateOptimization`` values) and
+    ``archive_filter`` is field 2 (``ALL`` is zero). Bale Android sends only
+    ``STRIP_UNREAD_COUNTS`` (11) while constructing the main dialog list.
+    """
+    optimizations: tuple[int, ...] = (11,)
+    archive_filter: int = 0
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        if self.optimizations:
+            packed = b"".join(_enc_varint(value) for value in self.optimizations)
+            out += _enc_len_delim(1, packed)
+        if self.archive_filter:
+            out += _enc_tag(2, 0) + _enc_varint(self.archive_filter)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
 class DialogInfo:
     peer_id: int
     peer_type: int
     unread_count: int
     last_message_date: int
+    # Present in LoadGroupedDialogs's companion peer maps. Keep it out of
+    # repr; it is an RPC routing capability, not user-facing dialog data.
+    access_hash: int = field(default=0, repr=False)
 
 
 def parse_load_dialogs_response(buf: bytes) -> list[DialogInfo]:
@@ -1126,6 +1163,77 @@ def parse_load_dialogs_response(buf: bytes) -> list[DialogInfo]:
             d = _try_dialog(val)
             if d is not None:
                 out.append(d)
+    return out
+
+
+def parse_load_grouped_dialogs_response(buf: bytes) -> list[DialogInfo]:
+    """Parse ``ResponseLoadGroupedDialogs.dialogs`` into flat dialog rows.
+
+    The current app receives repeated ``DialogGroup`` values at response
+    field 1; each group's field 3 contains ``DialogShort`` values. A short
+    dialog carries ``peer=1``, ``counter=2`` and ``date=3``. Scope parsing
+    to this nesting so unrelated user/group metadata is never reported as a
+    conversation.
+    """
+    out: list[DialogInfo] = []
+    seen: set[tuple[int, int]] = set()
+    access_hashes: dict[tuple[int, int], int] = {}
+
+    def parse_access_peer(b: bytes, peer_type: int) -> None:
+        peer_id = access_hash = 0
+        for fn, val, wt in _walk_len_delim(b):
+            if wt != 0:
+                continue
+            if fn == 1:
+                peer_id = val
+            elif fn == 2:
+                access_hash = val
+        if peer_id:
+            access_hashes[(peer_type, peer_id)] = access_hash
+
+    # Response fields 6 and 7 carry UserOutPeer and GroupOutPeer values.
+    # Read them before flattening dialog groups so each DialogShort can be
+    # enriched with the exact access hash required by LoadHistory.
+    for fn, value, wt in _walk_len_delim(buf):
+        if wt == 2 and isinstance(value, (bytes, bytearray)):
+            if fn == 6:
+                parse_access_peer(value, PEER_TYPE_PRIVATE)
+            elif fn == 7:
+                parse_access_peer(value, PEER_TYPE_GROUP)
+
+    def parse_short(b: bytes) -> DialogInfo | None:
+        peer_type = peer_id = counter = date = 0
+        for fn, val, wt in _walk_len_delim(b):
+            if fn == 1 and wt == 2 and isinstance(val, (bytes, bytearray)):
+                peer_type, peer_id = _parse_out_peer(val)
+            elif wt == 0:
+                if fn == 2:
+                    counter = val
+                elif fn == 3:
+                    date = val
+        if not peer_id:
+            return None
+        return DialogInfo(
+            peer_id=peer_id,
+            peer_type=peer_type,
+            unread_count=counter,
+            last_message_date=date,
+            access_hash=access_hashes.get((peer_type, peer_id), 0),
+        )
+
+    for fn, group, wt in _walk_len_delim(buf):
+        if fn != 1 or wt != 2 or not isinstance(group, (bytes, bytearray)):
+            continue
+        for group_fn, short, group_wt in _walk_len_delim(group):
+            if group_fn != 3 or group_wt != 2 or not isinstance(short, (bytes, bytearray)):
+                continue
+            dialog = parse_short(short)
+            if dialog is None:
+                continue
+            key = (dialog.peer_type, dialog.peer_id)
+            if key not in seen:
+                seen.add(key)
+                out.append(dialog)
     return out
 
 

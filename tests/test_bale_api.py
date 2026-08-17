@@ -8,7 +8,7 @@ from baleobala.bale.api import BaleApiClient, LiveKitCredentials
 from baleobala.bale.endpoints import Endpoint
 from baleobala.bale.messaging_backend import MessagingBackend
 from baleobala.bale.protos import (
-    CallCredentials, InboundMessage, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
+    CallCredentials, DialogInfo, InboundMessage, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
     parse_incoming_call_offer,
 )
 from baleobala.bale.rpc_envelope import Response
@@ -221,37 +221,147 @@ def test_bale_api_client_satisfies_messaging_backend_protocol() -> None:
 
 
 def test_listen_all_messages_receives_decoded_events(monkeypatch) -> None:
+    import threading
+
     client = BaleApiClient(jwt="token")
     received: list[InboundMessage] = []
-    client.listen_all_messages(received.append)
+    delivered = threading.Event()
+
+    def on_message(message: InboundMessage) -> None:
+        received.append(message)
+        delivered.set()
+
+    client.listen_all_messages(on_message)
     inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
     monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
 
     client._dispatch_inbound_messages(b"update")
 
+    assert delivered.wait(1.0)
     assert received == [inbound]
 
 
+def test_listener_registered_after_start_requests_a_fresh_diff(monkeypatch) -> None:
+    client = BaleApiClient(jwt="token")
+    client._ws = object()  # type: ignore[assignment]
+    refreshes: list[None] = []
+    monkeypatch.setattr(
+        client, "_subscribe_updates", lambda: refreshes.append(None),
+    )
+
+    client.listen_all_messages(lambda message: None)
+    client.listen_messages(17, lambda body: None)
+
+    assert refreshes == [None, None]
+
+
 def test_all_message_subscription_runs_through_update_dispatch(monkeypatch) -> None:
+    import threading
+
     client = BaleApiClient(jwt="token")
     received: list[InboundMessage] = []
-    client.listen_all_messages(received.append)
+    delivered = threading.Event()
+
+    def on_message(message: InboundMessage) -> None:
+        received.append(message)
+        delivered.set()
+
+    client.listen_all_messages(on_message)
     inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
     monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
 
     client._dispatch_update(Response(seq=None, payload=b"", raw=b"update"))
 
+    assert delivered.wait(1.0)
     assert received == [inbound]
 
 
+def test_all_message_callback_runs_off_dispatch_thread(monkeypatch) -> None:
+    import threading
+
+    client = BaleApiClient(jwt="token")
+    callback_thread: list[int] = []
+    delivered = threading.Event()
+    inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
+    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
+
+    def on_message(message: InboundMessage) -> None:
+        callback_thread.append(threading.get_ident())
+        delivered.set()
+
+    client.listen_all_messages(on_message)
+    dispatch_thread = threading.get_ident()
+    client._dispatch_inbound_messages(b"update")
+
+    assert delivered.wait(1.0)
+    assert len(callback_thread) == 1
+    assert callback_thread[0] != dispatch_thread
+
+
 def test_message_deduplication_keeps_equal_rids_from_distinct_peers(monkeypatch) -> None:
+    import threading
+
     client = BaleApiClient(jwt="token")
     received: list[InboundMessage] = []
-    client.listen_all_messages(received.append)
+    delivered = threading.Event()
+
+    def on_message(message: InboundMessage) -> None:
+        received.append(message)
+        if len(received) == 2:
+            delivered.set()
+
+    client.listen_all_messages(on_message)
     first = InboundMessage(peer_user_id=7, sender_uid=7, rid=9, text="first")
     second = InboundMessage(peer_user_id=8, sender_uid=8, rid=9, text="second")
     monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [first, second])
 
     client._dispatch_inbound_messages(b"update")
 
+    assert delivered.wait(1.0)
     assert received == [first, second]
+
+
+def test_load_dialogs_prefers_current_grouped_dialog_rpc(monkeypatch) -> None:
+    class Ws:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def rpc(self, service, method, payload, timeout):
+            self.calls.append(method)
+            return Response(seq=1, payload=b"grouped", raw=b"")
+
+    client = BaleApiClient(jwt="token")
+    ws = Ws()
+    client._ws = ws  # type: ignore[assignment]
+    expected = [DialogInfo(peer_id=7, peer_type=1, unread_count=0, last_message_date=9, access_hash=11)]
+    monkeypatch.setattr(
+        "baleobala.bale.api.parse_load_grouped_dialogs_response", lambda payload: expected,
+    )
+
+    assert client.load_dialogs(limit=20) == expected
+    assert ws.calls == ["LoadGroupedDialogs"]
+    assert client._dialog_access_hashes == {(1, 7): 11}
+
+
+def test_load_dialogs_falls_back_to_legacy_when_grouped_is_empty(monkeypatch) -> None:
+    class Ws:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def rpc(self, service, method, payload, timeout):
+            self.calls.append(method)
+            return Response(seq=1, payload=b"legacy", raw=b"")
+
+    client = BaleApiClient(jwt="token")
+    ws = Ws()
+    client._ws = ws  # type: ignore[assignment]
+    expected = [DialogInfo(peer_id=7, peer_type=1, unread_count=0, last_message_date=9)]
+    monkeypatch.setattr(
+        "baleobala.bale.api.parse_load_grouped_dialogs_response", lambda payload: [],
+    )
+    monkeypatch.setattr(
+        "baleobala.bale.api.parse_load_dialogs_response", lambda payload: expected,
+    )
+
+    assert client.load_dialogs(limit=20) == expected
+    assert ws.calls == ["LoadGroupedDialogs", "LoadDialogs"]

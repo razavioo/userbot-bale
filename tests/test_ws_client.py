@@ -172,6 +172,8 @@ def test_dispatch_does_not_drop_when_response_arrives_before_get():
 def test_request_metadata_default_is_unchanged():
     req = Request(service="s", method="m")
     assert req.metadata == DEFAULT_METADATA
+    assert req.metadata["session_id"] == req.metadata["mt_session_id"]
+    assert req.metadata["session_id"].isdigit()
 
 
 def test_request_metadata_env_override_merges_into_defaults(monkeypatch):

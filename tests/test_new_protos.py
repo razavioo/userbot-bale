@@ -17,17 +17,20 @@ import pytest
 from baleobala.bale.protos import (
     DialogInfo,
     HistoryMessage,
+    NEWEST_HISTORY_DATE,
     OutPeer,
     RequestGetWssURL,
     RequestJoinGroupCall,
     RequestLeaveGroupCall,
     RequestLoadDialogs,
+    RequestLoadGroupedDialogs,
     RequestLoadHistory,
     RequestMessageRead,
     RequestReceiveCall,
     _encode_message_with_text,
     parse_get_wss_url_response,
     parse_load_dialogs_response,
+    parse_load_grouped_dialogs_response,
     parse_load_history_response,
 )
 from baleobala.bale.rpc_envelope import _dec_tag, _dec_varint, _enc_len_delim, _enc_tag, _enc_varint
@@ -212,10 +215,14 @@ def test_load_history_encodes_peer():
     assert peer_bytes == _PEER.encode()
 
 
-def test_load_history_default_date_omitted():
+def test_out_peer_encodes_access_hash_when_available():
+    peer = OutPeer(user_id=12, type=1, access_hash=34)
+    assert _first_varint_field(peer.encode(), 3) == 34
+
+
+def test_load_history_default_date_starts_from_newest():
     buf = RequestLoadHistory(peer=_PEER).encode()
-    # field 2 = date; default 0 means omitted
-    assert _first_varint_field(buf, 2) is None
+    assert _first_varint_field(buf, 2) == NEWEST_HISTORY_DATE
 
 
 def test_load_history_date_included_when_nonzero():
@@ -223,9 +230,9 @@ def test_load_history_date_included_when_nonzero():
     assert _first_varint_field(buf, 2) == 1_700_000_000
 
 
-def test_load_history_default_load_mode_omitted():
+def test_load_history_default_load_mode_is_backward():
     buf = RequestLoadHistory(peer=_PEER).encode()
-    assert _first_varint_field(buf, 4) is None
+    assert _first_varint_field(buf, 4) == 2
 
 
 def test_load_history_load_mode_included_when_nonzero():
@@ -236,6 +243,11 @@ def test_load_history_load_mode_included_when_nonzero():
 def test_load_history_limit_encoded():
     buf = RequestLoadHistory(peer=_PEER, limit=10).encode()
     assert _first_varint_field(buf, 5) == 10
+
+
+def test_load_history_uses_current_app_optimizations():
+    buf = RequestLoadHistory(peer=_PEER).encode()
+    assert _first_len_delim_field(buf, 6) == bytes((5, 2, 6))
 
 
 def test_parse_load_history_response_empty():
@@ -310,6 +322,17 @@ def test_load_dialogs_limit_encoded():
     assert _first_varint_field(buf, 2) == 5
 
 
+def test_load_grouped_dialogs_uses_app_request_shape():
+    buf = RequestLoadGroupedDialogs().encode()
+    assert _first_len_delim_field(buf, 1) == bytes((11,))
+    assert _first_varint_field(buf, 2) is None
+
+
+def test_load_grouped_dialogs_encodes_nondefault_archive_filter():
+    buf = RequestLoadGroupedDialogs(archive_filter=2).encode()
+    assert _first_varint_field(buf, 2) == 2
+
+
 def test_parse_load_dialogs_response_empty():
     assert parse_load_dialogs_response(b"") == []
 
@@ -359,6 +382,46 @@ def test_parse_load_dialogs_response_ignores_user_metadata():
     buf = _enc_len_delim(2, inner_dlg) + _enc_len_delim(3, inner_dlg)
     results = parse_load_dialogs_response(buf)
     assert [r.peer_id for r in results] == [99999]
+
+
+def _build_fake_dialog_short(*, peer_id: int, peer_type: int = 1, counter: int = 0, date: int = 0) -> bytes:
+    """DialogShort: field 1=Peer, field 2=counter, field 3=date."""
+    body = bytearray()
+    body += _enc_len_delim(1, OutPeer(user_id=peer_id, type=peer_type).encode())
+    if counter:
+        body += _enc_tag(2, 0) + _enc_varint(counter)
+    if date:
+        body += _enc_tag(3, 0) + _enc_varint(date)
+    return bytes(body)
+
+
+def test_parse_load_grouped_dialogs_response_flattens_dialog_groups():
+    first = _build_fake_dialog_short(peer_id=12345, counter=3, date=9000)
+    second = _build_fake_dialog_short(peer_id=67890, peer_type=2, date=8000)
+    group = _enc_len_delim(3, first) + _enc_len_delim(3, second)
+    results = parse_load_grouped_dialogs_response(_enc_len_delim(1, group))
+    assert [(item.peer_id, item.peer_type) for item in results] == [(12345, 1), (67890, 2)]
+    assert results[0].unread_count == 3
+    assert results[0].last_message_date == 9000
+
+
+def test_parse_load_grouped_dialogs_keeps_companion_access_hash_private():
+    short = _build_fake_dialog_short(peer_id=12345)
+    group = _enc_len_delim(3, short)
+    user_peer = _enc_tag(1, 0) + _enc_varint(12345) + _enc_tag(2, 0) + _enc_varint(67890)
+    response = _enc_len_delim(1, group) + _enc_len_delim(6, user_peer)
+    result = parse_load_grouped_dialogs_response(response)[0]
+    assert result.peer_id == 12345
+    assert result.access_hash == 67890
+
+
+def test_parse_load_grouped_dialogs_response_ignores_unrelated_response_fields():
+    short = _build_fake_dialog_short(peer_id=777)
+    group = _enc_len_delim(3, short)
+    results = parse_load_grouped_dialogs_response(
+        _enc_len_delim(2, group) + _enc_len_delim(1, group)
+    )
+    assert [item.peer_id for item in results] == [777]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

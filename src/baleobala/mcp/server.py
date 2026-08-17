@@ -25,6 +25,7 @@ class BaleMcpService:
 
     def list_messages(self, peer_id: int, limit: int = 20) -> list[dict[str, object]]:
         self._require_allowed_peer(peer_id)
+        self._ensure_started()
         return self._client.list_messages(peer_id, limit)
 
     def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
@@ -75,7 +76,7 @@ def create_server(service: BaleMcpService | None = None):
 
     @server.tool()
     def list_messages(peer_id: int, limit: int = 20) -> list[dict[str, object]]:
-        """Read locally persisted messages for one Bale peer."""
+        """Read recent remote history or local persisted messages for one approved peer."""
         return service.list_messages(peer_id, limit)
 
     @server.tool()

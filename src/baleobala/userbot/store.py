@@ -152,6 +152,38 @@ class UserbotStore:
             for row in rows
         ]
 
+    def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
+        """Return locally observed conversations ordered by recent activity.
+
+        The server's dialog-index RPC is not available for every web JWT.
+        Incoming GetDiff events and userbot sends are already durable local
+        evidence of a conversation, so expose that bounded index as a
+        reliable fallback without claiming it is the account's full remote
+        dialog list.
+        """
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT peer_id, MAX(received_at), COUNT(*)
+                FROM messages
+                GROUP BY peer_id
+                ORDER BY MAX(received_at) DESC, peer_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "peer_id": int(row[0]),
+                "last_message_at": float(row[1]),
+                "message_count": int(row[2]),
+                "source": "local_observed",
+            }
+            for row in rows
+        ]
+
     def audit(self, event_type: str, *, peer_id: int | None = None, detail: str = "") -> None:
         with self._lock:
             self._conn.execute(

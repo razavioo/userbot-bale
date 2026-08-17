@@ -43,11 +43,12 @@ from baleobala.bale.protos import (
     DialogInfo, HistoryMessage, InboundMessage,
     IncomingCallEvent,
     GET_WSS_URL_METHOD, JOIN_GROUP_CALL_METHOD, LEAVE_GROUP_CALL_METHOD,
-    LOAD_DIALOGS_METHOD, LOAD_HISTORY_METHOD, MESSAGE_READ_METHOD,
+    LOAD_DIALOGS_METHOD, LOAD_GROUPED_DIALOGS_METHOD, LOAD_HISTORY_METHOD, MESSAGE_READ_METHOD,
+    NEWEST_HISTORY_DATE,
     MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PhoneToImport,
     RECEIVE_CALL_METHOD,
     RequestGetWssURL, RequestImportContacts, RequestJoinGroupCall,
-    RequestLeaveGroupCall, RequestLoadDialogs, RequestLoadHistory,
+    RequestLeaveGroupCall, RequestLoadDialogs, RequestLoadGroupedDialogs, RequestLoadHistory,
     RequestMessageRead, RequestReceiveCall,
     RequestSearchContacts, RequestSendMessage,
     RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
@@ -56,6 +57,7 @@ from baleobala.bale.protos import (
     parse_get_wss_url_response,
     parse_incoming_call_offer,
     parse_import_contacts_response, parse_load_dialogs_response,
+    parse_load_grouped_dialogs_response,
     parse_load_history_response, parse_response_auth,
     parse_search_contacts_response, parse_transaction_hash,
     parse_update_call_received,
@@ -106,6 +108,11 @@ class BaleApiClient:
         # peer_id → callback(body: bytes). Registered via listen_messages;
         # fires on any UpdateMessage push whose peer/sender matches.
         self._message_subs: dict[int, Callable[[bytes], None]] = {}
+        # Populated from LoadGroupedDialogs companion peer maps. It keeps
+        # routing-only access hashes out of userbot/MCP dialog output while
+        # making subsequent LoadHistory calls address the same peer shape as
+        # the official client.
+        self._dialog_access_hashes: dict[tuple[int, int], int] = {}
         self._seen_rids: set[int] = set()
         self._seen_rids_order: list[int] = []
         self._seen_rids_lock = threading.Lock()
@@ -159,17 +166,19 @@ class BaleApiClient:
     _GET_DIFF_PAYLOAD = bytes.fromhex("120308 0a0c".replace(" ", ""))
 
     def _subscribe_updates(self) -> None:
-        """Ask the server to start pushing updates on this WS session.
+        """Ask the server for the current update diff on this WS session.
 
         Web client issues /bale.ghasedak.v1.GhasedakService/GetDiff right
-        after the WS handshake. Without this, the server never pushes
-        UpdateMessage / incoming-call credentials to us — the phone
-        session gets them instead. Fire-and-forget: we don't need the
-        ack, only the push stream that follows.
+        after the WS handshake.  Its response contains the bootstrap diff
+        and establishes the server-side update stream.  We intentionally
+        send it without a pending RPC waiter: ``WsClient`` then forwards the
+        response to ``_dispatch_update`` just like a server push.  This
+        means a listener registered before this call receives both the
+        bootstrap messages and subsequent pushes.
         """
         assert self._ws is not None
         try:
-            log.info("subscribing to update stream via GetDiff (fire-and-forget)")
+            log.info("requesting update diff via GetDiff")
             self._ws.send_oneway(
                 "bale.ghasedak.v1.GhasedakService",
                 "GetDiff",
@@ -468,6 +477,11 @@ class BaleApiClient:
         callback fires with the message body (UTF-8 bytes) for every
         unique inbound rid."""
         self._message_subs[peer_id] = callback
+        # A caller can attach a listener after ``start``.  Request another
+        # diff only after the callback is in place so its bootstrap events
+        # cannot be lost in the start/register race.
+        if self._ws is not None:
+            self._subscribe_updates()
 
     def listen_all_messages(self, callback: Callable[[InboundMessage], None]) -> None:
         """Subscribe to decoded inbound text messages from every peer.
@@ -477,6 +491,10 @@ class BaleApiClient:
         the configured peer.
         """
         self._all_messages_callback = callback
+        # See ``listen_messages``: a fresh GetDiff makes registration after
+        # connection behave the same as registration before connection.
+        if self._ws is not None:
+            self._subscribe_updates()
 
     # ------------------------------------------------------------------ call helpers
 
@@ -524,18 +542,30 @@ class BaleApiClient:
         peer_id: int,
         *,
         limit: int = 20,
-        date: int = 0,
+        date: int = NEWEST_HISTORY_DATE,
         peer_type: int = 1,
     ) -> list[HistoryMessage]:
         """bale.messaging.v2.Messaging/LoadHistory — fetch recent messages
         from a peer. Useful for RPC-transport recovery after reconnect.
 
-        `date` is a server timestamp; 0 means start from the newest message.
-        Returns messages in server order (newest first for date=0)."""
+        `date` is a server sort timestamp; the default Long.MAX_VALUE starts
+        from the newest message. Returns messages in server order."""
         if self._ws is None:
             raise RuntimeError("BaleApiClient not started")
+        access_key = (peer_type, peer_id)
+        # LoadGroupedDialogs supplies the access hash needed by current
+        # gateways. Direct callers do not need to manually prime that cache.
+        if access_key not in self._dialog_access_hashes:
+            try:
+                self.load_dialogs(limit=100)
+            except Exception:  # noqa: BLE001
+                log.debug("could not refresh dialog access hashes before LoadHistory", exc_info=True)
         payload = RequestLoadHistory(
-            peer=OutPeer(user_id=peer_id, type=peer_type),
+            peer=OutPeer(
+                user_id=peer_id,
+                type=peer_type,
+                access_hash=self._dialog_access_hashes.get(access_key, 0),
+            ),
             date=date,
             limit=limit,
         ).encode()
@@ -552,8 +582,27 @@ class BaleApiClient:
         Useful for discovering the right peer_id for the RPC transport."""
         if self._ws is None:
             raise RuntimeError("BaleApiClient not started")
+        payload = RequestLoadGroupedDialogs().encode()
+        log.info("sending LoadGroupedDialogs limit=%d", limit)
+        try:
+            resp = self._ws.rpc(
+                MESSAGING_SERVICE, LOAD_GROUPED_DIALOGS_METHOD, payload, timeout=15.0,
+            )
+            dialogs = parse_load_grouped_dialogs_response(resp.payload or resp.raw)
+            if dialogs:
+                self._dialog_access_hashes.update(
+                    {
+                        (dialog.peer_type, dialog.peer_id): dialog.access_hash
+                        for dialog in dialogs
+                        if dialog.access_hash
+                    }
+                )
+                return dialogs[:limit]
+        except Exception:  # noqa: BLE001
+            log.info("LoadGroupedDialogs unavailable; trying legacy LoadDialogs", exc_info=True)
+
         payload = RequestLoadDialogs(min_date=min_date, limit=limit).encode()
-        log.info("sending LoadDialogs limit=%d", limit)
+        log.info("sending legacy LoadDialogs limit=%d", limit)
         resp = self._ws.rpc(MESSAGING_SERVICE, LOAD_DIALOGS_METHOD, payload, timeout=15.0)
         return parse_load_dialogs_response(resp.payload or resp.raw)
 
@@ -665,16 +714,38 @@ class BaleApiClient:
                 or self._message_subs.get(m.peer_user_id)
             )
             if cb is not None:
-                try:
-                    cb(m.text.encode("utf-8"))
-                except Exception:  # noqa: BLE001
-                    log.exception("inbound-message callback failed")
+                self._run_inbound_callback(
+                    cb, m.text.encode("utf-8"), "inbound-message",
+                )
             all_messages_callback = getattr(self, "_all_messages_callback", None)
             if all_messages_callback is not None:
-                try:
-                    all_messages_callback(m)
-                except Exception:  # noqa: BLE001
-                    log.exception("all inbound-message callback failed")
+                self._run_inbound_callback(
+                    all_messages_callback, m, "all inbound-message",
+                )
+
+    @staticmethod
+    def _run_inbound_callback(
+        callback: Callable[[object], None], value: object, label: str,
+    ) -> None:
+        """Invoke a message listener away from the WebSocket receive loop.
+
+        A userbot callback may synchronously call :meth:`send_message`.
+        Running it on the receive-loop thread would then block that loop
+        waiting for the send RPC, preventing the queued send and its reply
+        from being processed.  A short daemon worker keeps the socket live
+        while preserving the callback API for existing callers.
+        """
+        def invoke() -> None:
+            try:
+                callback(value)
+            except Exception:  # noqa: BLE001
+                log.exception("%s callback failed", label)
+
+        threading.Thread(
+            target=invoke,
+            daemon=True,
+            name="baleobala-inbound-callback",
+        ).start()
 
     def _remember_rid_locked(self, rid: int) -> None:
         """Caller must hold self._seen_rids_lock."""

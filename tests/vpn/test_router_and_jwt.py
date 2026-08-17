@@ -8,9 +8,11 @@ import pytest
 
 from baleobala.vpn.jwt_util import (
     JwtExpiredError,
+    claims,
     inspect,
     is_expired,
     require_unexpired,
+    user_id,
     warn_if_near_expiry,
 )
 from baleobala.vpn.router import FailoverRouter, RouterChoice
@@ -33,6 +35,16 @@ def test_jwt_inspect_handles_garbage():
     info = inspect("not-a-jwt")
     assert info.exp is None
     assert info.seconds_until_expiry is None
+
+
+def test_jwt_claim_helpers_read_bale_user_id_layouts():
+    nested = _mkjwt(payload={"user_id": "77"})
+    top_level = _mkjwt(user_id=88)
+
+    assert claims(nested) == {"payload": {"user_id": "77"}}
+    assert user_id(nested) == 77
+    assert user_id(top_level) == 88
+    assert user_id("not-a-jwt") is None
 
 
 def test_is_expired_and_require_unexpired():

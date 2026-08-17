@@ -37,6 +37,11 @@ baleobala userbot run --echo
 
 Local message and audit state is saved at `state/userbot.sqlite3` beneath the
 normal Baleobala application directory. JWTs are not stored in this database.
+`list_dialogs` reads Bale's current grouped dialog endpoint and falls back to
+conversations that this userbot has actually observed and persisted only when
+the remote endpoint is unavailable. For an approved peer, `list_messages`
+reads recent remote history while the worker is running and otherwise returns
+the durable local history it has observed.
 
 ## MCP
 

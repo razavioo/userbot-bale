@@ -12,6 +12,7 @@ from baleobala.control.paths import config_dir
 from baleobala.control.keychain import SecretBackend, default_secret_backend
 from baleobala.control.store import JsonStore
 from baleobala.vpn.jwt_util import inspect as inspect_jwt
+from baleobala.vpn.jwt_util import user_id as user_id_from_jwt
 
 
 @dataclass(frozen=True)
@@ -84,10 +85,11 @@ class AuthStore:
         secret_name: str | None = None,
     ) -> AuthRecord:
         info = inspect_jwt(jwt)
+        resolved_user_id = user_id if user_id is not None else user_id_from_jwt(jwt)
         return AuthRecord(
             provider=provider,
             jwt=jwt,
-            user_id=user_id,
+            user_id=resolved_user_id,
             phone=phone,
             secret_name=secret_name or self._secret_name,
             issued_at=float(info.iat) if info.iat is not None else None,

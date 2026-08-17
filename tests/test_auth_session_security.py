@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
+import json
 import sys
 import types
+from pathlib import Path
 
 from baleobala.control.auth import AuthStore
 from baleobala.control.keychain import KeyringSecretBackend
@@ -40,3 +43,14 @@ def test_auth_store_exports_a_raw_jwt_only_when_explicitly_enabled(tmp_path, mon
     monkeypatch.setenv("BALEOBALA_EXPORT_ACCOUNT_JWT", "1")
     store.save_jwt("second.header.signature")
     assert exported == ["second.header.signature"]
+
+
+def test_auth_record_recovers_user_id_from_browser_jwt() -> None:
+    encoded = base64.urlsafe_b64encode(
+        json.dumps({"payload": {"user_id": 91}}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    store = AuthStore(Path("auth-test.json"))
+
+    record = store._record_for_jwt(f"header.{encoded}.signature")
+
+    assert record.user_id == 91

@@ -31,17 +31,45 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def inspect(jwt: str) -> JwtInfo:
-    """Parse claims; no signature check."""
+def claims(jwt: str) -> dict[str, object] | None:
+    """Decode unverified JWT claims without retaining or logging the token."""
     parts = jwt.split(".")
     if len(parts) < 2:
-        return JwtInfo(exp=None, iat=None, seconds_until_expiry=None)
+        return None
     try:
-        claims = json.loads(_b64url_decode(parts[1]))
-    except (ValueError, json.JSONDecodeError):
+        payload = json.loads(_b64url_decode(parts[1]))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def user_id(jwt: str) -> int | None:
+    """Read Bale's account id from either supported JWT claim layout."""
+    payload = claims(jwt)
+    if payload is None:
+        return None
+    nested = payload.get("payload")
+    candidates = [
+        payload.get("user_id"),
+        nested.get("user_id") if isinstance(nested, dict) else None,
+    ]
+    for candidate in candidates:
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def inspect(jwt: str) -> JwtInfo:
+    """Parse claims; no signature check."""
+    payload = claims(jwt)
+    if payload is None:
         return JwtInfo(exp=None, iat=None, seconds_until_expiry=None)
-    exp = claims.get("exp")
-    iat = claims.get("iat")
+    exp = payload.get("exp")
+    iat = payload.get("iat")
     ttl = (exp - time.time()) if isinstance(exp, (int, float)) else None
     return JwtInfo(exp=exp, iat=iat, seconds_until_expiry=ttl)
 
