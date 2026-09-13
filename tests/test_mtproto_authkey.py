@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.bale.mtproto.authkey import (
+from userbot_bale.bale.mtproto.authkey import (
     AuthKeyNegotiationNotReady,
     AuthKeyNegotiator,
     BaleP256DhHeuristicHandshakeCodec,
@@ -10,7 +10,7 @@ from baleobala.bale.mtproto.authkey import (
     PlaceholderHandshakeCodec,
     ServerHandshakeMaterial,
 )
-from baleobala.bale.rpc_envelope import _enc_len_delim
+from userbot_bale.bale.rpc_envelope import _enc_len_delim
 
 
 class _Stream:

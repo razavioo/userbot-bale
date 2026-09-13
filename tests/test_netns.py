@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from baleobala.control.netns import (
+from userbot_bale.control.netns import (
     NetnsHarness,
     NetnsProcessManager,
     NetnsProcessSpec,
@@ -12,13 +12,13 @@ from baleobala.control.netns import (
     render_smoke_commands,
     render_teardown_commands,
 )
-from baleobala.control.scenario import build_proxy_pair_scenario
+from userbot_bale.control.scenario import build_proxy_pair_scenario
 import json
 import subprocess
 
 
 def test_netns_topology_uses_prefix() -> None:
-    topology = NetnsTopology.with_prefix("baleobala")
+    topology = NetnsTopology.with_prefix("userbot-bale")
     assert topology.client_ns.endswith("-client")
     assert topology.server_ns.endswith("-server")
     assert topology.client_veth.endswith("-vc")
@@ -138,7 +138,7 @@ class FakeReadyPopen(FakePopen):
 
 
 def test_marker_parser_uses_exact_lines_only() -> None:
-    from baleobala.control.netns import _parse_marker_lines
+    from userbot_bale.control.netns import _parse_marker_lines
 
     text = "noise call_established noise\ncall_established\ntransport_selected=dc\nrandom proxy_listening=1.2.3.4:5 text\nproxy_listening=127.0.0.1:1080\n"
     markers = _parse_marker_lines(text)
@@ -149,7 +149,7 @@ def test_marker_parser_uses_exact_lines_only() -> None:
 
 
 def test_marker_parser_deduplicates_and_ignores_substrings() -> None:
-    from baleobala.control.netns import _parse_marker_lines
+    from userbot_bale.control.netns import _parse_marker_lines
 
     text = "call_established\ncall_established\nteardown_done\nnot-a-teardown_done-marker\n"
     markers = _parse_marker_lines(text)

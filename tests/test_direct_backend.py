@@ -15,9 +15,9 @@ import threading
 
 import pytest
 
-from baleobala.control.backend import DirectProxyBackend
-from baleobala.control.vpn import VpnProfile
-from baleobala.runtime.proxy import DirectSocks5Server
+from userbot_bale.control.backend import DirectProxyBackend
+from userbot_bale.control.vpn import VpnProfile
+from userbot_bale.runtime.proxy import DirectSocks5Server
 
 
 def _start_echo_server() -> tuple[str, int, threading.Event, socket.socket]:
@@ -188,20 +188,20 @@ def test_direct_backend_rolls_back_server_if_session_fails(tmp_path) -> None:
 
 
 def test_packet_tunnel_is_default_backend_on_darwin(monkeypatch) -> None:
-    monkeypatch.delenv("BALEOBALA_VPN_BACKEND", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_VPN_BACKEND", raising=False)
     monkeypatch.setattr("sys.platform", "darwin")
-    from baleobala.control.backend import default_backend_name
-    from baleobala.control.vpn import default_vpn_backend
+    from userbot_bale.control.backend import default_backend_name
+    from userbot_bale.control.vpn import default_vpn_backend
 
     assert default_backend_name() == "packet-tunnel"
     assert default_vpn_backend() == "packet-tunnel"
 
 
 def test_windows_proxy_is_default_backend_on_win32(monkeypatch) -> None:
-    monkeypatch.delenv("BALEOBALA_VPN_BACKEND", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_VPN_BACKEND", raising=False)
     monkeypatch.setattr("sys.platform", "win32")
-    from baleobala.control.backend import default_backend_name
-    from baleobala.control.vpn import default_vpn_backend
+    from userbot_bale.control.backend import default_backend_name
+    from userbot_bale.control.vpn import default_vpn_backend
 
     assert default_backend_name() == "windows-proxy"
     assert default_vpn_backend() == "windows-proxy"

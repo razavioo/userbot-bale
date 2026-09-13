@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Deploy baleobala to a remote relay/client node.
+# Deploy userbot-bale to a remote relay/client node.
 #
 # Required:
 #   TARGET_HOST=<host-or-ip> JWT_FILE=<local-jwt-file> PEER_ID=<exit-peer-id> bash scripts/push-relay.sh
 #
 # Optional:
-#   REMOTE_USER=ubuntu REMOTE_DIR=/opt/baleobala TUN_IFACE=vpn0 TUN_ADDR=10.77.0.2/24
+#   REMOTE_USER=ubuntu REMOTE_DIR=/opt/userbot-bale TUN_IFACE=vpn0 TUN_ADDR=10.77.0.2/24
 #   SSHPASS=<password> for password-based SSH auth
 #
 set -euo pipefail
@@ -14,7 +14,7 @@ TARGET_HOST="${TARGET_HOST:-${1:-}}"
 REMOTE_USER="${REMOTE_USER:-ubuntu}"
 JWT_FILE="${JWT_FILE:-${2:-}}"
 PEER_ID="${PEER_ID:-${3:-}}"
-REMOTE_DIR="${REMOTE_DIR:-/opt/baleobala}"
+REMOTE_DIR="${REMOTE_DIR:-/opt/userbot-bale}"
 TUN_IFACE="${TUN_IFACE:-vpn0}"
 TUN_ADDR="${TUN_ADDR:-10.77.0.2/24}"
 TUN_MTU="${TUN_MTU:-1400}"
@@ -55,7 +55,7 @@ print_network_hint() {
 }
 
 echo "==================================================="
-echo "  baleobala - Relay Deployment"
+echo "  userbot-bale - Relay Deployment"
 echo "  Target: $REMOTE_USER@$TARGET_HOST"
 echo "  Remote dir: $REMOTE_DIR"
 echo "  TUN: $TUN_IFACE @ $TUN_ADDR"
@@ -110,7 +110,7 @@ elif command -v expect &>/dev/null; then
         echo ""
         export SSHPASS
     fi
-    EXPECT_HELPER="$(mktemp -t baleobala-ssh-expect.XXXXXX)"
+    EXPECT_HELPER="$(mktemp -t userbot-bale-ssh-expect.XXXXXX)"
     cat > "$EXPECT_HELPER" << 'EOF'
 #!/usr/bin/expect -f
 set timeout -1
@@ -159,11 +159,11 @@ $RSYNC_CMD -az --delete \
     "$REMOTE_USER@$TARGET_HOST:$REMOTE_DIR/"
 
 echo "[2/4] Copying JWT..."
-$SCP_CMD "$JWT_FILE" "$REMOTE_USER@$TARGET_HOST:/tmp/baleobala-jwt.txt"
+$SCP_CMD "$JWT_FILE" "$REMOTE_USER@$TARGET_HOST:/tmp/userbot-bale-jwt.txt"
 
 echo "[3/4] Running remote deploy..."
 $SSH_CMD "$REMOTE_USER@$TARGET_HOST" \
-    "sudo env INSTALL_DIR='$REMOTE_DIR' TUN_IFACE='$TUN_IFACE' TUN_ADDR='$TUN_ADDR' TUN_MTU='$TUN_MTU' bash '$REMOTE_DIR/scripts/deploy-relay.sh' /tmp/baleobala-jwt.txt '$PEER_ID'"
+    "sudo env INSTALL_DIR='$REMOTE_DIR' TUN_IFACE='$TUN_IFACE' TUN_ADDR='$TUN_ADDR' TUN_MTU='$TUN_MTU' bash '$REMOTE_DIR/scripts/deploy-relay.sh' /tmp/userbot-bale-jwt.txt '$PEER_ID'"
 
 echo "[4/4] Installing systemd service..."
 $SSH_CMD "$REMOTE_USER@$TARGET_HOST" \

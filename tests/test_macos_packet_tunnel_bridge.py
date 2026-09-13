@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import socket
 
-from baleobala.control.tunnel_bridge import VpnTunnelBridge
-from baleobala.control.tunnel_service import CarrierTunnelService
-from baleobala.vpn.runner import RunnerConfig, VpnRunner
-from baleobala.vpn.transports import InMemoryTransport
+from userbot_bale.control.tunnel_bridge import VpnTunnelBridge
+from userbot_bale.control.tunnel_service import CarrierTunnelService
+from userbot_bale.vpn.runner import RunnerConfig, VpnRunner
+from userbot_bale.vpn.transports import InMemoryTransport
 
 
 def _make_bridge_pair(*, mtu: int = 256) -> tuple[VpnTunnelBridge, VpnTunnelBridge, InMemoryTransport, InMemoryTransport]:
@@ -52,7 +52,7 @@ def test_vpn_tunnel_bridge_roundtrips_packets_with_inmemory_transport() -> None:
 
 
 def test_carrier_tunnel_service_bridges_packets_via_socket(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     left_bridge, right_bridge, left_tx, right_tx = _make_bridge_pair()
     service = CarrierTunnelService(left_bridge, socket_path=tmp_path / "carrier.sock", manage_bridge=True)
     try:

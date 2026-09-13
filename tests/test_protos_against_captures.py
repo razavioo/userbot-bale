@@ -1,8 +1,8 @@
 """D2 — protobuf decoder regression tests against binary captures.
 
 Loads binary captures from captures/ws-live/ and captures/rpcs/ and runs
-them through the existing decoders in baleobala.bale.rpc_envelope and
-baleobala.bale.protos. Any change in Bale's protobuf wire format that
+them through the existing decoders in userbot_bale.bale.rpc_envelope and
+userbot_bale.bale.protos. Any change in Bale's protobuf wire format that
 breaks a decoder will fail a test here before reaching live CI.
 
 Design principles:
@@ -107,7 +107,7 @@ def test_ws_live_captures_exist():
 @pytest.mark.skipif(not _WS_LIVE_DIR.exists(), reason="captures/ws-live/ not present")
 def test_ws_live_client_frames_parse_without_exception():
     """Every *_cl_* frame must decode through Response.decode() without raising."""
-    from baleobala.bale.rpc_envelope import Response
+    from userbot_bale.bale.rpc_envelope import Response
 
     cl_files = [f for f in _ws_live_files() if "_cl_" in f.name]
     assert cl_files, "No client-direction captures found"
@@ -125,7 +125,7 @@ def test_ws_live_client_frames_parse_without_exception():
 @pytest.mark.skipif(not _WS_LIVE_DIR.exists(), reason="captures/ws-live/ not present")
 def test_ws_live_server_frames_parse_without_exception():
     """Every *_sv_* frame must decode through Response.decode() without raising."""
-    from baleobala.bale.rpc_envelope import Response
+    from userbot_bale.bale.rpc_envelope import Response
 
     sv_files = [f for f in _ws_live_files() if "_sv_" in f.name]
     assert sv_files, "No server-direction captures found"
@@ -147,7 +147,7 @@ def test_ws_live_large_server_frames_have_payload():
     This pins that the Response.decode() path is actually reaching payload
     bytes, not silently returning empty on every frame. If the outer
     envelope field number changes (e.g. tag 1 → tag 2), this fails."""
-    from baleobala.bale.rpc_envelope import Response
+    from userbot_bale.bale.rpc_envelope import Response
 
     large_sv = [f for f in _ws_live_files() if "_sv_" in f.name and f.stat().st_size > 10]
     assert large_sv, "No large server-direction captures found"
@@ -232,7 +232,7 @@ def test_rpc_start_phone_auth_request_has_transaction_field():
 @pytest.mark.skipif(not _RPCS_DIR.exists(), reason="captures/rpcs/ not present")
 def test_rpc_start_phone_auth_response_parse():
     """StartPhoneAuth response must be parseable and yield a transaction_hash."""
-    from baleobala.bale.protos import parse_transaction_hash
+    from userbot_bale.bale.protos import parse_transaction_hash
     res_file = _RPCS_DIR / "00_bale.auth.v1.Auth__StartPhoneAuth.res.bin"
     if not res_file.exists():
         pytest.skip("StartPhoneAuth response capture not found")
@@ -270,7 +270,7 @@ def test_rpc_validate_code_response_contains_jwt():
 
     The JWT is how the client authenticates subsequent requests. If the
     auth flow switches to a different credential format, this test signals it."""
-    from baleobala.bale.protos import parse_response_auth as parse_auth_response
+    from userbot_bale.bale.protos import parse_response_auth as parse_auth_response
     res_file = _RPCS_DIR / "01_bale.auth.v1.Auth__ValidateCode.res.bin"
     if not res_file.exists():
         pytest.skip("ValidateCode response capture not found")
@@ -299,7 +299,7 @@ def test_request_start_livekit_call_encodes_to_valid_protobuf():
       - field 2 (varint)    = rid (random int64 call identifier)
       - field 4 (len-delim) = BooleanValue (inviteEnable)
     This is the core call-init message; if any field drifts all calls fail."""
-    from baleobala.bale.protos import RequestStartLiveKitCall, OutPeer
+    from userbot_bale.bale.protos import RequestStartLiveKitCall, OutPeer
 
     req = RequestStartLiveKitCall(peer=OutPeer(user_id=12345))
     encoded = req.encode()
@@ -314,7 +314,7 @@ def test_request_start_livekit_call_encodes_to_valid_protobuf():
 
 def test_out_peer_encode_decode_round_trip():
     """OutPeer bytes must have field 1 (type=varint) and field 2 (id=varint)."""
-    from baleobala.bale.protos import OutPeer, PEER_TYPE_PRIVATE
+    from userbot_bale.bale.protos import OutPeer, PEER_TYPE_PRIVATE
 
     peer = OutPeer(user_id=99999, type=PEER_TYPE_PRIVATE)
     encoded = peer.encode()

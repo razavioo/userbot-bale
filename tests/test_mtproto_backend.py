@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.bale.endpoints import Endpoint
-from baleobala.bale.mtproto.authkey import (
+from userbot_bale.bale.endpoints import Endpoint
+from userbot_bale.bale.mtproto.authkey import (
     AuthKeyNegotiationNotReady,
     MtprotoAuthKey,
     PlaceholderHandshakeCodec,
 )
-from baleobala.bale.mtproto.store import PersistedMtprotoSession
-from baleobala.bale.mtproto_backend import (
+from userbot_bale.bale.mtproto.store import PersistedMtprotoSession
+from userbot_bale.bale.mtproto_backend import (
     MtprotoMessagingBackend,
     MtprotoTransportNotReady,
 )
@@ -32,11 +32,11 @@ def test_mtproto_backend_start_reaches_endpoint_then_fails_closed(monkeypatch) -
             calls.append(endpoint)
 
     monkeypatch.setattr(
-        "baleobala.bale.mtproto_backend.fetch_endpoints",
+        "userbot_bale.bale.mtproto_backend.fetch_endpoints",
         lambda: [endpoint],
     )
     monkeypatch.setattr(
-        "baleobala.bale.mtproto_backend.connect",
+        "userbot_bale.bale.mtproto_backend.connect",
         lambda ep: _Conn(),
     )
 
@@ -115,8 +115,8 @@ class _EndpointConn:
 
 
 def _build_fake_update_message(*, peer_id: int, sender_uid: int, rid: int, text: str) -> bytes:
-    from baleobala.bale.protos import OutPeer, _encode_message_with_text
-    from baleobala.bale.rpc_envelope import _enc_len_delim, _enc_tag, _enc_varint
+    from userbot_bale.bale.protos import OutPeer, _encode_message_with_text
+    from userbot_bale.bale.rpc_envelope import _enc_len_delim, _enc_tag, _enc_varint
 
     peer_bytes = OutPeer(user_id=peer_id, type=1).encode()
     msg_bytes = _encode_message_with_text(text)
@@ -131,7 +131,7 @@ def _build_fake_update_message(*, peer_id: int, sender_uid: int, rid: int, text:
 def test_mtproto_backend_uses_rpc_client_for_send_and_receive(monkeypatch) -> None:
     import tempfile
 
-    monkeypatch.setenv("BALEOBALA_HOME", tempfile.mkdtemp(prefix="baleobala-mtproto-test-"))
+    monkeypatch.setenv("USERBOT_BALE_HOME", tempfile.mkdtemp(prefix="userbot-bale-mtproto-test-"))
     rpc = _FakeRpcClient()
     backend = MtprotoMessagingBackend(jwt="jwt-token", rpc_client=rpc)
     backend.start()
@@ -149,7 +149,7 @@ def test_mtproto_backend_uses_rpc_client_for_send_and_receive(monkeypatch) -> No
 def test_mtproto_backend_live_start_negotiates_auth_key(monkeypatch) -> None:
     import tempfile
 
-    monkeypatch.setenv("BALEOBALA_HOME", tempfile.mkdtemp(prefix="baleobala-mtproto-live-"))
+    monkeypatch.setenv("USERBOT_BALE_HOME", tempfile.mkdtemp(prefix="userbot-bale-mtproto-live-"))
     endpoint = Endpoint(
         scheme="tls",
         pin="a" * 64,
@@ -160,7 +160,7 @@ def test_mtproto_backend_live_start_negotiates_auth_key(monkeypatch) -> None:
     )
     negotiator = _Negotiator()
     monkeypatch.setattr(
-        "baleobala.bale.mtproto_backend.fetch_endpoints",
+        "userbot_bale.bale.mtproto_backend.fetch_endpoints",
         lambda: [endpoint],
     )
     backend = MtprotoMessagingBackend(
@@ -177,7 +177,7 @@ def test_mtproto_backend_live_start_negotiates_auth_key(monkeypatch) -> None:
 
 
 def test_mtproto_backend_loads_persisted_session(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     rpc = _FakeRpcClient()
     backend = MtprotoMessagingBackend(jwt="jwt-token", rpc_client=rpc)
     backend._store.save(  # type: ignore[attr-defined]

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install baleobala exit-node as a systemd service.
+# Install userbot-bale exit-node as a systemd service.
 #
 set -euo pipefail
 
 WAN_IFACE="${1:-${WAN_IFACE:-eth0}}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/baleobala}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/userbot-bale}"
 TUN_IFACE="${TUN_IFACE:-vpn0}"
 
 if [[ $EUID -ne 0 ]]; then
@@ -12,9 +12,9 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-cat > /etc/systemd/system/baleobala-exit.service << EOF
+cat > /etc/systemd/system/userbot-bale-exit.service << EOF
 [Unit]
-Description=baleobala VPN Exit Node
+Description=userbot-bale VPN Exit Node
 After=network-online.target
 Wants=network-online.target
 # Exit-node exits after each call; defaults (5 restarts / 10s) mark the unit
@@ -33,8 +33,8 @@ WorkingDirectory=${INSTALL_DIR}
 #   "auto" tries dc/qr/audio/rpc/mtproto_rpc in turn, which adds noise
 #   to journalctl and slows down first-frame delivery — dc is the only
 #   transport the Android client speaks today.
-ExecStart=${INSTALL_DIR}/.venv/bin/baleobala tunnel exit-node \\
-    --bale-jwt-file /etc/baleobala/jwt.txt \\
+ExecStart=${INSTALL_DIR}/.venv/bin/userbot-bale tunnel exit-node \\
+    --bale-jwt-file /etc/userbot-bale/jwt.txt \\
     --tun ${TUN_IFACE} \\
     --wan ${WAN_IFACE} \\
     --transport dc \\
@@ -59,16 +59,16 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable baleobala-exit.service
-systemctl start baleobala-exit.service
+systemctl enable userbot-bale-exit.service
+systemctl start userbot-bale-exit.service
 
-echo "OK: baleobala-exit service installed and started"
-echo "  Status : systemctl status baleobala-exit"
-echo "  Logs   : journalctl -u baleobala-exit -f"
+echo "OK: userbot-bale-exit service installed and started"
+echo "  Status : systemctl status userbot-bale-exit"
+echo "  Logs   : journalctl -u userbot-bale-exit -f"
 echo
 echo "IMPORTANT: don't run any other long-lived process (bale-proxy"
 echo "client, bale-call --answer, another exit-node) with the SAME"
-echo "Bale JWT as /etc/baleobala/jwt.txt. The Bale server picks one"
+echo "Bale JWT as /etc/userbot-bale/jwt.txt. The Bale server picks one"
 echo "WS session at random when an inbound call arrives, so a second"
 echo "client on the same account silently steals incoming calls and"
 echo "the exit node never gets to NAT them."

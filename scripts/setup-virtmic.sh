@@ -4,8 +4,8 @@
 # unload later with `pactl unload-module <id>`.
 set -euo pipefail
 
-NAME="${1:-baleobala}"
-DESC="${2:-Baleobala Virtual Mic}"
+NAME="${1:-userbot-bale}"
+DESC="${2:-Userbot Bale Virtual Mic}"
 
 if ! command -v pactl >/dev/null 2>&1; then
   echo "pactl not found. Install pulseaudio-utils." >&2

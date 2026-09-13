@@ -16,5 +16,5 @@ dependencyResolutionManagement {
         maven("https://jitpack.io")
     }
 }
-rootProject.name = "baleobala-android"
+rootProject.name = "userbot-bale-android"
 include(":app")

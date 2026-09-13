@@ -4,8 +4,8 @@ import threading
 import time
 from dataclasses import replace
 
-from baleobala.control.credential_watcher import CredentialWatcher
-from baleobala.control.pairing import PairingRecord
+from userbot_bale.control.credential_watcher import CredentialWatcher
+from userbot_bale.control.pairing import PairingRecord
 
 
 class _FakePairingStore:

@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from baleobala.vpn.transports.bonded import BondedTransport
+from userbot_bale.vpn.transports.bonded import BondedTransport
 
 
 class _FakeChannel:

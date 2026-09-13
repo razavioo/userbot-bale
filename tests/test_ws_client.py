@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from baleobala.bale import ws_client
-from baleobala.bale.rpc_envelope import DEFAULT_METADATA, Request, Response
+from userbot_bale.bale import ws_client
+from userbot_bale.bale.rpc_envelope import DEFAULT_METADATA, Request, Response
 
 
 def test_build_ssl_context_defaults_to_none(monkeypatch) -> None:
@@ -153,7 +153,7 @@ def test_dispatch_does_not_drop_when_response_arrives_before_get():
     resp = Response(seq=7, payload=b"ok")
     # encode/decode roundtrip via _dispatch's Response.decode path:
     # easier: bypass decode by stubbing Response.decode for this call.
-    import baleobala.bale.ws_client as wc
+    import userbot_bale.bale.ws_client as wc
 
     original = wc.Response.decode
     wc.Response.decode = staticmethod(lambda buf: resp)

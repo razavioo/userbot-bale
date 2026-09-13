@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.vpn.transports.rpc_transport import (
+from userbot_bale.vpn.transports.rpc_transport import (
     RpcTransport,
     RpcTransportNotReady,
 )

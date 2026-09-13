@@ -6,8 +6,8 @@ import socket
 
 import pytest
 
-from baleobala.bale.endpoints import fetch_endpoints
-from baleobala.bale.mtproto import connect
+from userbot_bale.bale.endpoints import fetch_endpoints
+from userbot_bale.bale.mtproto import connect
 
 
 def _network_ok() -> bool:

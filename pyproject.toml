@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "baleobala"
+name = "userbot-bale"
 version = "0.3.0"
-description = "Acoustic data bridge and VPN transport core over voice/video calls across Linux, macOS, and Windows development paths."
+description = "Bale userbot runtime, MCP server, and transport core across Linux, macOS, and Windows."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "baleobala" }]
-keywords = ["ggwave", "data-over-sound", "virtual-microphone", "pipewire", "voip"]
+authors = [{ name = "userbot-bale" }]
+keywords = ["bale", "userbot", "mcp", "livekit", "voip", "data-over-sound"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -55,13 +55,13 @@ mcp = [
 ]
 
 [project.scripts]
-baleobala = "baleobala.cli:main"
+userbot-bale = "userbot_bale.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"baleobala.runtime.policy_data" = ["*.txt"]
+"userbot_bale.runtime.policy_data" = ["*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

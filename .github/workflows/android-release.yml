@@ -35,8 +35,8 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/baleobala-release.jks"
-          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/baleobala-release.jks" >> "$GITHUB_ENV"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/userbot-bale-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/userbot-bale-release.jks" >> "$GITHUB_ENV"
 
       - name: Determine version tag
         id: ver
@@ -66,8 +66,8 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           APK_SRC="native/android/app/build/outputs/apk/release/app-release.apk"
           AAB_SRC="native/android/app/build/outputs/bundle/release/app-release.aab"
-          APK_DST="baleobala-${TAG}.apk"
-          AAB_DST="baleobala-${TAG}.aab"
+          APK_DST="userbot-bale-${TAG}.apk"
+          AAB_DST="userbot-bale-${TAG}.aab"
           cp "$APK_SRC" "$APK_DST"
           cp "$AAB_SRC" "$AAB_DST"
           echo "apk=$APK_DST" >> "$GITHUB_OUTPUT"
@@ -76,13 +76,13 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: baleobala-apk-${{ steps.ver.outputs.tag }}
+          name: userbot-bale-apk-${{ steps.ver.outputs.tag }}
           path: ${{ steps.artifacts.outputs.apk }}
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: baleobala-aab-${{ steps.ver.outputs.tag }}
+          name: userbot-bale-aab-${{ steps.ver.outputs.tag }}
           path: ${{ steps.artifacts.outputs.aab }}
 
       - name: Attach to GitHub Release

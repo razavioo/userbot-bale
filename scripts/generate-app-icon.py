@@ -17,8 +17,8 @@ from PIL import Image, ImageDraw, ImageFilter
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "build" / "app-icon"
 ANDROID_RES = REPO / "native" / "android" / "app" / "src" / "main" / "res"
-MACOS_RES = REPO / "native" / "macos" / "BaleobalaApp" / "Resources"
-PROXY_RES = REPO / "native" / "macos" / "BaleobalaProxyApp" / "Resources"
+MACOS_RES = REPO / "native" / "macos" / "UserbotBaleApp" / "Resources"
+PROXY_RES = REPO / "native" / "macos" / "UserbotBaleProxyApp" / "Resources"
 README_DIR = REPO / "docs" / "assets"
 
 # Brand palette
@@ -215,13 +215,13 @@ def main() -> int:
         ("icon_512x512.png", 512),
         ("icon_512x512@2x.png", 1024),
     ]
-    iconset_dir = OUT / "Baleobala.iconset"
+    iconset_dir = OUT / "UserbotBale.iconset"
     if iconset_dir.exists():
         shutil.rmtree(iconset_dir)
     iconset_dir.mkdir(parents=True)
     for name, size in iconset_sizes:
         full.resize((size, size), Image.LANCZOS).save(iconset_dir / name)
-    icns_path = OUT / "Baleobala.icns"
+    icns_path = OUT / "UserbotBale.icns"
     if shutil.which("iconutil") is None:
         print("warning: iconutil not on PATH; skipping .icns creation", file=sys.stderr)
     else:
@@ -229,7 +229,7 @@ def main() -> int:
             ["iconutil", "-c", "icns", "-o", str(icns_path), str(iconset_dir)],
             check=True,
         )
-        for dest in (MACOS_RES / "Baleobala.icns", PROXY_RES / "Baleobala.icns"):
+        for dest in (MACOS_RES / "UserbotBale.icns", PROXY_RES / "UserbotBale.icns"):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(icns_path, dest)
 
@@ -283,7 +283,7 @@ def main() -> int:
     (drawable_dir / "ic_launcher_background.xml").write_text(bg_xml)
 
     print(f"Generated icons under: {OUT}")
-    print("macOS .icns copied into BaleobalaApp/Resources and BaleobalaProxyApp/Resources.")
+    print("macOS .icns copied into UserbotBaleApp/Resources and UserbotBaleProxyApp/Resources.")
     print("Android mipmaps written under native/android/app/src/main/res/mipmap-*.")
     print("README icon at docs/assets/icon.png.")
     return 0

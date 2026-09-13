@@ -14,14 +14,14 @@ import pytest
 
 pytest.importorskip("ggwave")
 
-from baleobala.codec import Codec, Protocol  # noqa: E402
-from baleobala.framing import Frame, Reassembler, fragment  # noqa: E402
+from userbot_bale.codec import Codec, Protocol  # noqa: E402
+from userbot_bale.framing import Frame, Reassembler, fragment  # noqa: E402
 
 
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize("protocol", [Protocol.AUDIBLE_FAST, Protocol.AUDIBLE_FASTEST])
 def test_codec_single_frame_roundtrip(protocol: Protocol) -> None:
-    text = b"baleobala-loopback"
+    text = b"userbot-bale-loopback"
     (frame,) = list(fragment(text, msg_id=1))
     with Codec(protocol=protocol) as codec:
         waveform = codec.encode(frame.encode())

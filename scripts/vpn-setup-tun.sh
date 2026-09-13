@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create a persistent TUN device owned by an unprivileged user, assign
-# an IP, bring it up. Run ONCE, as root, before `baleobala vpn up`.
+# an IP, bring it up. Run ONCE, as root, before `userbot-bale vpn up`.
 #
 # Usage:
 #   sudo ./scripts/vpn-setup-tun.sh <iface> <addr/cidr> <mtu> <owner-user>
@@ -10,7 +10,7 @@
 # Example (exit node):
 #   sudo ./scripts/vpn-setup-tun.sh vpn0 10.77.0.1/24 1400 "$USER"
 #
-# The device persists across baleobala restarts; tear it down with:
+# The device persists across userbot-bale restarts; tear it down with:
 #   sudo ip link del vpn0
 set -euo pipefail
 

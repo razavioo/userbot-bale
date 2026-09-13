@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.BaleobalaVpn" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.UserbotBaleVpn" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/brand_primary</item>
         <item name="colorOnPrimary">@color/brand_on_primary</item>
         <item name="colorPrimaryContainer">@color/accent_soft</item>
@@ -31,7 +31,7 @@
         <item name="android:windowContentTransitions">true</item>
     </style>
 
-    <style name="Theme.BaleobalaVpn.Toolbar" parent="Widget.Material3.Toolbar">
+    <style name="Theme.UserbotBaleVpn.Toolbar" parent="Widget.Material3.Toolbar">
         <item name="titleTextColor">@color/text_primary_on_dark</item>
         <item name="subtitleTextColor">@color/text_secondary_on_dark</item>
         <item name="navigationIconTint">@color/text_primary_on_dark</item>

@@ -1,6 +1,6 @@
-# baleobala production topology — relay-only (no coordinator).
+# userbot-bale production topology — relay-only (no coordinator).
 # Each relay host runs one mesh exit-node that accepts inbound Bale calls
-# from any client. The PSK in /etc/baleobala/vpn.psk authenticates traffic.
+# from any client. The PSK in /etc/userbot-bale/vpn.psk authenticates traffic.
 # Clients enter the per-relay Bale user_id (peer_id) in their app Settings
 # and the app dials each one in shuffled order with fallback.
 
@@ -8,9 +8,9 @@ relays:
   - name: relay-1
     host: 68.183.118.171
     user: root
-    remote_path: /opt/baleobala
-    jwt_dir: /root/.baleobala/accounts
-    etc_dir: /etc/baleobala
+    remote_path: /opt/userbot-bale
+    jwt_dir: /root/.userbot-bale/accounts
+    etc_dir: /etc/userbot-bale
     region: ir
     wan_interface: eth0
     # JWT files in jwt_dir used by the mesh exit-node (one Bale call per JWT)

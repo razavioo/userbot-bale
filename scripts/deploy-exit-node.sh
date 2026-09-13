@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Install and configure baleobala on an exit node.
+# Install and configure userbot-bale on an exit node.
 #
 # Usage:
-#   INSTALL_DIR=/opt/baleobala TUN_IFACE=vpn0 TUN_ADDR=10.77.0.1/24 \
+#   INSTALL_DIR=/opt/userbot-bale TUN_IFACE=vpn0 TUN_ADDR=10.77.0.1/24 \
 #     bash deploy-exit-node.sh <jwt-file> [wan-interface]
 #
 set -euo pipefail
 
 JWT_FILE="${1:-}"
 WAN_IFACE="${2:-${WAN_IFACE:-eth0}}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/baleobala}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/userbot-bale}"
 TUN_IFACE="${TUN_IFACE:-vpn0}"
 TUN_ADDR="${TUN_ADDR:-10.77.0.1/24}"
 TUN_MTU="${TUN_MTU:-1400}"
@@ -25,7 +25,7 @@ if [[ ! -f "$JWT_FILE" ]]; then
 fi
 
 echo "==================================================="
-echo "  baleobala - Exit Node Setup"
+echo "  userbot-bale - Exit Node Setup"
 echo "  Install dir: $INSTALL_DIR"
 echo "  TUN: $TUN_IFACE @ $TUN_ADDR"
 echo "  WAN: $WAN_IFACE"
@@ -48,12 +48,12 @@ source .venv/bin/activate
 pip install -e ".[bale,vpn-video]"
 
 echo "[4/7] Storing JWT..."
-mkdir -p /etc/baleobala
-cp "$JWT_FILE" /etc/baleobala/jwt.txt
-chmod 600 /etc/baleobala/jwt.txt
+mkdir -p /etc/userbot-bale
+cp "$JWT_FILE" /etc/userbot-bale/jwt.txt
+chmod 600 /etc/userbot-bale/jwt.txt
 
-echo "[5/7] Registering JWT in baleobala auth store..."
-baleobala auth login --jwt-file /etc/baleobala/jwt.txt
+echo "[5/7] Registering JWT in userbot-bale auth store..."
+userbot-bale auth login --jwt-file /etc/userbot-bale/jwt.txt
 
 echo "[6/7] Creating TUN device $TUN_IFACE @ $TUN_ADDR..."
 bash scripts/vpn-setup-tun.sh "$TUN_IFACE" "$TUN_ADDR" "$TUN_MTU" "$(id -un)" || true

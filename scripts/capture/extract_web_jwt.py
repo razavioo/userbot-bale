@@ -101,7 +101,7 @@ def main():
         with open(out_file, "w") as f:
             f.write(access_token)
         print(f"Saved to: {out_file}")
-        print("You can now run: baleobala bale-call --peer-id <ID>")
+        print("You can now run: userbot-bale bale-call --peer-id <ID>")
     else:
         print("\nCould not find 'access_token' in IndexedDB or Cookies. Try logging in again.")
         print("IndexedDB kv dump:", kv_store.keys())

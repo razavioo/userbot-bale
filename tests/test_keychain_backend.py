@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
-from baleobala.control.keychain import KeychainSecretBackend
+from userbot_bale.control.keychain import KeychainSecretBackend
 
 
 def test_keychain_security_env_drops_python_launcher_vars(monkeypatch) -> None:

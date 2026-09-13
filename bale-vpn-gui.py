@@ -67,7 +67,7 @@ def _pick_font(candidates, size, weight="normal"):
 class BaleVPNApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Baleobala")
+        self.root.title("userbot-bale")
         self.root.geometry("470x720")
         self.root.configure(bg=BG_BASE)
         self.root.minsize(420, 680)
@@ -133,7 +133,7 @@ class BaleVPNApp:
 
     def _load_settings(self):
         home = Path.home()
-        secret_dir = home / ".config" / "baleobala" / "secrets"
+        secret_dir = home / ".config" / "userbot-bale" / "secrets"
         preferred_secret = secret_dir / "77dcf9ee09cec7c1.secret"
         fallback_secret = preferred_secret
         if not preferred_secret.exists() and secret_dir.exists():
@@ -160,7 +160,7 @@ class BaleVPNApp:
             "psk": os.environ.get("BALE_PROXY_PSK", "N9OcrcH_lJXU241OqKXL0SxP1YAWtALTdUitTLojlko"),
             "listen_host": "127.0.0.1",
         }
-        cfg_path = home / ".config" / "baleobala" / "proxy-gui.json"
+        cfg_path = home / ".config" / "userbot-bale" / "proxy-gui.json"
         if cfg_path.exists():
             try:
                 file_data = json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -182,7 +182,7 @@ class BaleVPNApp:
         wordmark.pack(side="left")
         tk.Label(
             wordmark,
-            text="Baleobala",
+            text="userbot-bale",
             bg=BG_BASE,
             fg=TEXT_PRIMARY,
             font=self.f_ui_bold,
@@ -474,18 +474,18 @@ class BaleVPNApp:
             self.stop_proxy()
 
     def _build_proxy_command(self):
-        cli_bin = os.environ.get("BALEOBALA_BIN")
+        cli_bin = os.environ.get("USERBOT_BALE_BIN")
         if cli_bin:
             prefix = shlex.split(cli_bin)
         else:
-            venv_cli = Path(__file__).resolve().parent / ".venv" / "bin" / "baleobala"
-            system_cli = shutil.which("baleobala")
+            venv_cli = Path(__file__).resolve().parent / ".venv" / "bin" / "userbot-bale"
+            system_cli = shutil.which("userbot-bale")
             if venv_cli.exists():
                 prefix = [str(venv_cli)]
             elif system_cli:
                 prefix = [system_cli]
             else:
-                prefix = [os.environ.get("PYTHON", "python3"), "-m", "baleobala.cli"]
+                prefix = [os.environ.get("PYTHON", "python3"), "-m", "userbot_bale.cli"]
         cmd = [
             *prefix,
             "bale-proxy",
@@ -507,18 +507,18 @@ class BaleVPNApp:
         return cmd
 
     def _build_tunnel_command(self):
-        cli_bin = os.environ.get("BALEOBALA_BIN")
+        cli_bin = os.environ.get("USERBOT_BALE_BIN")
         if cli_bin:
             prefix = shlex.split(cli_bin)
         else:
-            venv_cli = Path(__file__).resolve().parent / ".venv" / "bin" / "baleobala"
-            system_cli = shutil.which("baleobala")
+            venv_cli = Path(__file__).resolve().parent / ".venv" / "bin" / "userbot-bale"
+            system_cli = shutil.which("userbot-bale")
             if venv_cli.exists():
                 prefix = [str(venv_cli)]
             elif system_cli:
                 prefix = [system_cli]
             else:
-                prefix = [os.environ.get("PYTHON", "python3"), "-m", "baleobala.cli"]
+                prefix = [os.environ.get("PYTHON", "python3"), "-m", "userbot_bale.cli"]
         cmd = [
             *prefix,
             "tunnel",
@@ -536,7 +536,7 @@ class BaleVPNApp:
             "--transport",
             str(self.settings["transport"]),
             "--identity",
-            "baleobala-vpn-gui",
+            "userbot-bale-vpn-gui",
         ]
         psk = str(self.settings.get("psk") or "").strip()
         if psk:

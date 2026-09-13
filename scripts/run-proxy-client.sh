@@ -9,13 +9,13 @@
 #
 set -euo pipefail
 
-PYTHON="${BALEOBALA_PYTHON:-/Users/emad/IdeaProjects/baleobala/.venv/bin/python}"
-JWT_FILE="${BALEOBALA_JWT_FILE:-/Users/emad/.bale_jwt_b}"
-PSK_FILE="${BALEOBALA_PSK_FILE:-/Users/emad/.baleobala/baleobala-vpn.psk}"
-LISTEN_PORT="${BALEOBALA_LISTEN_PORT:-1080}"
-NETWORK_SERVICE="${BALEOBALA_SERVICE:-Wi-Fi}"
+PYTHON="${USERBOT_BALE_PYTHON:-/Users/emad/IdeaProjects/userbot-bale/.venv/bin/python}"
+JWT_FILE="${USERBOT_BALE_JWT_FILE:-/Users/emad/.bale_jwt_b}"
+PSK_FILE="${USERBOT_BALE_PSK_FILE:-/Users/emad/.userbot-bale/userbot-bale-vpn.psk}"
+LISTEN_PORT="${USERBOT_BALE_LISTEN_PORT:-1080}"
+NETWORK_SERVICE="${USERBOT_BALE_SERVICE:-Wi-Fi}"
 # Relay account A peer_id — the VPS relay this client dials into
-RELAY_PEER_ID="${BALEOBALA_RELAY_PEER_ID:-1519372475}"
+RELAY_PEER_ID="${USERBOT_BALE_RELAY_PEER_ID:-1519372475}"
 
 # Ignore SIGPIPE — prevents BrokenPipe from terminating us
 trap '' PIPE
@@ -67,7 +67,7 @@ echo "$(date -u +%FT%TZ) [proxy-client] waiting for network..." >&2
 wait_for_network
 echo "$(date -u +%FT%TZ) [proxy-client] network ready, starting proxy..." >&2
 
-exec "$PYTHON" -u -m baleobala.cli bale-proxy system \
+exec "$PYTHON" -u -m userbot_bale.cli bale-proxy system \
     --transport dc \
     --bale-jwt-file "$JWT_FILE" \
     --peer-id "$RELAY_PEER_ID" \

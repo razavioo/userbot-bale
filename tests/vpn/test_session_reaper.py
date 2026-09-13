@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from baleobala.vpn.session_reaper import SessionReaper
+from userbot_bale.vpn.session_reaper import SessionReaper
 
 
 # ---- Fakes -------------------------------------------------------------
@@ -146,7 +146,7 @@ def test_reaper_skips_stop_for_failed_sessions(fakes):
     `room.disconnect()` from a *concurrent* reap is what poisons the
     FFI singleton. The reaper must skip stop() for FAILED sessions and
     still complete the cleanup chain (drop_client, release, leave)."""
-    from baleobala.bale.livekit_backend import LiveKitSessionState
+    from userbot_bale.bale.livekit_backend import LiveKitSessionState
 
     reaper, sessions, mesh, control, allocator, _ = fakes
     failed = _FakeSession(terminal=True, state=LiveKitSessionState.FAILED)
@@ -192,7 +192,7 @@ def test_reaper_treats_probe_exception_as_terminal_and_skips_stop(fakes):
 def test_reaper_emits_audit_line_with_failed_flag(fakes):
     """The stderr line is part of the operator triage workflow; preserve
     its format including `(failed=True/False)`."""
-    from baleobala.bale.livekit_backend import LiveKitSessionState
+    from userbot_bale.bale.livekit_backend import LiveKitSessionState
 
     reaper, sessions, _, _, _, log = fakes
     failed = _FakeSession(terminal=True, state=LiveKitSessionState.FAILED)

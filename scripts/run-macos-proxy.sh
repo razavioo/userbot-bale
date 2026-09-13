@@ -7,8 +7,8 @@ DERIVED="$(pwd)/build/macos-proxy"
 mkdir -p "$DERIVED"
 
 xcodebuild \
-  -project native/macos/BaleobalaProxy.xcodeproj \
-  -scheme BaleobalaProxy \
+  -project native/macos/UserbotBaleProxy.xcodeproj \
+  -scheme UserbotBaleProxy \
   -configuration Debug \
   -derivedDataPath "$DERIVED" \
   CODE_SIGN_IDENTITY="-" \
@@ -16,7 +16,7 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   build
 
-APP="$DERIVED/Build/Products/Debug/BaleobalaProxy.app"
+APP="$DERIVED/Build/Products/Debug/UserbotBaleProxy.app"
 if [[ -d "$APP" ]]; then
   echo "Built: $APP"
   open "$APP"

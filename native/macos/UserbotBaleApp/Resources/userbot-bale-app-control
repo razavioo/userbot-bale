@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_src=$(CDPATH= cd -- "${script_dir}/../../../../src" 2>/dev/null && pwd || true)
+
+if [ -d "${script_dir}/userbot-bale" ]; then
+  export PYTHONPATH="${script_dir}${PYTHONPATH:+:${PYTHONPATH}}"
+elif [ -n "${repo_src}" ] && [ -d "${repo_src}/userbot-bale" ]; then
+  export PYTHONPATH="${repo_src}${PYTHONPATH:+:${PYTHONPATH}}"
+elif [ -n "${USERBOT_BALE_PYTHONPATH:-}" ]; then
+  export PYTHONPATH="${USERBOT_BALE_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+
+if [ -n "${USERBOT_BALE_PYTHON:-}" ]; then
+  python_bin="${USERBOT_BALE_PYTHON}"
+elif [ -x /usr/local/bin/python3 ]; then
+  python_bin=/usr/local/bin/python3
+elif [ -x /opt/homebrew/bin/python3 ]; then
+  python_bin=/opt/homebrew/bin/python3
+else
+  python_bin=/usr/bin/python3
+fi
+
+exec "${python_bin}" -m userbot_bale.control.app_control "$@"

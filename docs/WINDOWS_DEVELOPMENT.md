@@ -1,11 +1,11 @@
 # Windows Development
 
-This runbook covers the current Windows development path for `baleobala`.
+This runbook covers the current Windows development path for `userbot-bale`.
 The main product path is still `doctor -> auth -> pair -> connect`.
 
 ## Current backend
 
-On Windows, `baleobala vpn up` now defaults to `windows-proxy`.
+On Windows, `userbot-bale vpn up` now defaults to `windows-proxy`.
 
 That backend does two things:
 
@@ -20,7 +20,7 @@ This is a development path, not the final native tunnel implementation. It is th
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev,bale,desktop]"
-baleobala doctor
+userbot-bale doctor
 ```
 
 `doctor` should report:
@@ -33,10 +33,10 @@ baleobala doctor
 ## Sign-in and pairing
 
 ```powershell
-baleobala auth bale-login --phone +98912xxxxxxx --method browser --save --no-print-jwt
-baleobala pair enroll --name home-relay --role client
-baleobala pair request-access --profile-id "<profile-id>"
-baleobala pair approve --profile-id "<profile-id>"
+userbot-bale auth bale-login --phone +98912xxxxxxx --method browser --save --no-print-jwt
+userbot-bale pair enroll --name home-relay --role client
+userbot-bale pair request-access --profile-id "<profile-id>"
+userbot-bale pair approve --profile-id "<profile-id>"
 ```
 
 If you are working only on the local Windows proxy backend, pairing is not required when the saved profile backend is `windows-proxy` and you are exercising the direct local path.
@@ -44,7 +44,7 @@ If you are working only on the local Windows proxy backend, pairing is not requi
 ## Start the Windows development backend
 
 ```powershell
-baleobala vpn up
+userbot-bale vpn up
 ```
 
 Expected behavior:
@@ -57,15 +57,15 @@ Expected behavior:
 Check status with:
 
 ```powershell
-baleobala vpn status
+userbot-bale vpn status
 netsh winhttp show proxy
 ```
 
 ## Development notes
 
 - WinHTTP proxy settings affect tools that honor the WinHTTP layer; browser traffic can still depend on app-specific proxy behavior.
-- The backend persists the prior WinHTTP state in the normal `baleobala` config directory and restores it on shutdown.
-- `BALEOBALA_VPN_BACKEND=windows-proxy` can force the Windows backend explicitly if you are moving profiles across machines.
+- The backend persists the prior WinHTTP state in the normal `userbot-bale` config directory and restores it on shutdown.
+- `USERBOT_BALE_VPN_BACKEND=windows-proxy` can force the Windows backend explicitly if you are moving profiles across machines.
 
 ## Verification
 

@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from baleobala.vpn.framing_vpn import (
+from userbot_bale.vpn.framing_vpn import (
     HEADER_SIZE,
     MAGIC,
     SEQ_MODULO,

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# install-launchagent-client.sh — macOS LaunchAgent for baleobala proxy client
+# install-launchagent-client.sh — macOS LaunchAgent for userbot-bale proxy client
 #
 # Installs (or removes) a per-user LaunchAgent that runs
-#   baleobala bale-proxy system ...
+#   userbot-bale bale-proxy system ...
 # as a daemon. The agent:
 #  - Starts automatically at login (RunAtLoad=true)
 #  - Restarts on crash (KeepAlive=true)
@@ -18,42 +18,42 @@
 #   logs      bash scripts/install-launchagent-client.sh --logs
 #
 # Required environment (or pass as arguments):
-#   BALEOBALA_JWT_FILE   — path to local Bale JWT file (e.g. ~/.baleobala/.bale_jwt_client)
-#   BALEOBALA_PSK_FILE   — path to pre-shared key file (e.g. ~/.baleobala/baleobala-vpn.psk)
-#   BALEOBALA_PYTHON     — path to Python interpreter (default: auto-detect .venv)
-#   BALEOBALA_LISTEN_PORT — SOCKS5 listen port (default: 1080)
-#   BALEOBALA_SERVICE     — macOS network service name (default: Wi-Fi)
-#   BALEOBALA_PEER_ID     — Bale user_id of the relay/exit to dial. When set,
+#   USERBOT_BALE_JWT_FILE   — path to local Bale JWT file (e.g. ~/.userbot-bale/.bale_jwt_client)
+#   USERBOT_BALE_PSK_FILE   — path to pre-shared key file (e.g. ~/.userbot-bale/userbot-bale-vpn.psk)
+#   USERBOT_BALE_PYTHON     — path to Python interpreter (default: auto-detect .venv)
+#   USERBOT_BALE_LISTEN_PORT — SOCKS5 listen port (default: 1080)
+#   USERBOT_BALE_SERVICE     — macOS network service name (default: Wi-Fi)
+#   USERBOT_BALE_PEER_ID     — Bale user_id of the relay/exit to dial. When set,
 #                           the agent runs `bale-proxy system --peer-id ...`
 #                           (outbound). When unset, falls back to `--answer`
 #                           (waits for an inbound call). Outbound is the
 #                           common laptop-as-client setup.
-#   BALEOBALA_CHANNELS    — bonded call channels for outbound mode (default: 1)
-#   BALEOBALA_ANSWER_TIMEOUT — seconds to wait in --answer mode (default: 86400)
+#   USERBOT_BALE_CHANNELS    — bonded call channels for outbound mode (default: 1)
+#   USERBOT_BALE_ANSWER_TIMEOUT — seconds to wait in --answer mode (default: 86400)
 #
 set -euo pipefail
 
-LABEL="ai.baleobala.proxy-client"
+LABEL="ai.userbot_bale.proxy-client"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$PLIST_DIR/${LABEL}.plist"
-LOG_DIR="$HOME/Library/Logs/baleobala"
+LOG_DIR="$HOME/Library/Logs/userbot-bale"
 STDOUT_LOG="$LOG_DIR/proxy-client.log"
 STDERR_LOG="$LOG_DIR/proxy-client.err"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON="${BALEOBALA_PYTHON:-}"
-JWT_FILE="${BALEOBALA_JWT_FILE:-}"
-PSK_FILE="${BALEOBALA_PSK_FILE:-}"
-LISTEN_PORT="${BALEOBALA_LISTEN_PORT:-1080}"
-NETWORK_SERVICE="${BALEOBALA_SERVICE:-Wi-Fi}"
-ANSWER_TIMEOUT="${BALEOBALA_ANSWER_TIMEOUT:-86400}"
-WS_NO_VERIFY="${BALEOBALA_WS_NO_VERIFY:-1}"  # set to 0 to enable WS TLS verification
+PYTHON="${USERBOT_BALE_PYTHON:-}"
+JWT_FILE="${USERBOT_BALE_JWT_FILE:-}"
+PSK_FILE="${USERBOT_BALE_PSK_FILE:-}"
+LISTEN_PORT="${USERBOT_BALE_LISTEN_PORT:-1080}"
+NETWORK_SERVICE="${USERBOT_BALE_SERVICE:-Wi-Fi}"
+ANSWER_TIMEOUT="${USERBOT_BALE_ANSWER_TIMEOUT:-86400}"
+WS_NO_VERIFY="${USERBOT_BALE_WS_NO_VERIFY:-1}"  # set to 0 to enable WS TLS verification
 # Outbound dial mode: when set, the agent calls this peer instead of
 # waiting for an incoming Bale call. This is the mode operators use
 # when their relay/exit is on a different account/device.
-PEER_ID="${BALEOBALA_PEER_ID:-}"
-CHANNELS="${BALEOBALA_CHANNELS:-1}"
+PEER_ID="${USERBOT_BALE_PEER_ID:-}"
+CHANNELS="${USERBOT_BALE_CHANNELS:-1}"
 
 ACTION="${1:---install}"
 
@@ -66,9 +66,9 @@ detect_python() {
     if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
         echo "$REPO_ROOT/.venv/bin/python"; return
     fi
-    # 2. baleobala on PATH
+    # 2. userbot-bale on PATH
     local py
-    if py="$(command -v baleobala 2>/dev/null)"; then
+    if py="$(command -v userbot-bale 2>/dev/null)"; then
         # strip the shim and find the interpreter
         local interp
         interp="$(head -1 "$py" | sed 's|^#!||')"
@@ -78,26 +78,26 @@ detect_python() {
     if command -v python3 &>/dev/null; then
         echo "$(command -v python3)"; return
     fi
-    die "Could not find a Python interpreter. Set BALEOBALA_PYTHON."
+    die "Could not find a Python interpreter. Set USERBOT_BALE_PYTHON."
 }
 
 detect_jwt() {
     local candidates=(
-        "$HOME/.baleobala/.bale_jwt_client"
-        "$HOME/.baleobala/bale_jwt.txt"
+        "$HOME/.userbot-bale/.bale_jwt_client"
+        "$HOME/.userbot-bale/bale_jwt.txt"
         "/tmp/bale_jwt_client.txt"
         "/tmp/bale_jwt.txt"
     )
     for f in "${candidates[@]}"; do
         [[ -f "$f" ]] && echo "$f" && return
     done
-    die "Could not find a JWT file. Set BALEOBALA_JWT_FILE or create one of: ${candidates[*]}"
+    die "Could not find a JWT file. Set USERBOT_BALE_JWT_FILE or create one of: ${candidates[*]}"
 }
 
 detect_psk() {
     local candidates=(
-        "$HOME/.baleobala/baleobala-vpn.psk"
-        "$HOME/.baleobala/proxy.psk"
+        "$HOME/.userbot-bale/userbot-bale-vpn.psk"
+        "$HOME/.userbot-bale/proxy.psk"
     )
     for f in "${candidates[@]}"; do
         [[ -f "$f" ]] && echo "$f" && return
@@ -137,7 +137,7 @@ do_install() {
 
     args_xml="        <string>$PYTHON</string>
         <string>-m</string>
-        <string>baleobala.cli</string>
+        <string>userbot_bale.cli</string>
         <string>bale-proxy</string>
         <string>system</string>
         <string>--transport</string>
@@ -160,7 +160,7 @@ ${mode_block}
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- baleobala proxy client LaunchAgent -->
+    <!-- userbot-bale proxy client LaunchAgent -->
     <!-- Generated by install-launchagent-client.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ") -->
     <key>Label</key>
     <string>${LABEL}</string>
@@ -199,7 +199,7 @@ ${args_xml}
 PLIST
 
     echo "==================================================="
-    echo "  baleobala — LaunchAgent install"
+    echo "  userbot-bale — LaunchAgent install"
     echo "==================================================="
     info "Label    : $LABEL"
     info "Plist    : $PLIST_PATH"
@@ -246,7 +246,7 @@ do_uninstall() {
         echo "  Plist removed: $PLIST_PATH"
     fi
     # Restore system proxy (safety net — the Python process should have done this already)
-    local iface="${BALEOBALA_SERVICE:-Wi-Fi}"
+    local iface="${USERBOT_BALE_SERVICE:-Wi-Fi}"
     if networksetup -getsocksfirewallproxy "$iface" 2>/dev/null | grep -q "^Enabled: Yes"; then
         echo "  Disabling SOCKS proxy on $iface (cleanup)..."
         networksetup -setsocksfirewallproxystate "$iface" off 2>/dev/null || true
@@ -266,8 +266,8 @@ do_status() {
         [[ -f "$PLIST_PATH" ]] && echo "  (plist exists but is not loaded)" || echo "  (plist not installed)"
     fi
     echo ""
-    echo "=== System SOCKS proxy (${BALEOBALA_SERVICE:-Wi-Fi}) ==="
-    networksetup -getsocksfirewallproxy "${BALEOBALA_SERVICE:-Wi-Fi}" 2>/dev/null || true
+    echo "=== System SOCKS proxy (${USERBOT_BALE_SERVICE:-Wi-Fi}) ==="
+    networksetup -getsocksfirewallproxy "${USERBOT_BALE_SERVICE:-Wi-Fi}" 2>/dev/null || true
     echo ""
     echo "=== Listener on :${LISTEN_PORT} ==="
     lsof -nP -iTCP:"$LISTEN_PORT" -sTCP:LISTEN 2>/dev/null || echo "  (nothing listening on :$LISTEN_PORT)"
@@ -309,17 +309,17 @@ case "$ACTION" in
         echo "Usage: $0 [--install|--uninstall|--status|--start|--stop|--logs]"
         echo ""
         echo "Environment variables:"
-        echo "  BALEOBALA_JWT_FILE     path to Bale JWT (required for install)"
-        echo "  BALEOBALA_PSK_FILE     path to proxy PSK (optional)"
-        echo "  BALEOBALA_PYTHON       Python interpreter path (default: auto)"
-        echo "  BALEOBALA_LISTEN_PORT  SOCKS5 port (default: 1080)"
-        echo "  BALEOBALA_SERVICE      macOS network service (default: Wi-Fi)"
-        echo "  BALEOBALA_WS_NO_VERIFY 1 = skip WS TLS verify (default: 1)"
-        echo "  BALEOBALA_PEER_ID      relay/exit Bale user_id to dial outbound"
+        echo "  USERBOT_BALE_JWT_FILE     path to Bale JWT (required for install)"
+        echo "  USERBOT_BALE_PSK_FILE     path to proxy PSK (optional)"
+        echo "  USERBOT_BALE_PYTHON       Python interpreter path (default: auto)"
+        echo "  USERBOT_BALE_LISTEN_PORT  SOCKS5 port (default: 1080)"
+        echo "  USERBOT_BALE_SERVICE      macOS network service (default: Wi-Fi)"
+        echo "  USERBOT_BALE_WS_NO_VERIFY 1 = skip WS TLS verify (default: 1)"
+        echo "  USERBOT_BALE_PEER_ID      relay/exit Bale user_id to dial outbound"
         echo "                         (when set, agent uses --peer-id; default"
         echo "                         is --answer / wait for an inbound call)"
-        echo "  BALEOBALA_CHANNELS     bonded call channels (default: 1)"
-        echo "  BALEOBALA_ANSWER_TIMEOUT  seconds to wait in --answer mode"
+        echo "  USERBOT_BALE_CHANNELS     bonded call channels (default: 1)"
+        echo "  USERBOT_BALE_ANSWER_TIMEOUT  seconds to wait in --answer mode"
         echo "                            (default: 86400 = 24h)"
         exit 1
         ;;

@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from baleobala.bale.ws_client import WsClient  # noqa: E402
+from userbot_bale.bale.ws_client import WsClient  # noqa: E402
 
 
 def main() -> int:

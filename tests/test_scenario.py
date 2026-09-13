@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from baleobala.control.scenario import build_proxy_pair_scenario, build_tunnel_pair_scenario
+from userbot_bale.control.scenario import build_proxy_pair_scenario, build_tunnel_pair_scenario
 
 
 def test_build_proxy_pair_scenario_uses_real_cli_commands() -> None:

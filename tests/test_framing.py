@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.framing import (
+from userbot_bale.framing import (
     HEADER_SIZE,
     MAGIC,
     MAX_FRAGMENT_PAYLOAD,

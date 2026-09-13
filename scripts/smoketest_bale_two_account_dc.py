@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from baleobala.bale.live_smoke import main
+from userbot_bale.bale.live_smoke import main
 
 
 if __name__ == "__main__":

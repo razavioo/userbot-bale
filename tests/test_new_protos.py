@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.bale.protos import (
+from userbot_bale.bale.protos import (
     DialogInfo,
     HistoryMessage,
     NEWEST_HISTORY_DATE,
@@ -33,7 +33,7 @@ from baleobala.bale.protos import (
     parse_load_grouped_dialogs_response,
     parse_load_history_response,
 )
-from baleobala.bale.rpc_envelope import _dec_tag, _dec_varint, _enc_len_delim, _enc_tag, _enc_varint
+from userbot_bale.bale.rpc_envelope import _dec_tag, _dec_varint, _enc_len_delim, _enc_tag, _enc_varint
 
 
 # ─────────────────────────────────────────────────────────────────────────────

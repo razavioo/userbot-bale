@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from baleobala.bale.protos import (
+from userbot_bale.bale.protos import (
     OutPeer,
     RequestSendMessage,
     _encode_message_with_text,
 )
-from baleobala.bale.rpc_envelope import _dec_tag, _dec_varint
+from userbot_bale.bale.rpc_envelope import _dec_tag, _dec_varint
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sendmessage_frames.json"
 

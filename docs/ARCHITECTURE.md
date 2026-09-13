@@ -42,11 +42,11 @@ The important rule is that each layer owns one boundary:
 
 Source files:
 
-- `src/baleobala/bale/auth.py`
-- `src/baleobala/bale/ws_client.py`
-- `src/baleobala/bale/api.py`
-- `src/baleobala/userbot/`
-- `src/baleobala/mcp/server.py`
+- `src/userbot-bale/bale/auth.py`
+- `src/userbot-bale/bale/ws_client.py`
+- `src/userbot-bale/bale/api.py`
+- `src/userbot-bale/userbot/`
+- `src/userbot-bale/mcp/server.py`
 
 Responsibilities:
 
@@ -71,10 +71,10 @@ Boundaries:
 
 Source files:
 
-- `src/baleobala/control/service.py`
-- `src/baleobala/control/provisioning.py`
-- `src/baleobala/control/backend.py`
-- `src/baleobala/control/tunnel_service.py`
+- `src/userbot-bale/control/service.py`
+- `src/userbot-bale/control/provisioning.py`
+- `src/userbot-bale/control/backend.py`
+- `src/userbot-bale/control/tunnel_service.py`
 
 Responsibilities:
 
@@ -85,17 +85,17 @@ Responsibilities:
 
 Key interfaces:
 
-- `VpnBackend` in `src/baleobala/control/backend.py`
-- `TunnelService` in `src/baleobala/control/tunnel_service.py`
-- `TunnelBridge` in `src/baleobala/control/tunnel_service.py`
+- `VpnBackend` in `src/userbot-bale/control/backend.py`
+- `TunnelService` in `src/userbot-bale/control/tunnel_service.py`
+- `TunnelBridge` in `src/userbot-bale/control/tunnel_service.py`
 
 ### Carrier Layer
 
 Source files:
 
-- `src/baleobala/carrier/interfaces.py`
-- `src/baleobala/carrier/livekit.py`
-- `src/baleobala/bale/livekit_backend.py`
+- `src/userbot-bale/carrier/interfaces.py`
+- `src/userbot-bale/carrier/livekit.py`
+- `src/userbot-bale/bale/livekit_backend.py`
 
 Responsibilities:
 
@@ -105,18 +105,18 @@ Responsibilities:
 
 Key interface:
 
-- `CarrierSession` in `src/baleobala/carrier/interfaces.py`
+- `CarrierSession` in `src/userbot-bale/carrier/interfaces.py`
 
 ### Transport Layer
 
 Source files:
 
-- `src/baleobala/vpn/transports/__init__.py`
-- `src/baleobala/vpn/transports/datachannel_transport.py`
-- `src/baleobala/vpn/transports/audio_transport.py`
-- `src/baleobala/vpn/transports/video_qr_transport.py`
-- `src/baleobala/vpn/transports/rpc_transport.py`
-- `src/baleobala/vpn/crypto.py`
+- `src/userbot-bale/vpn/transports/__init__.py`
+- `src/userbot-bale/vpn/transports/datachannel_transport.py`
+- `src/userbot-bale/vpn/transports/audio_transport.py`
+- `src/userbot-bale/vpn/transports/video_qr_transport.py`
+- `src/userbot-bale/vpn/transports/rpc_transport.py`
+- `src/userbot-bale/vpn/crypto.py`
 
 Responsibilities:
 
@@ -126,16 +126,16 @@ Responsibilities:
 
 Key interface:
 
-- `Transport` in `src/baleobala/vpn/transports/__init__.py`
+- `Transport` in `src/userbot-bale/vpn/transports/__init__.py`
 
 ### Tunnel Layer
 
 Source files:
 
-- `src/baleobala/vpn/tunnel.py`
-- `src/baleobala/vpn/runner.py`
-- `src/baleobala/vpn/router.py`
-- `src/baleobala/vpn/supervisor.py`
+- `src/userbot-bale/vpn/tunnel.py`
+- `src/userbot-bale/vpn/runner.py`
+- `src/userbot-bale/vpn/router.py`
+- `src/userbot-bale/vpn/supervisor.py`
 
 Responsibilities:
 
@@ -156,8 +156,8 @@ Key runtime objects:
 
 Source files:
 
-- `src/baleobala/vpn/tun.py`
-- platform-specific backend glue under `src/baleobala/control/`
+- `src/userbot-bale/vpn/tun.py`
+- platform-specific backend glue under `src/userbot-bale/control/`
 
 Responsibilities:
 
@@ -169,13 +169,13 @@ Responsibilities:
 
 | Interface | Source | Contract |
 | --- | --- | --- |
-| `Transport` | `src/baleobala/vpn/transports/__init__.py` | Opaque byte frames with `send_bytes`, `recv_bytes`, and `close`. |
-| `CarrierSession` | `src/baleobala/carrier/interfaces.py` | Live carrier session with audio sink/source access and start/stop lifecycle. |
-| `VpnBackend` | `src/baleobala/control/backend.py` | Platform backend with `up`, `down`, `status`, and `probe`. |
-| `TunnelBridge` | `src/baleobala/control/tunnel_service.py` | Minimal bridge used by the packet-tunnel scaffold to exchange bytes with the carrier/runtime. |
-| `TunnelService` | `src/baleobala/control/tunnel_service.py` | IPC-facing service that owns lifecycle and state for the future native extension. |
-| `BaleUserClient` | `src/baleobala/userbot/client.py` | One-account messaging lifecycle, durable inbound events, peer policy, and bounded outbound text. |
-| `BaleMcpService` | `src/baleobala/mcp/server.py` | Stdio MCP tool boundary over the allowlist-gated userbot surface. |
+| `Transport` | `src/userbot-bale/vpn/transports/__init__.py` | Opaque byte frames with `send_bytes`, `recv_bytes`, and `close`. |
+| `CarrierSession` | `src/userbot-bale/carrier/interfaces.py` | Live carrier session with audio sink/source access and start/stop lifecycle. |
+| `VpnBackend` | `src/userbot-bale/control/backend.py` | Platform backend with `up`, `down`, `status`, and `probe`. |
+| `TunnelBridge` | `src/userbot-bale/control/tunnel_service.py` | Minimal bridge used by the packet-tunnel scaffold to exchange bytes with the carrier/runtime. |
+| `TunnelService` | `src/userbot-bale/control/tunnel_service.py` | IPC-facing service that owns lifecycle and state for the future native extension. |
+| `BaleUserClient` | `src/userbot-bale/userbot/client.py` | One-account messaging lifecycle, durable inbound events, peer policy, and bounded outbound text. |
+| `BaleMcpService` | `src/userbot-bale/mcp/server.py` | Stdio MCP tool boundary over the allowlist-gated userbot surface. |
 
 ## Data Boundaries
 
@@ -234,7 +234,7 @@ Relay (mesh exit-node) — one per Bale JWT, all on one VPS
    • MASQUERADEs egress to eth0
 ```
 
-### Relay (`src/baleobala/vpn/relay_handler.py`)
+### Relay (`src/userbot-bale/vpn/relay_handler.py`)
 
 Each relay JWT maps to one `RelayCallHandler` instance shared across all account-indexed listen callbacks. The handler is a state machine with a correlation ID (`cid`, 8-char hex UUID prefix) threaded through every log call for tracing.
 
@@ -249,9 +249,9 @@ Each relay JWT maps to one `RelayCallHandler` instance shared across all account
 ### Metrics and observability
 
 - Relay: `http://127.0.0.1:9201/metrics` and `/healthz`
-- Prometheus counters: `baleobala_relay_calls_total{outcome}` (committed, slot_busy, no_caller_identity, provision_failed, …), `baleobala_relay_evictions_total`, `baleobala_relay_stale_recovery_total`
-- Gauges: `baleobala_relay_sessions_active`, `baleobala_relay_in_use_per_account{account}`, `baleobala_account_active_age_seconds{account}`
-- Log format: `BALEOBALA_LOG_FORMAT=text` (default) or `json` for journald / log aggregators.
+- Prometheus counters: `userbot_bale_relay_calls_total{outcome}` (committed, slot_busy, no_caller_identity, provision_failed, …), `userbot_bale_relay_evictions_total`, `userbot_bale_relay_stale_recovery_total`
+- Gauges: `userbot_bale_relay_sessions_active`, `userbot_bale_relay_in_use_per_account{account}`, `userbot_bale_account_active_age_seconds{account}`
+- Log format: `USERBOT_BALE_LOG_FORMAT=text` (default) or `json` for journald / log aggregators.
 
 ## Operational Notes
 

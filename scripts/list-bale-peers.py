@@ -2,7 +2,7 @@
 """Dump every plausible peer_id Bale pushes to a given JWT session.
 
 Usage:
-    python scripts/list-bale-peers.py --jwt-file ~/.baleobala/client_jwt.txt
+    python scripts/list-bale-peers.py --jwt-file ~/.userbot-bale/client_jwt.txt
     python scripts/list-bale-peers.py --jwt "$BALE_JWT" --seconds 12
 
 Connects to the Bale WS gateway, fires `GhasedakService/GetDiff` to open
@@ -31,8 +31,8 @@ from collections import Counter
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "src"))
 
-from baleobala.bale.rpc_envelope import Response  # noqa: E402
-from baleobala.bale.ws_client import WsClient, WsTlsConfig  # noqa: E402
+from userbot_bale.bale.rpc_envelope import Response  # noqa: E402
+from userbot_bale.bale.ws_client import WsClient, WsTlsConfig  # noqa: E402
 
 
 def _decode_jwt_user_id(jwt: str) -> int | None:

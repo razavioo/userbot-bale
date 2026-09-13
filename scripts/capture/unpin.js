@@ -46,7 +46,7 @@ Java.perform(function () {
         var TM = Java.use('javax.net.ssl.X509TrustManager');
         var SSLContext = Java.use('javax.net.ssl.SSLContext');
         var TrustAll = Java.registerClass({
-            name: 'com.baleobala.TrustAllTM',
+            name: 'com.userbot_bale.TrustAllTM',
             implements: [TM],
             methods: {
                 checkClientTrusted: function () {},

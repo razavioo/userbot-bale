@@ -2,19 +2,19 @@ import Foundation
 
 enum BaleAppGroup {
     static var identifier: String {
-        infoValue("BaleAppGroupIdentifier", fallback: "group.com.baleobala.vpn")
+        infoValue("BaleAppGroupIdentifier", fallback: "group.com.userbot_bale.vpn")
     }
 
     static var keychainService: String {
-        infoValue("BaleKeychainService", fallback: "com.baleobala.vpn")
+        infoValue("BaleKeychainService", fallback: "com.userbot_bale.vpn")
     }
 
-    static let keychainAccount = "baleobala"
+    static let keychainAccount = "userbot-bale"
     static let carrierSocketName = "carrier_tunnel.sock"
     static var providerBundleIdentifier: String {
-        infoValue("BaleProviderBundleIdentifier", fallback: "com.baleobala.app.packet-tunnel")
+        infoValue("BaleProviderBundleIdentifier", fallback: "com.userbot_bale.app.packet-tunnel")
     }
-    static let tunnelDescription = "baleobala packet tunnel"
+    static let tunnelDescription = "userbot-bale packet tunnel"
 
     static func sharedContainerURL() -> URL? {
         if let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) {

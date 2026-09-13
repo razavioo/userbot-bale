@@ -11,5 +11,5 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-os.environ.setdefault("BALEOBALA_SECRET_BACKEND", "file")
-os.environ.setdefault("BALEOBALA_HOME", tempfile.mkdtemp(prefix="baleobala-tests-"))
+os.environ.setdefault("USERBOT_BALE_SECRET_BACKEND", "file")
+os.environ.setdefault("USERBOT_BALE_HOME", tempfile.mkdtemp(prefix="userbot-bale-tests-"))

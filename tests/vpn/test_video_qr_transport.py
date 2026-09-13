@@ -17,7 +17,7 @@ cv2 = pytest.importorskip("cv2")
 qrcode = pytest.importorskip("qrcode")
 np = pytest.importorskip("numpy")
 
-from baleobala.vpn.transports.video_qr_transport import VideoQrTransport
+from userbot_bale.vpn.transports.video_qr_transport import VideoQrTransport
 
 
 class _StubVideoOut:

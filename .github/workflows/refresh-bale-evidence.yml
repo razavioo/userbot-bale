@@ -80,7 +80,7 @@ This PR was opened automatically by the **refresh-bale-evidence** workflow.
 
 ### Review checklist
 - [ ] Check \`BALE_RE_NOTES.md\` for changed proto descriptors or new RPC names.
-- [ ] If any field names or service names changed, update \`src/baleobala/bale/protos.py\` and the decoder accordingly.
+- [ ] If any field names or service names changed, update \`src/userbot_bale/bale/protos.py\` and the decoder accordingly.
 - [ ] Run \`pytest tests/\` to confirm nothing broke.
 EOF
 )" \

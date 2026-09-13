@@ -1,4 +1,4 @@
-# Running baleobala with the Bale Android app (Phase 2)
+# Running userbot-bale with the Bale Android app (Phase 2)
 
 Phase 1 (`docs/BALE_WEB.md`) handles the web client. This page covers
 the Android APK running in Waydroid on the same Linux host.
@@ -7,7 +7,7 @@ the Android APK running in Waydroid on the same Linux host.
 
 Waydroid is a lightweight Android container that uses the host's
 PipeWire for audio. Because it shares the audio graph with the host,
-the same `baleobala virtmic` that already works for web.bale.ai also
+the same `userbot-bale virtmic` that already works for web.bale.ai also
 works for the in-Waydroid Bale app — no root, no modified APK.
 
 If Waydroid refuses to run the APK (e.g. Play Integrity attestation
@@ -33,27 +33,27 @@ waydroid app launch ai.bale.messenger
 Find the package name for `waydroid app launch` with
 `waydroid app list | grep -i bale`.
 
-## Wire baleobala into Waydroid's mic
+## Wire userbot-bale into Waydroid's mic
 
 Waydroid's audio routing honours PulseAudio environment variables.
-After starting the baleobala virtmic on the host, restart Waydroid's
+After starting the userbot-bale virtmic on the host, restart Waydroid's
 session with `PULSE_SOURCE` pointing at it:
 
 ```bash
 # Terminal 1 — host
-baleobala virtmic    # leaves running; virtual source is "baleobala"
+userbot-bale virtmic    # leaves running; virtual source is "userbot-bale"
 
 # Terminal 2 — restart Waydroid session with the virtual mic
 waydroid session stop
-PULSE_SOURCE=baleobala waydroid session start &
+PULSE_SOURCE=userbot-bale waydroid session start &
 ```
 
 In-app, start a Bale call. The app's mic is now fed by the null-sink;
-whatever you play to `baleobala_sink` on the host reaches the peer.
+whatever you play to `userbot_bale_sink` on the host reaches the peer.
 
 ```bash
 # Terminal 3
-baleobala send --device baleobala_sink --text "hello from waydroid"
+userbot-bale send --device userbot_bale_sink --text "hello from waydroid"
 ```
 
 ## Receiving on the Waydroid side
@@ -63,7 +63,7 @@ the host sees as a monitor source. Tap it:
 
 ```bash
 pactl list short sources | grep -i monitor
-baleobala recv --device <the_waydroid_monitor_source>
+userbot-bale recv --device <the_waydroid_monitor_source>
 ```
 
 ## Fallback: real device
@@ -75,11 +75,11 @@ and fail at login. In that case, use a real phone:
 2. Connect via USB + `adb` and mirror with
    `scrcpy --audio=output --audio-source=output`.
 3. On the host, the scrcpy audio shows up as a PulseAudio source named
-   something like `scrcpy-audio`. Point `baleobala recv` at it.
+   something like `scrcpy-audio`. Point `userbot-bale recv` at it.
 4. For the outgoing direction (host → phone mic), Android does not
    expose a virtual-mic API without root or a custom
    `MediaProjection`-based app. The practical fallback is acoustic:
-   hold the phone near a speaker playing the baleobala output. This
+   hold the phone near a speaker playing the userbot-bale output. This
    is the same posture as the Zoom/Meet/WhatsApp flow the main
    README describes and it works for Bale too.
 
@@ -90,10 +90,10 @@ which bypasses both the browser and the Android app.
 
 - **Bale app doesn't see the virtual mic:** Waydroid caches PulseAudio
   info at session start. Stop and restart the session with
-  `PULSE_SOURCE=baleobala` in the environment (above).
+  `PULSE_SOURCE=userbot-bale` in the environment (above).
 - **Audio is one-way:** the app's output is routed to PipeWire but
   isn't auto-visible as a separate monitor. List sources with
   `pactl list short sources` and look for one owned by the Waydroid
-  app — point `baleobala recv --device` at its monitor.
+  app — point `userbot-bale recv --device` at its monitor.
 - **Play Integrity failure:** GApps-certified Waydroid images are
   rare; fall back to the real-device flow above or move to Phase 3.

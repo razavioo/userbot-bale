@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from baleobala.bale.auth_browser import BaleAuthBrowser, _iran_local
+from userbot_bale.bale.auth_browser import BaleAuthBrowser, _iran_local
 
 
 def test_iran_local_normalizes_international_and_local_numbers() -> None:

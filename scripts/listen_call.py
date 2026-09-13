@@ -6,7 +6,7 @@ Workflow:
   2. Leaves the connection open, dumping every server-pushed update.
   3. When the user initiates a call in their browser (web.bale.ai),
      Bale pushes an update containing the LiveKit room URL + token.
-  4. We decode it and print ready-to-use `baleobala bale-call` command.
+  4. We decode it and print ready-to-use `userbot-bale bale-call` command.
 
 Reads JWT from /tmp/bale_jwt.txt or the BALE_JWT env var. Never
 commit the JWT.
@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from baleobala.bale.ws_client import WsClient  # noqa: E402
+from userbot_bale.bale.ws_client import WsClient  # noqa: E402
 
 
 _LIVEKIT_TOKEN_RE = re.compile(rb"eyJhbGciOi[A-Za-z0-9_\-.]+")
@@ -68,10 +68,10 @@ def main() -> int:
             print(f"  url:   {url}")
             print(f"  token: {token[:60]}...")
             print("\nReady-to-run command:")
-            print("  baleobala bale-call send "
+            print("  userbot-bale bale-call send "
                   f"--livekit-url '{url}' "
                   f"--livekit-token '{token}' "
-                  "--text 'hello from baleobala'")
+                  "--text 'hello from userbot_bale'")
             print("=" * 60 + "\n")
         else:
             # Concise trace of every update

@@ -1,6 +1,6 @@
 # VPN over Bale
 
-For the main product experience, start with `baleobala doctor`, sign in with `auth bale-login`, create or accept a relay pairing, then use `vpn up` or `gui`. The lower-level tunnel flows in this document remain important for Linux tunnel validation and recovery, but they are not the primary first-run story.
+For the main product experience, start with `userbot-bale doctor`, sign in with `auth bale-login`, create or accept a relay pairing, then use `vpn up` or `gui`. The lower-level tunnel flows in this document remain important for Linux tunnel validation and recovery, but they are not the primary first-run story.
 
 Run a full Linux IP tunnel over a Bale voice call. One side (client)
 routes traffic from a `tun0` device through Bale to the exit node (a
@@ -19,7 +19,7 @@ the public internet.
 
 - Linux (client and exit node). Kernel `tun` module, iproute2, iptables.
 - Python 3.9+, `pip install -e ".[bale]"` on both ends.
-- Bale accounts on both ends. Obtain a session with `baleobala auth bale-login --phone ... --save`.
+- Bale accounts on both ends. Obtain a session with `userbot-bale auth bale-login --phone ... --save`.
   File-based JWT inputs remain available for relay and automation deployments; protect them with
   mode `0600` and do not print or commit them.
 - On the exit node: know your public interface name (`ip route show default`).
@@ -31,9 +31,9 @@ the TUN, route, DNS, NAT, and Bale carrier bypass setup for tunnel
 scenarios:
 
 ```bash
-baleobala vpn netns-session \
+userbot-bale vpn netns-session \
   --kind tunnel-pair \
-  --server-jwt-file /etc/baleobala/jwt.txt \
+  --server-jwt-file /etc/userbot-bale/jwt.txt \
   --client-jwt-file ~/.bale_jwt \
   --peer-id 123456789 \
   --server-wan eth0 \
@@ -84,8 +84,8 @@ keepalive step.
 ### Exit node side (start first — it needs to answer the call)
 
 ```bash
-baleobala tunnel exit-node \
-  --bale-jwt-file /etc/baleobala/jwt.txt \
+userbot-bale tunnel exit-node \
+  --bale-jwt-file /etc/userbot-bale/jwt.txt \
   --tun vpn0 \
   --wan eth0 \
   --answer
@@ -94,7 +94,7 @@ baleobala tunnel exit-node \
 ### Client side
 
 ```bash
-baleobala tunnel up \
+userbot-bale tunnel up \
   --bale-jwt-file ~/.bale_jwt \
   --peer-id 123456789 \
   --tun vpn0
@@ -122,7 +122,7 @@ sudo ip route add next-ws.bale.ai via "$gw"
 | Flag                | Transport     | MTU    | Rate       | Notes                                           |
 |---------------------|---------------|--------|------------|-------------------------------------------------|
 | `--transport dc`    | DataChannel   | 14 KiB | ~100 KB/s+ | **Default.** Reliable, ordered.                 |
-| `--transport qr`    | Video QR      | 240 B  | ~1 KB/s    | Needs `pip install 'baleobala[vpn-video]'`.     |
+| `--transport qr`    | Video QR      | 240 B  | ~1 KB/s    | Needs `pip install 'userbot-bale[vpn-video]'`.     |
 | `--transport audio` | GGWave audio  | 132 B  | ~16 B/s    | Universal fallback when WebRTC is blocked.      |
 | `--transport rpc`   | Chat messages | 3 KiB  | 1–20 KB/s  | Store-and-forward; works when the call drops.   |
 | `--transport auto`  | Auto-select   | —      | —          | dc → qr → audio → rpc, first to build wins.     |
@@ -136,7 +136,7 @@ preserved across the swap.
 
 The live tunnel now keeps running while the bearer transport changes.
 `SIGUSR1` is the operator trigger: the signal handler in
-`src/baleobala/vpn/cli.py` asks the failover controller for the next
+`src/userbot-bale/vpn/cli.py` asks the failover controller for the next
 candidate in the chain, swaps that transport into the active `Tunnel`,
 and closes the old bearer after the swap succeeds.
 
@@ -155,11 +155,11 @@ call becomes its own per-client tunnel mapped to a unique `/30` inside
 the pool:
 
 ```bash
-baleobala tunnel exit-node-mesh \
-  --bale-jwt-file /etc/baleobala/jwt.txt \
+userbot-bale tunnel exit-node-mesh \
+  --bale-jwt-file /etc/userbot-bale/jwt.txt \
   --tun vpn0 --wan eth0 \
   --pool-cidr 10.77.0.0/16 \
-  --psk-file /etc/baleobala/vpn.psk \
+  --psk-file /etc/userbot-bale/vpn.psk \
   --answer
 ```
 
@@ -175,14 +175,14 @@ while capacity exists. If server JWTs become scarce, the exit node may
 share one server JWT among a bounded number of peers:
 
 ```bash
-baleobala tunnel exit-node-mesh \
-  --bale-jwt-file /etc/baleobala/accounts/server-1.jwt \
-  --bale-jwt-file /etc/baleobala/accounts/server-2.jwt \
-  --bale-jwt-file /etc/baleobala/accounts/server-3.jwt \
+userbot-bale tunnel exit-node-mesh \
+  --bale-jwt-file /etc/userbot-bale/accounts/server-1.jwt \
+  --bale-jwt-file /etc/userbot-bale/accounts/server-2.jwt \
+  --bale-jwt-file /etc/userbot-bale/accounts/server-3.jwt \
   --max-peers-per-server-jwt 4 \
   --tun vpn0 --wan eth0 \
   --pool-cidr 10.77.0.0/16 \
-  --psk-file /etc/baleobala/vpn.psk \
+  --psk-file /etc/userbot-bale/vpn.psk \
   --answer
 ```
 
@@ -198,8 +198,8 @@ above the Bale transport — otherwise the Bale SFU sees plaintext
 VPN frames:
 
 ```bash
-baleobala tunnel up --bale-jwt-file … --peer-id <id> --psk-file ~/.baleo-psk
-baleobala tunnel exit-node --bale-jwt-file … --psk-file /etc/baleobala/vpn.psk
+userbot-bale tunnel up --bale-jwt-file … --peer-id <id> --psk-file ~/.baleo-psk
+userbot-bale tunnel exit-node --bale-jwt-file … --psk-file /etc/userbot-bale/vpn.psk
 ```
 
 ## Authentication
@@ -208,12 +208,12 @@ Bootstrap a JWT for either side with phone-SMS login (live-verified
 against Bale Web's browser/web flow or the older gRPC-Web path):
 
 ```bash
-baleobala auth bale-login --phone +989XXXXXXXXX --method browser --save --no-print-jwt --jwt-out ~/.bale_jwt
+userbot-bale auth bale-login --phone +989XXXXXXXXX --method browser --save --no-print-jwt --jwt-out ~/.bale_jwt
 chmod 0600 ~/.bale_jwt
 ```
 
 `--jwt-out` is an explicit compatibility export for file-based tunnel and relay commands. The
-normal saved session is retained in the configured secret backend. The older `baleobala bale-auth --phone ...` command is still available
+normal saved session is retained in the configured secret backend. The older `userbot-bale bale-auth --phone ...` command is still available
 for backwards compatibility, but `auth bale-login` is the preferred
 entry point because it can force the real browser login path that we
 verified against the GUI flow.
@@ -221,7 +221,7 @@ verified against the GUI flow.
 ## Credential Lifecycle
 
 Relay and device access is backed by short-lived credential epochs in
-`src/baleobala/control/provisioning.py`.
+`src/userbot-bale/control/provisioning.py`.
 
 - `approve_authorization()` ensures there is an active `CredentialEpoch` for the relay.
 - `current_epoch()` returns the live epoch when it has not expired yet.
@@ -238,7 +238,7 @@ infinite token.
 To validate the full live path on one machine with two Bale accounts:
 
 ```bash
-baleobala vpn live-smoke \
+userbot-bale vpn live-smoke \
   --caller-jwt-file ~/.bale_jwt_a \
   --callee-jwt-file ~/.bale_jwt_b \
   --callee-peer-id <callee-user-id> \
@@ -249,7 +249,7 @@ If Bale's WebSocket TLS is being intercepted by a local or corporate
 certificate chain, prefer:
 
 ```bash
-baleobala vpn live-smoke \
+userbot-bale vpn live-smoke \
   --caller-jwt-file ~/.bale_jwt_a \
   --callee-jwt-file ~/.bale_jwt_b \
   --callee-peer-id <callee-user-id> \
@@ -277,6 +277,6 @@ use a CA override instead of disabling TLS verification.
 ## Self-test (no network)
 
 ```bash
-baleobala tunnel loopback --packets 100 --size 1400
-baleobala tunnel loopback --packets 50  --size 1400 --loss 0.2   # ARQ test
+userbot-bale tunnel loopback --packets 100 --size 1400
+userbot-bale tunnel loopback --packets 50  --size 1400 --loss 0.2   # ARQ test
 ```

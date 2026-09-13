@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from baleobala.control.smoke import smoke_backend_status
+from userbot_bale.control.smoke import smoke_backend_status
 
 
 def test_smoke_backend_status_accepts_ready_linux_tun() -> None:
@@ -97,9 +97,9 @@ def test_smoke_backend_status_requires_call_for_android_vpn() -> None:
 
 def test_smoke_vpn_up_down_lifecycle(tmp_path) -> None:
     # A complete local up/down smoke test bridging backend and smoke checks
-    from baleobala.control.linux import LinuxTunBackend, LinuxTunSession, TunPlan
-    from baleobala.control.resolver import NullResolver
-    from baleobala.control.vpn import VpnProfile
+    from userbot_bale.control.linux import LinuxTunBackend, LinuxTunSession, TunPlan
+    from userbot_bale.control.resolver import NullResolver
+    from userbot_bale.control.vpn import VpnProfile
     from tests.test_linux_backend import FakeRunner
 
     runner = FakeRunner(existing_devices=("vpn0",))

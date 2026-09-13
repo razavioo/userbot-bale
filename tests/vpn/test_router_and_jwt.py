@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from baleobala.vpn.jwt_util import (
+from userbot_bale.vpn.jwt_util import (
     JwtExpiredError,
     claims,
     inspect,
@@ -15,7 +15,7 @@ from baleobala.vpn.jwt_util import (
     user_id,
     warn_if_near_expiry,
 )
-from baleobala.vpn.router import FailoverRouter, RouterChoice
+from userbot_bale.vpn.router import FailoverRouter, RouterChoice
 
 
 def _mkjwt(**claims) -> str:

@@ -30,12 +30,12 @@ try:
 except ImportError:
     _HAS = False
 
-from baleobala.codec import Protocol
+from userbot_bale.codec import Protocol
 
 LK_URL = "ws://127.0.0.1:7880"
 LK_KEY = "devkey"
 LK_SECRET = "secret"
-ROOM = "baleobala-e2e"
+ROOM = "userbot-bale-e2e"
 
 
 def _livekit_reachable() -> bool:
@@ -62,9 +62,9 @@ def _mint_token(identity: str) -> str:
 @pytest.mark.skipif(not _HAS, reason="livekit SDK not installed")
 @pytest.mark.skipif(not _livekit_reachable(), reason="no LiveKit dev server")
 def test_livekit_e2e_roundtrip() -> None:
-    from baleobala.bale.livekit_backend import LiveKitSession
-    from baleobala.transmitter import Transmitter
-    from baleobala.receiver import Receiver
+    from userbot_bale.bale.livekit_backend import LiveKitSession
+    from userbot_bale.transmitter import Transmitter
+    from userbot_bale.receiver import Receiver
 
     rx_session = LiveKitSession(
         url=LK_URL, token=_mint_token("rx"), identity="rx",

@@ -1,14 +1,62 @@
 <p align="center">
-  <img src="docs/assets/icon.png" alt="baleobala" width="160" height="160" />
+  <img src="docs/assets/icon.png" alt="userbot-bale" width="160" height="160" />
 </p>
 
-# baleobala
+# userbot-bale
 
-`baleobala` is a Bale integration framework. It provides a call-backed VPN and proxy transport, a durable single-account messaging userbot runtime, and an allowlist-gated MCP server for local AI integrations. The VPN path uses a Bale LiveKit call; the userbot and MCP path use Bale's authenticated WebSocket API.
+`userbot-bale` is a comprehensive Bale integration framework and userbot runtime. It provides a durable single-account messaging userbot, an allowlist-gated Model Context Protocol (MCP) server for local AI integrations, and a call-backed VPN and proxy transport. The userbot and MCP features use Bale's authenticated WebSocket API; the VPN/proxy path uses a Bale LiveKit call.
 
 ---
 
-## Quick Connect (macOS)
+## Features
+
+- **Durable Userbot:** Long-lived messaging automation with SQLite persistence, dialog synchronization, and inbound/outbound rate limiting.
+- **Model Context Protocol (MCP):** Allowlist-controlled MCP server (`account_status`, `list_messages`, `list_dialogs`, `send_text`) for Claude, Cursor, and other AI agents.
+- **Call-Backed VPN & Proxy:** SOCKS5 proxy and system VPN tunneling encapsulated over Bale voice/video calls.
+- **Cross-Platform:** Runs on Linux, macOS, and Windows.
+
+---
+
+## Quick Start (Userbot & MCP)
+
+### 1. Authenticate
+
+Authenticate and save your Bale session into the platform secret store:
+
+```bash
+userbot-bale auth bale-login --phone +98912xxxxxxx --save --no-print-jwt
+userbot-bale auth status
+```
+
+### 2. Allow Peers
+
+Allow numeric Bale user IDs to interact with automation:
+
+```bash
+userbot-bale userbot allow-peer 123456789
+userbot-bale userbot peers
+```
+
+### 3. Run Userbot
+
+```bash
+# Run durable receiver & message logger
+userbot-bale userbot run
+
+# Run with auto-echo plugin (replies only to allowed peers)
+userbot-bale userbot run --echo
+```
+
+### 4. Serve MCP for AI Clients
+
+```bash
+pip install -e ".[mcp]"
+userbot-bale mcp serve
+```
+
+---
+
+## Quick Connect (macOS Proxy)
 
 > **Prerequisite:** The relay service on the VPS must be running (instructions below).
 
@@ -21,7 +69,7 @@ bash scripts/run-proxy-client.sh
 Or if the LaunchAgent is installed (it starts automatically after login):
 
 ```bash
-launchctl start ai.baleobala.proxy-client
+launchctl start ai.userbot_bale.proxy-client
 ```
 
 When the proxy is ready, you will see these messages in the log:
@@ -45,7 +93,7 @@ curl --socks5-hostname 127.0.0.1:1080 https://ifconfig.me
 ### Disconnect
 
 ```bash
-launchctl stop ai.baleobala.proxy-client
+launchctl stop ai.userbot_bale.proxy-client
 ```
 
 Or if running in the foreground: `Ctrl-C`
@@ -96,9 +144,9 @@ pip install -e ".[dev,bale,desktop]"
 ### Install LaunchAgent (Auto-start on login)
 
 ```bash
-BALEOBALA_JWT_FILE=~/.bale_jwt_b \
-BALEOBALA_PSK_FILE=~/.baleobala/baleobala-vpn.psk \
-BALEOBALA_RELAY_PEER_ID=1519372475 \
+USERBOT_BALE_JWT_FILE=~/.bale_jwt_b \
+USERBOT_BALE_PSK_FILE=~/.userbot-bale/userbot-bale-vpn.psk \
+USERBOT_BALE_RELAY_PEER_ID=1519372475 \
 bash scripts/install-launchagent-client.sh --install
 ```
 
@@ -106,44 +154,44 @@ Important Variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `BALEOBALA_JWT_FILE` | `~/.bale_jwt_b` | Client account (Mac) JWT |
-| `BALEOBALA_PSK_FILE` | `~/.baleobala/baleobala-vpn.psk` | Encryption pre-shared key |
-| `BALEOBALA_RELAY_PEER_ID` | `1519372475` | Relay account (VPS) user_id |
-| `BALEOBALA_LISTEN_PORT` | `1080` | Local SOCKS5 port |
-| `BALEOBALA_SERVICE` | `Wi-Fi` | macOS network service name |
+| `USERBOT_BALE_JWT_FILE` | `~/.bale_jwt_b` | Client account (Mac) JWT |
+| `USERBOT_BALE_PSK_FILE` | `~/.userbot-bale/userbot-bale-vpn.psk` | Encryption pre-shared key |
+| `USERBOT_BALE_RELAY_PEER_ID` | `1519372475` | Relay account (VPS) user_id |
+| `USERBOT_BALE_LISTEN_PORT` | `1080` | Local SOCKS5 port |
+| `USERBOT_BALE_SERVICE` | `Wi-Fi` | macOS network service name |
 
 ### Setup Relay on VPS (Ubuntu)
 
 ```bash
 # Run once to install the systemd service
 ssh root@<VPS-IP> bash << 'EOF'
-cat > /etc/systemd/system/baleobala-relay.service << 'SVC'
+cat > /etc/systemd/system/userbot-bale-relay.service << 'SVC'
 [Unit]
-Description=baleobala relay proxy
+Description=userbot-bale relay proxy
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/baleobala-run/project
-ExecStart=/root/baleobala-run/project/.venv/bin/python -u -m baleobala.cli \
+WorkingDirectory=/root/userbot-bale-run/project
+ExecStart=/root/userbot-bale-run/project/.venv/bin/python -u -m userbot_bale.cli \
     bale-proxy relay \
     --transport dc \
-    --bale-jwt-file /root/baleobala-run/.bale_jwt_a \
+    --bale-jwt-file /root/userbot-bale-run/.bale_jwt_a \
     --answer --answer-timeout 86400 \
-    --proxy-secret-file /root/baleobala-run/baleobala-vpn.psk \
+    --proxy-secret-file /root/userbot-bale-run/userbot-bale-vpn.psk \
     --ws-ssl-no-verify
 Restart=always
 RestartSec=10
 SVC
 systemctl daemon-reload
-systemctl enable --now baleobala-relay.service
+systemctl enable --now userbot-bale-relay.service
 EOF
 ```
 
 ```bash
 # Check relay status
-ssh root@<VPS-IP> systemctl status baleobala-relay.service
+ssh root@<VPS-IP> systemctl status userbot-bale-relay.service
 ```
 
 ---
@@ -152,17 +200,17 @@ ssh root@<VPS-IP> systemctl status baleobala-relay.service
 
 ```bash
 # Authentication
-baleobala auth bale-login --phone +98912xxxxxxx --method browser --headful --save --no-print-jwt
-baleobala auth status
+userbot-bale auth bale-login --phone +98912xxxxxxx --method browser --headful --save --no-print-jwt
+userbot-bale auth status
 
 # Userbot and MCP
-baleobala userbot allow-peer 123456789
-baleobala userbot run
+userbot-bale userbot allow-peer 123456789
+userbot-bale userbot run
 pip install -e ".[mcp]"
-baleobala mcp serve
+userbot-bale mcp serve
 
 # Health check
-baleobala doctor
+userbot-bale doctor
 
 # Manual proxy (without LaunchAgent)
 bash scripts/run-proxy-client.sh
@@ -175,7 +223,7 @@ bash scripts/install-launchagent-client.sh --stop
 bash scripts/install-launchagent-client.sh --uninstall
 
 # Two-account smoke test
-baleobala vpn live-smoke \
+userbot-bale vpn live-smoke \
     --caller-jwt-file ~/.bale_jwt_b \
     --callee-jwt-file ~/.bale_jwt_a \
     --callee-peer-id 1519372475
@@ -187,23 +235,23 @@ baleobala vpn live-smoke \
 
 ```bash
 # Server-side relay (manual)
-baleobala bale-proxy relay \
+userbot-bale bale-proxy relay \
     --bale-jwt-file ~/.bale_jwt_a \
     --answer --answer-timeout 86400 \
-    --proxy-secret-file ~/.baleobala/baleobala-vpn.psk \
+    --proxy-secret-file ~/.userbot-bale/userbot-bale-vpn.psk \
     --ws-ssl-no-verify
 
 # Mac client (manual, with system proxy)
-baleobala bale-proxy system \
+userbot-bale bale-proxy system \
     --bale-jwt-file ~/.bale_jwt_b \
     --peer-id 1519372475 \
-    --proxy-secret-file ~/.baleobala/baleobala-vpn.psk \
+    --proxy-secret-file ~/.userbot-bale/userbot-bale-vpn.psk \
     --service Wi-Fi \
     --ws-ssl-no-verify
 
 # Loopback tests
-baleobala loopback "hello" "world"
-baleobala tunnel-loopback
+userbot-bale loopback "hello" "world"
+userbot-bale tunnel-loopback
 ```
 
 ---

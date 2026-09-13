@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from baleobala.vpn.mesh.capacity import FairChannelAllocator, ServerJwtAllocator
+from userbot_bale.vpn.mesh.capacity import FairChannelAllocator, ServerJwtAllocator
 
 
 def test_single_peer_is_capped_below_total_pool():

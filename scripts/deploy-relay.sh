@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Install and configure baleobala on a relay/client node.
+# Install and configure userbot-bale on a relay/client node.
 #
 # Usage:
-#   INSTALL_DIR=/opt/baleobala TUN_IFACE=vpn0 TUN_ADDR=10.77.0.2/24 \
+#   INSTALL_DIR=/opt/userbot-bale TUN_IFACE=vpn0 TUN_ADDR=10.77.0.2/24 \
 #     bash deploy-relay.sh <jwt-file> <exit-peer-id>
 #
 set -euo pipefail
 
 JWT_FILE="${1:-}"
 PEER_ID="${2:-}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/baleobala}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/userbot-bale}"
 TUN_IFACE="${TUN_IFACE:-vpn0}"
 TUN_ADDR="${TUN_ADDR:-10.77.0.2/24}"
 TUN_MTU="${TUN_MTU:-1400}"
@@ -25,7 +25,7 @@ if [[ ! -f "$JWT_FILE" ]]; then
 fi
 
 echo "==================================================="
-echo "  baleobala - Relay Setup"
+echo "  userbot-bale - Relay Setup"
 echo "  Install dir: $INSTALL_DIR"
 echo "  TUN: $TUN_IFACE @ $TUN_ADDR"
 echo "  Peer ID: $PEER_ID"
@@ -48,17 +48,17 @@ source .venv/bin/activate
 pip install -e ".[bale,vpn-video]"
 
 echo "[4/6] Storing JWT..."
-mkdir -p /etc/baleobala
-cp "$JWT_FILE" /etc/baleobala/jwt.txt
-chmod 600 /etc/baleobala/jwt.txt
+mkdir -p /etc/userbot-bale
+cp "$JWT_FILE" /etc/userbot-bale/jwt.txt
+chmod 600 /etc/userbot-bale/jwt.txt
 
-echo "[5/6] Registering JWT in baleobala auth store..."
-baleobala auth login --jwt-file /etc/baleobala/jwt.txt
+echo "[5/6] Registering JWT in userbot-bale auth store..."
+userbot-bale auth login --jwt-file /etc/userbot-bale/jwt.txt
 
 echo "[6/6] Creating TUN device $TUN_IFACE @ $TUN_ADDR..."
 bash scripts/vpn-setup-tun.sh "$TUN_IFACE" "$TUN_ADDR" "$TUN_MTU" "$(id -un)" || true
 
-echo "$PEER_ID" > /etc/baleobala/exit_peer_id.txt
+echo "$PEER_ID" > /etc/userbot-bale/exit_peer_id.txt
 
 echo ""
 echo "OK: relay node ready."

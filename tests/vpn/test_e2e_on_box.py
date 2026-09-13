@@ -18,10 +18,10 @@ import time
 
 import pytest
 
-from baleobala.vpn.crypto import EncryptedTransport, derive_key
-from baleobala.vpn.fake_tun import FakeTun
-from baleobala.vpn.runner import RunnerConfig, VpnRunner
-from baleobala.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.crypto import EncryptedTransport, derive_key
+from userbot_bale.vpn.fake_tun import FakeTun
+from userbot_bale.vpn.runner import RunnerConfig, VpnRunner
+from userbot_bale.vpn.transports import InMemoryTransport
 
 
 def _make_icmp_echo(

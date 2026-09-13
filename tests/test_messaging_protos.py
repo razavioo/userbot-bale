@@ -8,7 +8,7 @@ once someone sniffs a real SendMessage round-trip.
 
 from __future__ import annotations
 
-from baleobala.bale.protos import (
+from userbot_bale.bale.protos import (
     InboundMessage,
     OutPeer,
     RequestSendMessage,
@@ -16,7 +16,7 @@ from baleobala.bale.protos import (
     _parse_update_message,
     find_inbound_messages,
 )
-from baleobala.bale.rpc_envelope import _enc_len_delim, _enc_tag, _enc_varint
+from userbot_bale.bale.rpc_envelope import _enc_len_delim, _enc_tag, _enc_varint
 
 
 def _build_fake_update_message(

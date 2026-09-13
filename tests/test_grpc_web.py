@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from baleobala.bale.grpc_web import (
+from userbot_bale.bale.grpc_web import (
     _pack_frame,
     _unpack_frames,
     extract_access_token,

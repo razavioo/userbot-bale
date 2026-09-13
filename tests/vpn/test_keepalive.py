@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from baleobala.vpn.keepalive import LiveKitKeepalive
+from userbot_bale.vpn.keepalive import LiveKitKeepalive
 
 
 class _TerminalSession:

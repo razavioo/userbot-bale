@@ -1,4 +1,4 @@
-# baleobala Operations Guide
+# userbot-bale Operations Guide
 
 ## Userbot And MCP Operations
 
@@ -6,17 +6,17 @@ The userbot and MCP server are local, single-account messaging integrations. The
 from the relay/VPN topology below and do not expose relay provisioning, proxy control, VPN routing,
 contact import, raw RPCs, or call acceptance.
 
-- Authenticate once with `baleobala auth bale-login --phone ... --save --no-print-jwt`.
-- Add every peer that automation may access with `baleobala userbot allow-peer <peer_id>`.
+- Authenticate once with `userbot-bale auth bale-login --phone ... --save --no-print-jwt`.
+- Add every peer that automation may access with `userbot-bale userbot allow-peer <peer_id>`.
 - Run one messaging worker per account. Do not run the userbot and MCP server as independent
   long-lived workers for the same account if reliable delivery matters; they would maintain separate
   WebSocket sessions and separate process lifecycles.
-- Start MCP only through `baleobala mcp serve` over stdio. It has no network listener and limits
+- Start MCP only through `userbot-bale mcp serve` over stdio. It has no network listener and limits
   dialog/message access and outbound text to the local allowlist.
 - Outbound automation is capped at 20 messages per peer per minute. A failed network send consumes
   a slot deliberately, preventing retry loops from creating a burst.
 
-Userbot state and audit records are stored in `state/userbot.sqlite3` under the Baleobala app
+Userbot state and audit records are stored in `state/userbot.sqlite3` under the UserbotBale app
 directory. JWTs are not stored in that database.
 
 ## Architecture (post-v0.4)
@@ -33,7 +33,7 @@ No coordinator. The deployment is just **one or more relay (mesh exit-node) host
 
 The client app keeps a user-managed list of relay Bale `peer_id`s. To connect, it picks one (shuffled deterministically by the user's own peer_id for fairness), places a Bale StartCall to it, joins the LiveKit room, and runs the PSK handshake. If that fails (relay busy, network blocks the call, PSK mismatch), it falls back to the next peer_id in the list.
 
-No coordinator means: no rendezvous account to saturate, no EXPECT_CLIENT race, no dispatch lock, no relay heartbeats over Bale. The PSK in `/etc/baleobala/vpn.psk` is the only auth — without it the encrypted DataChannel rejects every frame.
+No coordinator means: no rendezvous account to saturate, no EXPECT_CLIENT race, no dispatch lock, no relay heartbeats over Bale. The PSK in `/etc/userbot-bale/vpn.psk` is the only auth — without it the encrypted DataChannel rejects every frame.
 
 ---
 
@@ -71,7 +71,7 @@ python3 scripts/deploy.py --dry-run      # print commands only
 ### Adding a relay
 
 1. Obtain a Bale JWT for the new relay account.
-2. Copy to `/root/.baleobala/accounts/account-N.jwt` on the host.
+2. Copy to `/root/.userbot-bale/accounts/account-N.jwt` on the host.
 3. Add the JWT filename to `inventory.yaml` under the host's `relay_jwts`.
 4. Deploy: `python3 scripts/deploy.py --node <relay-name>`.
 
@@ -94,19 +94,19 @@ Key counters:
 
 | Metric | Description |
 |--------|-------------|
-| `baleobala_relay_calls_total{outcome}` | Incoming Bale calls by outcome (committed, slot_busy, no_caller_identity, provision_failed, ...) |
-| `baleobala_relay_sessions_active` | Current active VPN sessions |
-| `baleobala_livekit_session_starts_total{outcome}` | LiveKit session starts |
-| `baleobala_relay_in_use_per_account{account}` | Sessions per JWT slot |
-| `baleobala_account_active_age_seconds{account}` | Age of the per-account active flag — alert if > 30 s |
+| `userbot_bale_relay_calls_total{outcome}` | Incoming Bale calls by outcome (committed, slot_busy, no_caller_identity, provision_failed, ...) |
+| `userbot_bale_relay_sessions_active` | Current active VPN sessions |
+| `userbot_bale_livekit_session_starts_total{outcome}` | LiveKit session starts |
+| `userbot_bale_relay_in_use_per_account{account}` | Sessions per JWT slot |
+| `userbot_bale_account_active_age_seconds{account}` | Age of the per-account active flag — alert if > 30 s |
 
 ---
 
 ## Logs
 
-Set `BALEOBALA_LOG_FORMAT=json` in the systemd unit for structured logs. Default is `text`.
+Set `USERBOT_BALE_LOG_FORMAT=json` in the systemd unit for structured logs. Default is `text`.
 
-Every inbound call gets an 8-hex correlation ID (`cid=`) logged across its full lifecycle (join → resolve → provision → reap). Trace one call end-to-end with `journalctl -u baleobala-mesh | grep cid=<id>`.
+Every inbound call gets an 8-hex correlation ID (`cid=`) logged across its full lifecycle (join → resolve → provision → reap). Trace one call end-to-end with `journalctl -u userbot-bale-mesh | grep cid=<id>`.
 
 Common patterns:
 
@@ -129,9 +129,9 @@ Likely the busy relay is hosting an in-flight session — `refusing call on acco
 
 ### "Relay accepts calls but no tunnels stay up"
 
-1. Check `baleobala_account_active_age_seconds{account=N}` — if stuck > 30 s, the active flag leaked.
-2. `journalctl -u baleobala-mesh | grep stale-recovery` — the auto-recovery logs when it force-clears.
-3. If persistent, restart: `systemctl restart baleobala-mesh`.
+1. Check `userbot_bale_account_active_age_seconds{account=N}` — if stuck > 30 s, the active flag leaked.
+2. `journalctl -u userbot-bale-mesh | grep stale-recovery` — the auto-recovery logs when it force-clears.
+3. If persistent, restart: `systemctl restart userbot-bale-mesh`.
 
 ### "Call drops after ~30 min"
 
@@ -164,4 +164,4 @@ The Android backoff constants live in `BaleVpnService.kt` (`RECONNECT_BASE_DELAY
 
 ## Version
 
-Single source of truth at `VERSION` in the repo root. Python (`src/baleobala/__init__.py`, `pyproject.toml`) and Android (`build.gradle.kts` via `rootProject.file("../../VERSION")`) both read from it.
+Single source of truth at `VERSION` in the repo root. Python (`src/userbot-bale/__init__.py`, `pyproject.toml`) and Android (`build.gradle.kts` via `rootProject.file("../../VERSION")`) both read from it.

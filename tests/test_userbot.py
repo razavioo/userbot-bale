@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from baleobala.bale.protos import DialogInfo, HistoryMessage, InboundMessage
-from baleobala.mcp.server import BaleMcpService
-from baleobala.userbot.client import BaleUserClient
-from baleobala.userbot.runtime import EchoPlugin, UserbotRuntime
-from baleobala.userbot.store import UserbotStore
+from userbot_bale.bale.protos import DialogInfo, HistoryMessage, InboundMessage
+from userbot_bale.mcp.server import BaleMcpService
+from userbot_bale.userbot.client import BaleUserClient
+from userbot_bale.userbot.runtime import EchoPlugin, UserbotRuntime
+from userbot_bale.userbot.store import UserbotStore
 
 
 class FakeApiClient:
@@ -126,11 +126,11 @@ def test_store_allowlist_and_message_dedup(tmp_path) -> None:
     assert store.is_peer_allowed(42)
     assert store.record_message(
         message_id="in:42:1", peer_id=42, sender_id=42,
-        direction="inbound", text="hello",
+        direction="inbound", text="hello", received_at=1.0,
     )
     assert not store.record_message(
         message_id="in:42:1", peer_id=42, sender_id=42,
-        direction="inbound", text="hello",
+        direction="inbound", text="hello", received_at=1.0,
     )
     message = store.list_messages(42)[0]
     assert message["message_id"] == "in:42:1"

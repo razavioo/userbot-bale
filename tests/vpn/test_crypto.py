@@ -4,9 +4,9 @@ import queue
 
 import pytest
 
-from baleobala.vpn.crypto import OVERHEAD, EncryptedTransport, derive_key
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.vpn.crypto import OVERHEAD, EncryptedTransport, derive_key
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 def test_derive_key_is_deterministic_and_32_bytes():

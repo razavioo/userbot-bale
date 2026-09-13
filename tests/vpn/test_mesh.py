@@ -4,11 +4,11 @@ import queue
 
 import pytest
 
-from baleobala.vpn.mesh.allocator import IpAllocator
-from baleobala.vpn.mesh.router import PacketRouter
-from baleobala.vpn.provisioning import MeshProvisionMessage
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.vpn.mesh.allocator import IpAllocator
+from userbot_bale.vpn.mesh.router import PacketRouter
+from userbot_bale.vpn.provisioning import MeshProvisionMessage
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 def test_allocator_assigns_distinct_slots():

@@ -1,11 +1,11 @@
-"""Argparse + wiring smoke test for `baleobala tunnel exit-node-mesh`."""
+"""Argparse + wiring smoke test for `userbot-bale tunnel exit-node-mesh`."""
 from __future__ import annotations
 
 import argparse
 
 import pytest
 
-from baleobala.cli import build_parser
+from userbot_bale.cli import build_parser
 
 
 def test_exit_node_mesh_subcommand_parses():
@@ -76,10 +76,10 @@ def test_mesh_accepts_peers_via_transport_list():
     dispatched to it."""
     import queue
 
-    from baleobala.vpn.fake_tun import FakeTun
-    from baleobala.vpn.mesh.exit_node import MeshExitNode
-    from baleobala.vpn.mesh.router import PacketRouter
-    from baleobala.vpn.transports import InMemoryTransport
+    from userbot_bale.vpn.fake_tun import FakeTun
+    from userbot_bale.vpn.mesh.exit_node import MeshExitNode
+    from userbot_bale.vpn.mesh.router import PacketRouter
+    from userbot_bale.vpn.transports import InMemoryTransport
 
     tun = FakeTun("mesh0")
     mesh = MeshExitNode(tun, pool_cidr="10.77.0.0/24")
@@ -103,10 +103,10 @@ def test_mesh_accepts_peers_via_transport_list():
 
 
 def test_mesh_can_stage_client_before_activation():
-    from baleobala.vpn.fake_tun import FakeTun
-    from baleobala.vpn.mesh.allocator import Assignment
-    from baleobala.vpn.mesh.exit_node import MeshExitNode
-    from baleobala.vpn.transports import InMemoryTransport
+    from userbot_bale.vpn.fake_tun import FakeTun
+    from userbot_bale.vpn.mesh.allocator import Assignment
+    from userbot_bale.vpn.mesh.exit_node import MeshExitNode
+    from userbot_bale.vpn.transports import InMemoryTransport
 
     tun = FakeTun("mesh0")
     mesh = MeshExitNode(tun, pool_cidr="10.77.0.0/24")
@@ -132,10 +132,10 @@ def test_mesh_can_stage_client_before_activation():
 
 
 def test_client_mesh_provisioning_updates_tun_args(monkeypatch):
-    from baleobala.vpn.cli import _maybe_receive_mesh_provisioning
-    from baleobala.vpn.fake_tun import FakeTun
-    from baleobala.vpn.provisioning import MeshProvisionMessage
-    from baleobala.vpn.transports import InMemoryTransport
+    from userbot_bale.vpn.cli import _maybe_receive_mesh_provisioning
+    from userbot_bale.vpn.fake_tun import FakeTun
+    from userbot_bale.vpn.provisioning import MeshProvisionMessage
+    from userbot_bale.vpn.transports import InMemoryTransport
 
     configured = {}
 
@@ -145,7 +145,7 @@ def test_client_mesh_provisioning_updates_tun_args(monkeypatch):
         configured["mtu"] = mtu
 
     monkeypatch.setattr(
-        "baleobala.vpn.provisioning.configure_tun_interface",
+        "userbot_bale.vpn.provisioning.configure_tun_interface",
         fake_configure,
     )
 

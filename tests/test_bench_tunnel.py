@@ -1,4 +1,4 @@
-"""Unit tests for baleobala.bench.tunnel.
+"""Unit tests for userbot_bale.bench.tunnel.
 
 The echo server and run_bench() are exercised over loopback so these
 tests require no VPN interface and run in < 5 s total.
@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from baleobala.bench.tunnel import _ECHO_MAGIC, _echo_server, run_bench
+from userbot_bale.bench.tunnel import _ECHO_MAGIC, _echo_server, run_bench
 
 
 def _start_echo_server(port: int) -> tuple[socket.socket, threading.Event]:

@@ -17,7 +17,7 @@ import urllib.request
 
 import pytest
 
-from baleobala.runtime import metrics as M
+from userbot_bale.runtime import metrics as M
 
 
 # ---- Primitives --------------------------------------------------------
@@ -212,13 +212,13 @@ def test_unknown_path_returns_404(http_server):
 
 
 def test_relay_state_transitions_increment_counter(monkeypatch):
-    """RelayState.transition() bumps baleobala_relay_active_transitions_total
+    """RelayState.transition() bumps userbot_bale_relay_active_transitions_total
     only on real flips, not on no-op same-value writes."""
-    from baleobala.vpn.relay_state import RelayState
+    from userbot_bale.vpn.relay_state import RelayState
 
     state = RelayState(num_accounts=1, log_stream=__import__("io").StringIO())
     transitions = M.counter(
-        "baleobala_relay_active_transitions_total",
+        "userbot_bale_relay_active_transitions_total",
         "test",
         labelnames=("account", "value", "where"),
     )
@@ -242,12 +242,12 @@ def test_relay_state_transitions_increment_counter(monkeypatch):
 def test_relay_state_active_age_gauge_uses_callback(monkeypatch):
     """The age gauge should resolve via the per-account callback so it
     reflects current time, not last-transition time."""
-    from baleobala.vpn.relay_state import RelayState
+    from userbot_bale.vpn.relay_state import RelayState
 
     clock = {"t": 0.0}
     state = RelayState(num_accounts=1, clock=lambda: clock["t"])
     state.transition(0, True, "test")
     clock["t"] = 12.5
-    g = M.gauge("baleobala_relay_active_flag_age_seconds", "test", labelnames=("account",))
+    g = M.gauge("userbot_bale_relay_active_flag_age_seconds", "test", labelnames=("account",))
     out = g.render()
-    assert 'baleobala_relay_active_flag_age_seconds{account="0"} 12.5' in out
+    assert 'userbot_bale_relay_active_flag_age_seconds{account="0"} 12.5' in out

@@ -1,6 +1,6 @@
 # Userbot And MCP
 
-`baleobala` can run a local, single-account Bale userbot and expose a narrow
+`userbot-bale` can run a local, single-account Bale userbot and expose a narrow
 MCP interface for an AI client. Both use the saved Bale session and the same
 SQLite state database. They do not expose VPN, proxy, call, contact-import, or
 raw RPC operations.
@@ -14,15 +14,15 @@ reliable delivery matters.
 Authenticate and store the account session in the platform secret store:
 
 ```bash
-baleobala auth bale-login --phone +98912xxxxxxx --save --no-print-jwt
+userbot-bale auth bale-login --phone +98912xxxxxxx --save --no-print-jwt
 ```
 
 Allow each peer that may receive automated messages. A peer is a Bale numeric
 user ID, not a phone number.
 
 ```bash
-baleobala userbot allow-peer 123456789
-baleobala userbot peers
+userbot-bale userbot allow-peer 123456789
+userbot-bale userbot peers
 ```
 
 ## Run A Userbot
@@ -31,12 +31,12 @@ The base runtime receives and persists messages. It does not automatically
 reply. The optional echo plugin replies only to peers already on the allowlist.
 
 ```bash
-baleobala userbot run
-baleobala userbot run --echo
+userbot-bale userbot run
+userbot-bale userbot run --echo
 ```
 
 Local message and audit state is saved at `state/userbot.sqlite3` beneath the
-normal Baleobala application directory. JWTs are not stored in this database.
+normal application directory. JWTs are not stored in this database.
 `list_dialogs` reads Bale's current grouped dialog endpoint and falls back to
 conversations that this userbot has actually observed and persisted only when
 the remote endpoint is unavailable. For an approved peer, `list_messages`
@@ -49,19 +49,19 @@ Install the optional SDK, then serve MCP over standard input/output:
 
 ```bash
 pip install -e ".[mcp]"
-baleobala mcp serve
+userbot-bale mcp serve
 ```
 
 The server provides `account_status`, `list_messages`, `list_dialogs`, and
 `send_text`. Messages and dialogs are limited to the local allowlist, and
 `send_text` refuses any peer outside it. Automated sends are also capped at 20
-per peer per minute. Configure your MCP host to launch `baleobala mcp serve`; do
+per peer per minute. Configure your MCP host to launch `userbot-bale mcp serve`; do
 not use a network transport until an authentication boundary is added.
 
 ## Framework API
 
 ```python
-from baleobala.userbot import BaleUserClient, UserbotRuntime, UserbotStore
+from userbot_bale.userbot import BaleUserClient, UserbotRuntime, UserbotStore
 import threading
 
 store = UserbotStore()

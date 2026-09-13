@@ -4,7 +4,7 @@ import threading as real_threading
 
 import pytest
 
-from baleobala.vpn import keepalive
+from userbot_bale.vpn import keepalive
 
 
 class _RecordingSession:

@@ -59,7 +59,7 @@ jobs:
           artifact_root="$RUNNER_TEMP/live-acceptance/proxy-pair"
           mkdir -p "$artifact_root"
           report_file="$artifact_root/report.json"
-          python3 -m baleobala.cli vpn netns-session \
+          python3 -m userbot_bale.cli vpn netns-session \
             --kind proxy-pair \
             --server-jwt-file "$SERVER_JWT_FILE" \
             --client-jwt-file "$CLIENT_JWT_FILE" \
@@ -93,7 +93,7 @@ jobs:
             exit 1
           fi
           analysis_file="$(dirname "$bundle_dir")/analysis.json"
-          python3 -m baleobala.cli vpn analyze-bundle "$bundle_dir" --json > "$analysis_file"
+          python3 -m userbot_bale.cli vpn analyze-bundle "$bundle_dir" --json > "$analysis_file"
           python3 -c 'import json, os, sys; session_rc = int(os.environ["SESSION_RC"]); payload = json.load(open(sys.argv[1], encoding="utf-8")); classification = payload.get("classification"); bundle = sys.argv[2]; sys.exit(f"proxy-pair session failed with exit code {session_rc}") if session_rc != 0 else None; sys.exit(f"proxy-pair bundle classified as {classification!r} at {bundle}") if classification != "accepted_flow" else None' "$analysis_file" "$bundle_dir"
 
       - name: Run tunnel-pair acceptance
@@ -107,7 +107,7 @@ jobs:
           artifact_root="$RUNNER_TEMP/live-acceptance/tunnel-pair"
           mkdir -p "$artifact_root"
           report_file="$artifact_root/report.json"
-          python3 -m baleobala.cli vpn netns-session \
+          python3 -m userbot_bale.cli vpn netns-session \
             --kind tunnel-pair \
             --server-jwt-file "$SERVER_JWT_FILE" \
             --client-jwt-file "$CLIENT_JWT_FILE" \
@@ -142,5 +142,5 @@ jobs:
             exit 1
           fi
           analysis_file="$(dirname "$bundle_dir")/analysis.json"
-          python3 -m baleobala.cli vpn analyze-bundle "$bundle_dir" --json > "$analysis_file"
+          python3 -m userbot_bale.cli vpn analyze-bundle "$bundle_dir" --json > "$analysis_file"
           python3 -c 'import json, os, sys; session_rc = int(os.environ["SESSION_RC"]); payload = json.load(open(sys.argv[1], encoding="utf-8")); classification = payload.get("classification"); bundle = sys.argv[2]; sys.exit(f"tunnel-pair session failed with exit code {session_rc}") if session_rc != 0 else None; sys.exit(f"tunnel-pair bundle classified as {classification!r} at {bundle}") if classification != "accepted_flow" else None' "$analysis_file" "$bundle_dir"

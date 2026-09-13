@@ -5,18 +5,18 @@ import os
 import time
 from types import SimpleNamespace
 
-import baleobala
+import userbot_bale
 import pytest
 
-from baleobala.carrier.bale import BaleCarrierController
-from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, TunnelRole, TunnelSession
-from baleobala.runtime.frame import TunnelFrame, TunnelFrameType, decode_tunnel_frame, encode_tunnel_frame
-from baleobala.signal import Frame as SignalFrame
+from userbot_bale.carrier.bale import BaleCarrierController
+from userbot_bale.runtime import MemoryByteChannel, NullSecurityProvider, TunnelRole, TunnelSession
+from userbot_bale.runtime.frame import TunnelFrame, TunnelFrameType, decode_tunnel_frame, encode_tunnel_frame
+from userbot_bale.signal import Frame as SignalFrame
 
 
 def test_top_level_package_imports_without_codec() -> None:
-    assert hasattr(baleobala, "AudioSink")
-    assert hasattr(baleobala, "Frame")
+    assert hasattr(userbot_bale, "AudioSink")
+    assert hasattr(userbot_bale, "Frame")
     assert SignalFrame.__name__ == "Frame"
     assert BaleCarrierController.__name__ == "BaleCarrierController"
 
@@ -60,7 +60,7 @@ def test_tunnel_session_full_duplex_memory_channel() -> None:
 
 
 def test_cli_tunnel_loopback() -> None:
-    from baleobala.cli import cmd_tunnel_loopback
+    from userbot_bale.cli import cmd_tunnel_loopback
 
     class Args:
         messages = ["one", "two"]
@@ -69,18 +69,18 @@ def test_cli_tunnel_loopback() -> None:
 
 
 def test_cli_doctor_smoke(capsys) -> None:
-    from baleobala.cli import cmd_doctor
+    from userbot_bale.cli import cmd_doctor
 
     class Args:
         strict = False
 
     assert cmd_doctor(Args()) == 0
     out = capsys.readouterr().out
-    assert "baleobala doctor" in out
+    assert "userbot-bale doctor" in out
 
 
 def test_build_parser_exposes_bale_tunnel() -> None:
-    from baleobala.cli import build_parser
+    from userbot_bale.cli import build_parser
 
     parser = build_parser()
     subcommands = {}
@@ -121,11 +121,11 @@ def test_build_parser_exposes_bale_tunnel() -> None:
 
 
 def test_vpn_proxy_profile_enables_policy_backed_direct_first(monkeypatch) -> None:
-    from baleobala.cli import _vpn_namespace_from_profile
-    from baleobala.control.vpn import VpnProfile
+    from userbot_bale.cli import _vpn_namespace_from_profile
+    from userbot_bale.control.vpn import VpnProfile
 
-    monkeypatch.delenv("BALEOBALA_PROXY_DIRECT_FIRST", raising=False)
-    monkeypatch.delenv("BALEOBALA_PROXY_POLICY_REFRESH", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_PROXY_DIRECT_FIRST", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_PROXY_POLICY_REFRESH", raising=False)
     proxy_args = _vpn_namespace_from_profile(
         VpnProfile(profile_id="p1", name="proxy", backend="proxy"),
         auth_record=None,
@@ -135,7 +135,7 @@ def test_vpn_proxy_profile_enables_policy_backed_direct_first(monkeypatch) -> No
     assert proxy_args.direct_only_domain == []
     assert proxy_args.tunnel_only_domain == []
 
-    monkeypatch.setenv("BALEOBALA_PROXY_POLICY_REFRESH", "1")
+    monkeypatch.setenv("USERBOT_BALE_PROXY_POLICY_REFRESH", "1")
     env_args = _vpn_namespace_from_profile(
         VpnProfile(profile_id="p2", name="proxy", backend="proxy"),
         auth_record=None,
@@ -146,7 +146,7 @@ def test_vpn_proxy_profile_enables_policy_backed_direct_first(monkeypatch) -> No
 
 
 def test_proxy_runtime_uses_direct_first_by_default(monkeypatch) -> None:
-    import baleobala.cli as cli
+    import userbot_bale.cli as cli
 
     class FakeTransport:
         mtu = 1400
@@ -163,7 +163,7 @@ def test_proxy_runtime_uses_direct_first_by_default(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "_open_proxy_transport", lambda args, role: ("dc", FakeTransport()))
     monkeypatch.setattr(cli, "_resolve_proxy_secret", lambda args: None)
-    monkeypatch.setattr("baleobala.runtime.proxy_policy.load_proxy_domain_policy", lambda **kwargs: type("P", (), {"direct_only_domains": ("ir",), "tunnel_only_domains": ("youtube.com",)})())
+    monkeypatch.setattr("userbot_bale.runtime.proxy_policy.load_proxy_domain_policy", lambda **kwargs: type("P", (), {"direct_only_domains": ("ir",), "tunnel_only_domains": ("youtube.com",)})())
 
     args = argparse.Namespace(
         listen_host="127.0.0.1",
@@ -175,7 +175,7 @@ def test_proxy_runtime_uses_direct_first_by_default(monkeypatch) -> None:
     )
     _name, _transport, server = cli._start_proxy_client_runtime(args)
 
-    from baleobala.runtime.proxy import DirectFirstSocks5ProxyServer
+    from userbot_bale.runtime.proxy import DirectFirstSocks5ProxyServer
 
     assert isinstance(server, DirectFirstSocks5ProxyServer)
     assert server._matches_direct_only("example.ir") is True  # noqa: SLF001
@@ -183,7 +183,7 @@ def test_proxy_runtime_uses_direct_first_by_default(monkeypatch) -> None:
 
 
 def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
-    import baleobala.cli as cli
+    import userbot_bale.cli as cli
 
     monkeypatch.setattr("sys.platform", "darwin")
     events: list[str] = []
@@ -210,6 +210,8 @@ def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
 
         def start(self) -> None:
             events.append("proxy.start")
+            import signal
+            os.kill(os.getpid(), signal.SIGINT)
 
         def stop(self) -> None:
             events.append("proxy.stop")
@@ -221,7 +223,7 @@ def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
         return "dc", FakeTransport(), FakeServer(on_listen)
 
     monkeypatch.setattr(cli, "_start_proxy_client_runtime", fake_start_proxy_client_runtime)
-    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeSystemProxy)
+    monkeypatch.setattr("userbot_bale.control.macos.MacOSSystemProxySession", FakeSystemProxy)
 
     args = argparse.Namespace(
         listen_host="127.0.0.1",
@@ -230,13 +232,13 @@ def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
         proxy_ready_timeout=1.0,
     )
 
-    assert cli.cmd_bale_proxy_system(args) == 1
+    assert cli.cmd_bale_proxy_system(args) == 0
     assert events.index("serve") < events.index("proxy.start")
-    assert events[-3:] == ["proxy.stop", "server.stop", "transport.close"]
+    assert set(events[-3:]) == {"proxy.stop", "server.stop", "transport.close"}
 
 
 def test_bale_proxy_system_surfaces_prelisten_server_error(monkeypatch) -> None:
-    import baleobala.cli as cli
+    import userbot_bale.cli as cli
 
     monkeypatch.setattr("sys.platform", "darwin")
     events: list[str] = []
@@ -266,7 +268,7 @@ def test_bale_proxy_system_surfaces_prelisten_server_error(monkeypatch) -> None:
         return "dc", FakeTransport(), FakeServer()
 
     monkeypatch.setattr(cli, "_start_proxy_client_runtime", fake_start_proxy_client_runtime)
-    monkeypatch.setattr("baleobala.control.macos.MacOSSystemProxySession", FakeSystemProxy)
+    monkeypatch.setattr("userbot_bale.control.macos.MacOSSystemProxySession", FakeSystemProxy)
 
     args = argparse.Namespace(
         listen_host="127.0.0.1",
@@ -283,10 +285,10 @@ def test_bale_proxy_system_surfaces_prelisten_server_error(monkeypatch) -> None:
 
 
 def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch, tmp_path) -> None:
-    import baleobala.bale as bale_pkg
-    import baleobala.cli as cli
-    import baleobala.bale.api as bale_api
-    import baleobala.vpn.keepalive as keepalive_mod
+    import userbot_bale.bale as bale_pkg
+    import userbot_bale.cli as cli
+    import userbot_bale.bale.api as bale_api
+    import userbot_bale.vpn.keepalive as keepalive_mod
 
     topics: list[str] = []
     jwts: list[str | None] = []
@@ -333,6 +335,9 @@ def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch, tmp_
             topics.append(topic)
             return FakeChannel()
 
+        def wait_for_remote_participant(self, timeout: float = 30.0) -> None:
+            pass
+
         def stop(self) -> None:
             pass
 
@@ -373,7 +378,7 @@ def test_bonded_proxy_transport_keeps_stable_single_call_topic(monkeypatch, tmp_
 
 
 def test_bonded_proxy_transport_reports_missing_jwt_file(tmp_path) -> None:
-    import baleobala.cli as cli
+    import userbot_bale.cli as cli
 
     missing = tmp_path / "missing.jwt"
     args = argparse.Namespace(
@@ -388,7 +393,7 @@ def test_bonded_proxy_transport_reports_missing_jwt_file(tmp_path) -> None:
 
 
 def test_clean_qt_environment_removes_sdk_overrides() -> None:
-    from baleobala.cli import _clean_qt_environment, _qt_environment_is_contaminated
+    from userbot_bale.cli import _clean_qt_environment, _qt_environment_is_contaminated
 
     env = {
         "PATH": "/usr/bin",

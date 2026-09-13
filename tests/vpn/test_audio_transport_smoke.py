@@ -12,8 +12,8 @@ import pytest
 
 pytest.importorskip("ggwave")
 
-from baleobala.backends.memory import MemorySink, MemorySource
-from baleobala.vpn.transports.audio_transport import AudioTransport
+from userbot_bale.backends.memory import MemorySink, MemorySource
+from userbot_bale.vpn.transports.audio_transport import AudioTransport
 
 
 class _StubSession:

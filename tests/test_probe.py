@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 
-from baleobala.control.probe import probe_endpoint
+from userbot_bale.control.probe import probe_endpoint
 
 
 def test_probe_endpoint_connects_to_tcp_listener() -> None:

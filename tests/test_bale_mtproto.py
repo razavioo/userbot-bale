@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from baleobala.bale.mtproto import Frame, MtpRpcClient, PlainSessionCodec, read_frame
-from baleobala.bale.mtproto.framing import MAX_FRAME_LEN, write_frame
+from userbot_bale.bale.mtproto import Frame, MtpRpcClient, PlainSessionCodec, read_frame
+from userbot_bale.bale.mtproto.framing import MAX_FRAME_LEN, write_frame
 
 
 class _ScriptedStream:

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from baleobala.bale import livekit_backend as lk
+from userbot_bale.bale import livekit_backend as lk
 
 
 class _FakeTrackKind:

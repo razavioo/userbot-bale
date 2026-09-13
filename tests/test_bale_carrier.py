@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import threading
 
-from baleobala.bale.protos import IncomingCallEvent
-from baleobala.carrier.bale import BaleCarrierController
+from userbot_bale.bale.protos import IncomingCallEvent
+from userbot_bale.carrier.bale import BaleCarrierController
 
 
 class _FakeCreds:

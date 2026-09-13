@@ -3,9 +3,9 @@ from __future__ import annotations
 import queue
 import time
 
-from baleobala.vpn.router import FailoverController, TransportPool, RouterChoice
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.vpn.router import FailoverController, TransportPool, RouterChoice
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 class _DummyRunner:

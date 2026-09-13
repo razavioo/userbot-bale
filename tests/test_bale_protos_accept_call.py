@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from baleobala.bale.protos import encode_accept_call, parse_incoming_call_offer
+from userbot_bale.bale.protos import encode_accept_call, parse_incoming_call_offer
 
 
 def test_encode_accept_call_is_unwrapped() -> None:

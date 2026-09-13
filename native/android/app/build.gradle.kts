@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.baleobala.vpn"
+    namespace = "com.userbot_bale.vpn"
     compileSdk = 35
 
     signingConfigs {
@@ -13,7 +13,7 @@ android {
             // Local release builds: set these in ~/.gradle/gradle.properties or local.properties.
             val keyStorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: ""
             val keyStorePass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
-            val keyAlias    = System.getenv("ANDROID_KEY_ALIAS") ?: "baleobala"
+            val keyAlias    = System.getenv("ANDROID_KEY_ALIAS") ?: "userbot-bale"
             val keyPass     = System.getenv("ANDROID_KEY_PASSWORD") ?: keyStorePass
             if (keyStorePath.isNotEmpty()) {
                 storeFile = file(keyStorePath)
@@ -25,7 +25,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.baleobala.vpn"
+        applicationId = "com.userbot_bale.vpn"
         minSdk = 29
         targetSdk = 35
         versionCode = 4

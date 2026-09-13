@@ -1,0 +1,26 @@
+[Unit]
+Description=userbot-bale relay proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/userbot-bale-run/project
+ExecStart=/root/userbot-bale-run/project/.venv/bin/python -u -m userbot_bale.cli bale-proxy relay \
+    --transport dc \
+    --channels 8 \
+    --bale-jwt-file /root/userbot-bale-run/.bale_jwt_a \
+    --answer \
+    --answer-timeout 86400 \
+    --proxy-secret-file /root/userbot-bale-run/userbot-bale-vpn.psk \
+    --ws-ssl-no-verify
+Restart=always
+RestartSec=10
+StandardOutput=append:/tmp/userbot-bale-relay.log
+StandardError=append:/tmp/userbot-bale-relay.log
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

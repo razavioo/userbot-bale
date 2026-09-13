@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from baleobala.bale import LiveKitSession
-from baleobala.control import linux as linux_mod
+from userbot_bale.bale import LiveKitSession
+from userbot_bale.control import linux as linux_mod
 
 
 class _FakeResolver:
@@ -102,15 +102,15 @@ def test_livekit_session_carrier_hosts_include_sfu_hostname() -> None:
 
 def test_linux_tunnel_runtime_programs_carrier_bypass_hosts(monkeypatch, tmp_path) -> None:
     _FakeResolver.instances = []
-    monkeypatch.setattr("baleobala.cli._resolve_livekit_credentials", lambda args: ("wss://sfu.example.org/room", "token"))
-    monkeypatch.setattr("baleobala.bale.LiveKitSession", _FakeSession)
-    monkeypatch.setattr("baleobala.control.resolver.LinuxResolver", _FakeResolver)
-    monkeypatch.setattr("baleobala.vpn.tun.TunDevice.open", lambda name: _FakeTun())
-    monkeypatch.setattr("baleobala.vpn.keepalive.LiveKitKeepalive", _FakeKeepalive)
-    monkeypatch.setattr("baleobala.vpn.cli._build_transport_chain", lambda transport, session, args: _FakeChain())
-    monkeypatch.setattr("baleobala.vpn.cli._safe_mtu", lambda factory, precomputed=None: 1400)
-    monkeypatch.setattr("baleobala.vpn.runner.VpnRunner", _FakeRunner)
-    monkeypatch.setattr("baleobala.vpn.router.FailoverController", _FakeController)
+    monkeypatch.setattr("userbot_bale.cli._resolve_livekit_credentials", lambda args: ("wss://sfu.example.org/room", "token"))
+    monkeypatch.setattr("userbot_bale.bale.LiveKitSession", _FakeSession)
+    monkeypatch.setattr("userbot_bale.control.resolver.LinuxResolver", _FakeResolver)
+    monkeypatch.setattr("userbot_bale.vpn.tun.TunDevice.open", lambda name: _FakeTun())
+    monkeypatch.setattr("userbot_bale.vpn.keepalive.LiveKitKeepalive", _FakeKeepalive)
+    monkeypatch.setattr("userbot_bale.vpn.cli._build_transport_chain", lambda transport, session, args: _FakeChain())
+    monkeypatch.setattr("userbot_bale.vpn.cli._safe_mtu", lambda factory, precomputed=None: 1400)
+    monkeypatch.setattr("userbot_bale.vpn.runner.VpnRunner", _FakeRunner)
+    monkeypatch.setattr("userbot_bale.vpn.router.FailoverController", _FakeController)
 
     runtime = linux_mod.LinuxTunnelRuntime(state_store=linux_mod.JsonStore(tmp_path / "runtime.json"))
     runtime.set_tun_session(SimpleNamespace(tun=lambda: _FakeTun(), status=lambda: {"tun": "vpn0"}))

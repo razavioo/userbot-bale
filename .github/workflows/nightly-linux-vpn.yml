@@ -41,7 +41,7 @@ jobs:
           PEER_ID: ${{ secrets.PEER_ID }}
           PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
         run: |
-          python3 -m baleobala.cli vpn netns-session \
+          python3 -m userbot_bale.cli vpn netns-session \
             --kind proxy-pair \
             --server-jwt-file "$SERVER_JWT_FILE" \
             --client-jwt-file "$CLIENT_JWT_FILE" \
@@ -60,7 +60,7 @@ jobs:
           CLIENT_JWT_FILE: ${{ secrets.CLIENT_JWT_FILE }}
           PEER_ID: ${{ secrets.PEER_ID }}
         run: |
-          python3 -m baleobala.cli vpn netns-session \
+          python3 -m userbot_bale.cli vpn netns-session \
             --kind tunnel-pair \
             --server-jwt-file "$SERVER_JWT_FILE" \
             --client-jwt-file "$CLIENT_JWT_FILE" \

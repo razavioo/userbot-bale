@@ -105,7 +105,7 @@ def test_cid_propagates_into_relay_state_audit_log_only_when_supplied():
     original line format unchanged (preserves existing journalctl
     greps); called *with* cid must append ` cid=<id>`."""
     import io
-    from baleobala.vpn.relay_state import RelayState
+    from userbot_bale.vpn.relay_state import RelayState
 
     log = io.StringIO()
     state = RelayState(num_accounts=1, log_stream=log)

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_HOST="${BALEOBALA_PROXY_HOST:-68.183.118.171}"
-REMOTE_USER="${BALEOBALA_PROXY_USER:-root}"
-LOCAL_HOST="${BALEOBALA_PROXY_LOCAL_HOST:-127.0.0.1}"
-LOCAL_PORT="${BALEOBALA_PROXY_LOCAL_PORT:-1080}"
-PROFILE_DIR="${BALEOBALA_CHROME_PROFILE:-$HOME/Library/Application Support/baleobala-proxy-chrome}"
-LOG_DIR="${BALEOBALA_PROXY_LOG_DIR:-$HOME/Library/Logs/baleobala}"
+REMOTE_HOST="${USERBOT_BALE_PROXY_HOST:-68.183.118.171}"
+REMOTE_USER="${USERBOT_BALE_PROXY_USER:-root}"
+LOCAL_HOST="${USERBOT_BALE_PROXY_LOCAL_HOST:-127.0.0.1}"
+LOCAL_PORT="${USERBOT_BALE_PROXY_LOCAL_PORT:-1080}"
+PROFILE_DIR="${USERBOT_BALE_CHROME_PROFILE:-$HOME/Library/Application Support/userbot-bale-proxy-chrome}"
+LOG_DIR="${USERBOT_BALE_PROXY_LOG_DIR:-$HOME/Library/Logs/userbot-bale}"
 LOG_FILE="$LOG_DIR/foreign-browser-proxy.log"
 PID_FILE="$LOG_DIR/foreign-browser-proxy.pid"
 START_URL="${1:-https://web.bale.ai}"
@@ -52,7 +52,7 @@ else
   PID="$(proxy_pid)"
   if ! is_our_proxy "$PID"; then
     echo "Port $LOCAL_HOST:$LOCAL_PORT is already in use by a different process." >&2
-    echo "Choose another port with BALEOBALA_PROXY_LOCAL_PORT=1081 or stop that process first." >&2
+    echo "Choose another port with USERBOT_BALE_PROXY_LOCAL_PORT=1081 or stop that process first." >&2
     exit 1
   fi
   echo "$PID" > "$PID_FILE"

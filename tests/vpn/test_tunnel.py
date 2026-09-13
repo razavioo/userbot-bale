@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from baleobala.vpn.framing_vpn import VpnFlag, VpnFrame
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.vpn.framing_vpn import VpnFlag, VpnFrame
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ def test_arq_recovers_from_loss():
 
 def test_orphan_split_packet_is_gc_after_ttl():
     """SPLIT fragment without LAST must not leak reassembly state forever."""
-    from baleobala.vpn.framing_vpn import VpnFlag, VpnFrame
+    from userbot_bale.vpn.framing_vpn import VpnFlag, VpnFrame
 
     a_tx, b_tx = InMemoryTransport.pair(mtu=200)
     b = Tunnel(

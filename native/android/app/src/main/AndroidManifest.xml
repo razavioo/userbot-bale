@@ -17,9 +17,9 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="Baleobala VPN"
+        android:label="UserbotBale VPN"
         android:supportsRtl="true"
-        android:theme="@style/Theme.BaleobalaVpn">
+        android:theme="@style/Theme.UserbotBaleVpn">
 
         <activity
             android:name=".MainActivity"

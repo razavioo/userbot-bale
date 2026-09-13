@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Baleobala VPN</string>
+    <string name="app_name">UserbotBale VPN</string>
     <string name="connect">Turn VPN On</string>
     <string name="disconnect">Turn VPN Off</string>
     <string name="status_disconnected">VPN is off</string>
     <string name="status_connecting">Connecting secure tunnel…</string>
     <string name="status_connected">VPN is on</string>
-    <string name="vpn_channel_name">Baleobala VPN</string>
-    <string name="dashboard_title">Baleobala</string>
+    <string name="vpn_channel_name">UserbotBale VPN</string>
+    <string name="dashboard_title">UserbotBale</string>
     <string name="dashboard_subtitle">One tap secure tunnel for Android</string>
     <string name="dashboard_pill_connected">Protected</string>
     <string name="dashboard_pill_disconnected">Off</string>
@@ -82,7 +82,7 @@
     <string name="cd_toggle_busy">VPN is changing state</string>
 
     <string name="notif_action_disconnect">Disconnect</string>
-    <string name="notif_text_idle">Tap to open Baleobala</string>
+    <string name="notif_text_idle">Tap to open UserbotBale</string>
     <string name="notif_text_connecting">Bringing up secure tunnel…</string>
     <string name="notif_text_connected_fmt">Up %1$s · ↓%2$s ↑%3$s</string>
     <string name="notif_text_failed">Tap to retry</string>

@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 
 def test_app_control_status_has_native_app_shape(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control.app_control import AppControlBridge
+    from userbot_bale.control.app_control import AppControlBridge
 
     result = AppControlBridge().handle({"command": "status", "payload": {}})
 
@@ -22,12 +22,12 @@ def test_app_control_status_has_native_app_shape(tmp_path, monkeypatch) -> None:
 
 
 def test_app_control_saves_network_policy_and_feeds_packet_tunnel(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control.app_control import AppControlBridge, load_network_policy
-    from baleobala.control.macos import packet_tunnel_configuration
-    from baleobala.control.vpn import VpnProfile
+    from userbot_bale.control.app_control import AppControlBridge, load_network_policy
+    from userbot_bale.control.macos import packet_tunnel_configuration
+    from userbot_bale.control.vpn import VpnProfile
 
     bridge = AppControlBridge()
     result = bridge.handle(
@@ -51,7 +51,7 @@ def test_app_control_saves_network_policy_and_feeds_packet_tunnel(tmp_path, monk
     assert policy.allow_lan is False
     assert policy.custom_dns_servers == ["10.10.10.10"]
 
-    payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="baleobala"))
+    payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="userbot-bale"))
     assert payload["tunnelIPv4Address"] == "10.77.0.2"
     assert payload["includedIPv4Routes"] == ["0.0.0.0/0"]
     assert payload["includedIPv6Routes"] == []
@@ -64,10 +64,10 @@ def test_app_control_saves_network_policy_and_feeds_packet_tunnel(tmp_path, monk
 
 
 def test_app_control_rejects_invalid_or_unavailable_network_policy(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control.app_control import AppControlBridge
+    from userbot_bale.control.app_control import AppControlBridge
 
     bridge = AppControlBridge()
     invalid_ip = bridge.handle(
@@ -98,10 +98,10 @@ def test_app_control_rejects_invalid_or_unavailable_network_policy(tmp_path, mon
 
 
 def test_app_control_pair_command_creates_relay_summary(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control.app_control import AppControlBridge
+    from userbot_bale.control.app_control import AppControlBridge
 
     bridge = AppControlBridge()
     result = bridge.handle(
@@ -125,10 +125,10 @@ def test_app_control_pair_command_creates_relay_summary(tmp_path, monkeypatch) -
 
 
 def test_app_control_auth_flow_survives_one_shot_helper_processes(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control.app_control import AppControlBridge, auth_flow_path
+    from userbot_bale.control.app_control import AppControlBridge, auth_flow_path
 
     @dataclass(frozen=True)
     class FakeSession:
@@ -161,10 +161,10 @@ def test_app_control_auth_flow_survives_one_shot_helper_processes(tmp_path, monk
 
 
 def test_app_control_diagnostics_exports_redacted_log_tails(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control.app_control import AppControlBridge
+    from userbot_bale.control.app_control import AppControlBridge
 
     log_dir = tmp_path / "state"
     log_dir.mkdir()
@@ -188,7 +188,7 @@ def test_app_control_diagnostics_exports_redacted_log_tails(tmp_path, monkeypatc
 
 
 def test_macos_code_signing_status_parses_security_identities(monkeypatch) -> None:
-    from baleobala.control import macos
+    from userbot_bale.control import macos
 
     monkeypatch.setattr(macos.sys, "platform", "darwin")
 
@@ -213,9 +213,9 @@ def test_macos_code_signing_status_parses_security_identities(monkeypatch) -> No
 
 
 def test_cleanup_stale_carrier_socket_only_removes_unreachable_socket(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
 
-    from baleobala.control import macos
+    from userbot_bale.control import macos
 
     socket_path = macos.carrier_socket_path({"carrierSocketPath": "carrier.sock"})
     socket_path.parent.mkdir(parents=True, exist_ok=True)

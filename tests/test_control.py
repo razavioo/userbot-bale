@@ -11,8 +11,8 @@ def _mk_jwt(**claims) -> str:
     return f"{header}.{body}."
 
 def test_auth_store_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import AuthStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import AuthStore
 
     store = AuthStore()
     record = store.save_jwt("jwt-token", user_id=42, phone="+989")
@@ -27,8 +27,8 @@ def test_auth_store_roundtrip(tmp_path, monkeypatch) -> None:
 
 
 def test_auth_store_tracks_token_expiry(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import AuthStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import AuthStore
 
     jwt = _mk_jwt(exp=int(time.time()) + 3600, iat=int(time.time()) - 10)
     store = AuthStore()
@@ -45,7 +45,7 @@ def test_auth_store_tracks_token_expiry(tmp_path, monkeypatch) -> None:
 
 
 def test_observability_redacts_secrets() -> None:
-    from baleobala.control.observability import redact_value
+    from userbot_bale.control.observability import redact_value
 
     payload = {
         "jwt": "secret-token",
@@ -59,8 +59,8 @@ def test_observability_redacts_secrets() -> None:
 
 
 def test_auth_store_treats_expired_token_as_missing(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import AuthStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import AuthStore
 
     jwt = _mk_jwt(exp=1, iat=1)
     store = AuthStore()
@@ -73,8 +73,8 @@ def test_auth_store_treats_expired_token_as_missing(tmp_path, monkeypatch) -> No
 
 
 def test_pairing_store_begin_accept(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import PairingStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import PairingStore
 
     store = PairingStore()
     pending = store.begin("relay-a", role="client", peer_id=7)
@@ -88,8 +88,8 @@ def test_pairing_store_begin_accept(tmp_path, monkeypatch) -> None:
 
 
 def test_relay_directory_register_lookup_remove(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import RelayDirectory, RelayDirectoryEntry
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import RelayDirectory, RelayDirectoryEntry
 
     directory = RelayDirectory()
     entry = directory.register(
@@ -113,9 +113,9 @@ def test_relay_directory_register_lookup_remove(tmp_path, monkeypatch) -> None:
 
 
 def test_pairing_store_invite_link_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
-    from baleobala.control import PairingStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
+    from userbot_bale.control import PairingStore
 
     store = PairingStore()
     pending = store.begin("relay-a", role="client", peer_id=7)
@@ -131,9 +131,9 @@ def test_pairing_store_invite_link_roundtrip(tmp_path, monkeypatch) -> None:
 
 
 def test_pairing_exchange_request_response_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
-    from baleobala.control import PairingStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
+    from userbot_bale.control import PairingStore
 
     initiator = PairingStore(path=tmp_path / "initiator.json")
     responder = PairingStore(path=tmp_path / "responder.json")
@@ -168,8 +168,8 @@ def test_pairing_exchange_request_response_roundtrip(tmp_path, monkeypatch) -> N
 
 
 def test_pairing_store_prefers_most_recently_used_pairing(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import PairingStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import PairingStore
 
     store = PairingStore()
     a = store.begin("relay-a", role="client", peer_id=7)
@@ -185,9 +185,9 @@ def test_pairing_store_prefers_most_recently_used_pairing(tmp_path, monkeypatch)
 
 
 def test_vpn_store_default_and_status(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import VpnStore
-    from baleobala.control.vpn import default_vpn_backend
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import VpnStore
+    from userbot_bale.control.vpn import default_vpn_backend
 
     store = VpnStore()
     profile = store.ensure_default()
@@ -197,10 +197,10 @@ def test_vpn_store_default_and_status(tmp_path, monkeypatch) -> None:
 
 
 def test_control_service_bootstraps_first_run(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     monkeypatch.setattr("sys.platform", "linux")
 
-    from baleobala.control import ControlService
+    from userbot_bale.control import ControlService
 
     service = ControlService()
     snapshot = service.status()
@@ -214,9 +214,9 @@ def test_control_service_bootstraps_first_run(tmp_path, monkeypatch) -> None:
 
 
 def test_control_service_auth_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
 
-    from baleobala.control import ControlService
+    from userbot_bale.control import ControlService
 
     service = ControlService()
     record = service.save_auth_jwt("jwt-token", phone="+989")
@@ -228,10 +228,10 @@ def test_control_service_auth_roundtrip(tmp_path, monkeypatch) -> None:
 
 
 def test_control_service_exports_and_applies_pairing_exchange(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService
+    from userbot_bale.control import ControlService
 
     initiator = ControlService()
     pending = initiator.begin_pairing("relay-a", role="client", peer_id=9, relay_mode="proxy")
@@ -248,10 +248,10 @@ def test_control_service_exports_and_applies_pairing_exchange(tmp_path, monkeypa
 
 
 def test_control_service_enroll_request_approve_sync_flow(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService
+    from userbot_bale.control import ControlService
 
     service = ControlService()
     service.save_auth_jwt("jwt-token", user_id=77, phone="+989")
@@ -274,10 +274,10 @@ def test_control_service_enroll_request_approve_sync_flow(tmp_path, monkeypatch)
 
 
 def test_control_service_revoked_pairing_is_not_connectable(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService
+    from userbot_bale.control import ControlService
 
     service = ControlService()
     service.save_auth_jwt("jwt-token", user_id=77, phone="+989")
@@ -294,10 +294,10 @@ def test_control_service_revoked_pairing_is_not_connectable(tmp_path, monkeypatc
 
 
 def test_control_service_status_keeps_file_based_pairings_ready(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
+    from userbot_bale.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
 
     class FakeBackend:
         def status(self):
@@ -353,10 +353,10 @@ def test_control_service_status_keeps_file_based_pairings_ready(tmp_path, monkey
 
 
 def test_control_service_status_surfaces_expired_auth_and_revoked_pairing(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService, VpnProfile, VpnStore
+    from userbot_bale.control import ControlService, VpnProfile, VpnStore
 
     class FakeBackend:
         def status(self):
@@ -406,10 +406,10 @@ def test_control_service_status_surfaces_expired_auth_and_revoked_pairing(tmp_pa
 
 
 def test_control_service_stop_uses_active_backend_once(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
+    from userbot_bale.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
 
     class FakeProbe:
         def __init__(self, ok: str = "yes") -> None:
@@ -505,10 +505,10 @@ def test_control_service_stop_uses_active_backend_once(tmp_path, monkeypatch) ->
 
 
 def test_control_service_reconcile_uses_active_backend_for_probe_failure(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
 
-    from baleobala.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
+    from userbot_bale.control import ControlService, PairingRecord, PairingStore, VpnProfile, VpnStore
 
     class FakeProbe:
         def __init__(self, ok: str = "yes") -> None:
@@ -607,9 +607,9 @@ def test_control_service_reconcile_uses_active_backend_for_probe_failure(tmp_pat
 
 
 def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import TunnelServiceState, VpnProfile
-    from baleobala.control.backend import MacOSPacketTunnelBackend
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import TunnelServiceState, VpnProfile
+    from userbot_bale.control.backend import MacOSPacketTunnelBackend
 
     class FakeService:
         def __init__(self) -> None:
@@ -662,9 +662,9 @@ def test_packet_tunnel_backend_tracks_state(tmp_path, monkeypatch) -> None:
 
 
 def test_android_vpn_backend_tracks_state(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import TunnelServiceState, VpnProfile
-    from baleobala.control.backend import AndroidVpnBackend
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import TunnelServiceState, VpnProfile
+    from userbot_bale.control.backend import AndroidVpnBackend
 
     class FakeService:
         def __init__(self) -> None:
@@ -717,17 +717,17 @@ def test_android_vpn_backend_tracks_state(tmp_path, monkeypatch) -> None:
 
 
 def test_macos_install_tunnel_profile_writes_shared_container(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.macos import (
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.macos import (
         install_tunnel_profile,
         load_tunnel_profile,
         packet_tunnel_configuration,
         tunnel_profile_installed,
         tunnel_profile_path,
     )
-    from baleobala.control.vpn import VpnProfile
+    from userbot_bale.control.vpn import VpnProfile
 
-    payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="baleobala"))
+    payload = packet_tunnel_configuration(VpnProfile(profile_id="p1", name="userbot-bale"))
     assert payload["tunnelIPv4Address"] == "10.77.0.2"
     assert payload["includedIPv4Routes"] == ["0.0.0.0/0"]
     assert payload["includedIPv6Routes"] == []
@@ -740,17 +740,17 @@ def test_macos_install_tunnel_profile_writes_shared_container(tmp_path, monkeypa
 
 
 def test_android_install_vpn_profile_writes_shared_container(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.android import (
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.android import (
         install_vpn_profile,
         load_vpn_profile,
         vpn_profile_installed,
         vpn_profile_path,
         vpn_service_configuration,
     )
-    from baleobala.control.vpn import VpnProfile
+    from userbot_bale.control.vpn import VpnProfile
 
-    payload = vpn_service_configuration(VpnProfile(profile_id="p1", name="baleobala", backend="android-vpn"))
+    payload = vpn_service_configuration(VpnProfile(profile_id="p1", name="userbot-bale", backend="android-vpn"))
     assert payload["tunnelIPv4Address"] == "10.77.0.2"
     assert payload["includedIPv4Routes"] == ["0.0.0.0/0"]
     assert payload["includedIPv6Routes"] == []
@@ -763,9 +763,9 @@ def test_android_install_vpn_profile_writes_shared_container(tmp_path, monkeypat
 
 
 def test_pairing_store_tracks_managed_provisioning_metadata(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
-    from baleobala.control import PairingStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
+    from userbot_bale.control import PairingStore
 
     store = PairingStore()
     pending = store.begin(
@@ -787,8 +787,8 @@ def test_pairing_store_tracks_managed_provisioning_metadata(tmp_path, monkeypatc
 
 
 def test_control_service_tracks_durable_mesh_assignments(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import ControlService
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import ControlService
 
     service = ControlService()
     assigned = service.issue_mesh_assignment(77, pool_cidr="10.77.0.0/24", transport="dc", session_id=0x115e)
@@ -809,8 +809,8 @@ def test_control_service_tracks_durable_mesh_assignments(tmp_path, monkeypatch) 
 
 
 def test_mesh_assignments_are_sticky_across_service_restart(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import ControlService
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import ControlService
 
     first = ControlService()
     issued = first.issue_mesh_assignment(99, pool_cidr="10.77.0.0/24")
@@ -822,12 +822,12 @@ def test_mesh_assignments_are_sticky_across_service_restart(tmp_path, monkeypatc
 
 
 def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
-    from baleobala.control import AuthStore, ControlService, PairingStore, VpnStore
-    from baleobala.control.vpn import VpnProfile
+    from userbot_bale.control import AuthStore, ControlService, PairingStore, VpnStore
+    from userbot_bale.control.vpn import VpnProfile
 
     class Bridge:
         def start(self):
@@ -846,11 +846,11 @@ def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -
         def closed(self):
             return False
 
-    monkeypatch.setattr("baleobala.control.macos.tunnel_profile_installed", lambda config: True)
+    monkeypatch.setattr("userbot_bale.control.macos.tunnel_profile_installed", lambda config: True)
     monkeypatch.setattr(
-        "baleobala.control.backend._build_packet_tunnel_service",
+        "userbot_bale.control.backend._build_packet_tunnel_service",
         lambda profile, auth_record, pairing: __import__(
-            "baleobala.control.tunnel_service", fromlist=["CarrierTunnelService"]
+            "userbot_bale.control.tunnel_service", fromlist=["CarrierTunnelService"]
         ).CarrierTunnelService(Bridge(), socket_path=tmp_path / "carrier.sock", manage_bridge=False),
     )
 
@@ -884,8 +884,8 @@ def test_control_service_reconcile_clears_stale_runtime(tmp_path, monkeypatch) -
 
 
 def test_bundle_analyzer_classifies_missing_bundle(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     analysis = analyze_bundle(tmp_path / "missing")
     assert analysis.classification == "infra_flake"
@@ -914,8 +914,8 @@ def _write_bundle_fixture(bundle, payload: dict[str, object]) -> None:
 
 
 def test_bundle_analyzer_accepts_complete_success_bundle(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle"
     _write_bundle_fixture(
@@ -942,8 +942,8 @@ def test_bundle_analyzer_accepts_complete_success_bundle(tmp_path, monkeypatch) 
 
 
 def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle-carrier"
     _write_bundle_fixture(
@@ -969,8 +969,8 @@ def test_bundle_analyzer_uses_failure_class_for_carrier_failures(tmp_path, monke
 
 
 def test_bundle_analyzer_reports_missing_bundle_artifacts(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle-missing-artifacts"
     bundle.mkdir()
@@ -981,8 +981,8 @@ def test_bundle_analyzer_reports_missing_bundle_artifacts(tmp_path, monkeypatch)
 
 
 def test_bundle_analyzer_reports_invalid_json(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle-invalid-json"
     bundle.mkdir()
@@ -992,8 +992,8 @@ def test_bundle_analyzer_reports_invalid_json(tmp_path, monkeypatch) -> None:
 
 
 def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import merge_status_with_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import merge_status_with_bundle
 
     bundle = tmp_path / "bundle-merge"
     _write_bundle_fixture(
@@ -1042,8 +1042,8 @@ def test_merge_status_with_bundle_prefers_session_artifact_fields(tmp_path, monk
 
 
 def test_merge_status_with_bundle_reports_full_device_bypass_and_egress(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import merge_status_with_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import merge_status_with_bundle
 
     bundle = tmp_path / "bundle-full-device"
     _write_bundle_fixture(
@@ -1081,8 +1081,8 @@ def test_merge_status_with_bundle_reports_full_device_bypass_and_egress(tmp_path
 
 
 def test_bundle_analyzer_classifies_dns_snapshot_regression(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle-dns"
     _write_bundle_fixture(
@@ -1115,7 +1115,7 @@ def test_bundle_analyzer_classifies_dns_snapshot_regression(tmp_path, monkeypatc
     assert analysis.reason == "dns_config_failed"
     assert analysis.failure_code == "dns_config_failed"
 
-    from baleobala.control.analyzer import merge_status_with_bundle
+    from userbot_bale.control.analyzer import merge_status_with_bundle
 
     merged = merge_status_with_bundle({"backend": "linux-tun", "state": "running"}, bundle)
     assert merged["route_ready"] == "yes"
@@ -1125,8 +1125,8 @@ def test_bundle_analyzer_classifies_dns_snapshot_regression(tmp_path, monkeypatc
 
 
 def test_bundle_analyzer_classifies_route_snapshot_regression(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import analyze_bundle
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import analyze_bundle
 
     bundle = tmp_path / "bundle-route"
     _write_bundle_fixture(
@@ -1159,7 +1159,7 @@ def test_bundle_analyzer_classifies_route_snapshot_regression(tmp_path, monkeypa
     assert analysis.reason == "route_program_failed"
     assert analysis.failure_code == "route_program_failed"
 
-    from baleobala.control.analyzer import merge_status_with_bundle
+    from userbot_bale.control.analyzer import merge_status_with_bundle
 
     merged = merge_status_with_bundle({"backend": "linux-tun", "state": "running"}, bundle)
     assert merged["route_ready"] == "no"
@@ -1169,8 +1169,8 @@ def test_bundle_analyzer_classifies_route_snapshot_regression(tmp_path, monkeypa
 
 
 def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import BundleAnalysis, build_product_verdict
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import BundleAnalysis, build_product_verdict
 
     verdict = build_product_verdict(
         {
@@ -1194,8 +1194,8 @@ def test_product_verdict_prefers_bundle_analysis(tmp_path, monkeypatch) -> None:
 
 
 def test_product_verdict_leaves_failure_class_empty_for_accepted_flow(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.analyzer import BundleAnalysis, build_product_verdict
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.analyzer import BundleAnalysis, build_product_verdict
 
     verdict = build_product_verdict(
         {
@@ -1224,8 +1224,8 @@ def test_product_verdict_leaves_failure_class_empty_for_accepted_flow(tmp_path, 
 
 
 def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.tunnel_service import LocalTunnelService
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.tunnel_service import LocalTunnelService
     import socket
 
     service = LocalTunnelService()
@@ -1250,8 +1250,8 @@ def test_local_tunnel_service_ipc_roundtrip(tmp_path, monkeypatch) -> None:
 
 
 def test_local_tunnel_service_clears_stale_socket(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.tunnel_service import LocalTunnelService
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.tunnel_service import LocalTunnelService
 
     socket_path = tmp_path / "stale.sock"
     socket_path.write_text("stale", encoding="utf-8")
@@ -1265,9 +1265,9 @@ def test_local_tunnel_service_clears_stale_socket(tmp_path, monkeypatch) -> None
 
 
 def test_tunnel_services_default_to_shared_container_socket(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SHARED_CONTAINER", "/tmp/baleobala-shared")
-    from baleobala.control.tunnel_service import CarrierTunnelService, LocalTunnelService
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SHARED_CONTAINER", "/tmp/userbot-bale-shared")
+    from userbot_bale.control.tunnel_service import CarrierTunnelService, LocalTunnelService
 
     class Bridge:
         def start(self):
@@ -1290,17 +1290,17 @@ def test_tunnel_services_default_to_shared_container_socket(tmp_path, monkeypatc
     carrier = CarrierTunnelService(Bridge())
     local_state = local.start(profile_id="p1", backend="packet-tunnel")
     carrier_state = carrier.start(profile_id="p1", backend="packet-tunnel")
-    assert "/tmp/baleobala-shared" in str(local_state.endpoint or "")
-    assert "/tmp/baleobala-shared" in str(carrier_state.endpoint or "")
+    assert "/tmp/userbot-bale-shared" in str(local_state.endpoint or "")
+    assert "/tmp/userbot-bale-shared" in str(carrier_state.endpoint or "")
     local.stop()
     carrier.stop()
 
 
 def test_carrier_tunnel_service_bridges_bytes(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     import socket
-    from baleobala.control.tunnel_service import CarrierTunnelService
-    from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, TunnelRole, TunnelSession
+    from userbot_bale.control.tunnel_service import CarrierTunnelService
+    from userbot_bale.runtime import MemoryByteChannel, NullSecurityProvider, TunnelRole, TunnelSession
 
     left_ch, right_ch = MemoryByteChannel.pair()
     left = TunnelSession(left_ch, role=TunnelRole.CLIENT, security=NullSecurityProvider(session_id="left"))
@@ -1355,12 +1355,12 @@ def test_carrier_tunnel_service_bridges_bytes(tmp_path, monkeypatch) -> None:
 
 
 def test_carrier_tunnel_service_tracks_control_status_frames(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     import json
     import socket
 
-    from baleobala.control.probe import probe_endpoint
-    from baleobala.control.tunnel_service import CarrierTunnelService
+    from userbot_bale.control.probe import probe_endpoint
+    from userbot_bale.control.tunnel_service import CarrierTunnelService
 
     class Bridge:
         def start(self):
@@ -1440,7 +1440,7 @@ def test_carrier_tunnel_service_tracks_control_status_frames(tmp_path, monkeypat
 
 
 def test_build_parser_exposes_control_plane_commands() -> None:
-    from baleobala.cli import build_parser
+    from userbot_bale.cli import build_parser
 
     def _subparser_choices(parser):
         for action in parser._actions:
@@ -1513,26 +1513,26 @@ def test_build_parser_exposes_control_plane_commands() -> None:
 
 
 def test_default_backends_choose_linux_tun_on_linux(monkeypatch) -> None:
-    monkeypatch.delenv("BALEOBALA_FORCE_ANDROID", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_FORCE_ANDROID", raising=False)
     monkeypatch.delenv("ANDROID_ROOT", raising=False)
     monkeypatch.delenv("ANDROID_DATA", raising=False)
     monkeypatch.delenv("ANDROID_ARGUMENT", raising=False)
     monkeypatch.setattr("sys.platform", "linux")
-    from baleobala.control.backend import default_backend_name
-    from baleobala.control.vpn import default_vpn_backend
+    from userbot_bale.control.backend import default_backend_name
+    from userbot_bale.control.vpn import default_vpn_backend
 
     assert default_backend_name() == "linux-tun"
     assert default_vpn_backend() == "linux-tun"
 
 
 def test_default_backends_choose_android_vpn_on_android_runtime(monkeypatch) -> None:
-    monkeypatch.delenv("BALEOBALA_VPN_BACKEND", raising=False)
-    monkeypatch.delenv("BALEOBALA_FORCE_ANDROID", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_VPN_BACKEND", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_FORCE_ANDROID", raising=False)
     monkeypatch.setenv("ANDROID_ROOT", "/system")
     monkeypatch.setenv("ANDROID_DATA", "/data")
     monkeypatch.setattr("sys.platform", "linux")
-    from baleobala.control.backend import default_backend_name
-    from baleobala.control.vpn import default_vpn_backend
+    from userbot_bale.control.backend import default_backend_name
+    from userbot_bale.control.vpn import default_vpn_backend
 
     assert default_backend_name() == "android-vpn"
     assert default_vpn_backend() == "android-vpn"
@@ -1540,8 +1540,8 @@ def test_default_backends_choose_android_vpn_on_android_runtime(monkeypatch) -> 
 
 def test_default_backends_choose_windows_proxy_on_win32(monkeypatch) -> None:
     monkeypatch.setattr("sys.platform", "win32")
-    from baleobala.control.backend import default_backend_name
-    from baleobala.control.vpn import default_vpn_backend
+    from userbot_bale.control.backend import default_backend_name
+    from userbot_bale.control.vpn import default_vpn_backend
 
     assert default_backend_name() == "windows-proxy"
     assert default_vpn_backend() == "windows-proxy"
@@ -1549,17 +1549,17 @@ def test_default_backends_choose_windows_proxy_on_win32(monkeypatch) -> None:
 
 def test_windows_app_dir_prefers_appdata(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.delenv("BALEOBALA_HOME", raising=False)
+    monkeypatch.delenv("USERBOT_BALE_HOME", raising=False)
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
 
-    from baleobala.control.paths import app_dir
+    from userbot_bale.control.paths import app_dir
 
-    assert app_dir() == tmp_path / "AppData" / "Roaming" / "baleobala"
+    assert app_dir() == tmp_path / "AppData" / "Roaming" / "userbot-bale"
 
 
 def test_vpn_profile_roundtrip_includes_peer_fields(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import VpnProfile, VpnStore
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import VpnProfile, VpnStore
 
     profile = VpnProfile(
         profile_id="p1",
@@ -1580,9 +1580,9 @@ def test_vpn_profile_roundtrip_includes_peer_fields(tmp_path, monkeypatch) -> No
 
 
 def test_macos_launch_agent_install_writes_plist(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import VpnProfile, VpnStore
-    from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import VpnProfile, VpnStore
+    from userbot_bale.control.macos_launchd import MacOSLaunchAgentManager
 
     VpnStore().save(
         VpnProfile(
@@ -1602,21 +1602,21 @@ def test_macos_launch_agent_install_writes_plist(tmp_path, monkeypatch) -> None:
         calls.append(tuple(cmd))
         return __import__("subprocess").CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    plist_path = tmp_path / "LaunchAgents" / "com.baleobala.vpn.plist"
+    plist_path = tmp_path / "LaunchAgents" / "com.userbot_bale.vpn.plist"
     manager = MacOSLaunchAgentManager(plist_path=plist_path, runner=fake_run)
     installed = manager.install()
 
     assert installed == plist_path
     assert plist_path.exists()
     payload = plist_path.read_bytes()
-    assert b"baleobala.cli" in payload
+    assert b"userbot_bale.cli" in payload
     assert ("launchctl", "bootstrap", f"gui/{__import__('os').getuid()}", str(plist_path)) in calls
 
 
 def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control import VpnProfile, VpnStore
-    from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control import VpnProfile, VpnStore
+    from userbot_bale.control.macos_launchd import MacOSLaunchAgentManager
 
     VpnStore().save(
         VpnProfile(
@@ -1637,13 +1637,13 @@ def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypa
         calls.append(tuple(cmd))
         return __import__("subprocess").CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    plist_path = tmp_path / "LaunchAgents" / "com.baleobala.proxy-client.plist"
-    manager = MacOSLaunchAgentManager(label="com.baleobala.proxy-client", plist_path=plist_path, runner=fake_run)
+    plist_path = tmp_path / "LaunchAgents" / "com.userbot_bale.proxy-client.plist"
+    manager = MacOSLaunchAgentManager(label="com.userbot_bale.proxy-client", plist_path=plist_path, runner=fake_run)
     installed = manager.install(
         mode="proxy-client",
         jwt_file="~/.bale_jwt_b",
-        proxy_secret_file="/tmp/baleobala-vpn.psk",
-        ssl_cert_file="/tmp/baleobala-macos-ca.pem",
+        proxy_secret_file="/tmp/userbot-bale-vpn.psk",
+        ssl_cert_file="/tmp/userbot-bale-macos-ca.pem",
     )
 
     assert installed == plist_path
@@ -1652,7 +1652,7 @@ def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypa
     assert b"--peer-id" in payload
     assert b"1519372475" in payload
     assert b"--direct-first" not in payload
-    assert b"/tmp/baleobala-vpn.psk" in payload
+    assert b"/tmp/userbot-bale-vpn.psk" in payload
     assert b"SSL_CERT_FILE" in payload
     assert b"HOME" in payload
     assert b"PATH" in payload
@@ -1662,16 +1662,16 @@ def test_macos_proxy_client_launch_agent_install_writes_plist(tmp_path, monkeypa
 
 
 def test_macos_launch_agent_status(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.control.macos_launchd import MacOSLaunchAgentManager
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.control.macos_launchd import MacOSLaunchAgentManager
 
-    manager = MacOSLaunchAgentManager(plist_path=tmp_path / "LaunchAgents" / "com.baleobala.vpn.plist")
+    manager = MacOSLaunchAgentManager(plist_path=tmp_path / "LaunchAgents" / "com.userbot_bale.vpn.plist")
     status = manager.status()
     assert status["installed"] == "no"
 
 
 def test_macos_system_proxy_session_roundtrip(monkeypatch) -> None:
-    from baleobala.control.macos import MacOSSystemProxySession
+    from userbot_bale.control.macos import MacOSSystemProxySession
 
     outputs = {
         ("networksetup", "-getwebproxy", "Wi-Fi"): "Enabled: No\nServer: \nPort: 0\n",
@@ -1687,7 +1687,7 @@ def test_macos_system_proxy_session_roundtrip(monkeypatch) -> None:
         stdout = outputs.get(tuple(cmd), "")
         return __import__("subprocess").CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr("baleobala.control.macos.subprocess.run", fake_run)
+    monkeypatch.setattr("userbot_bale.control.macos.subprocess.run", fake_run)
 
     session = MacOSSystemProxySession(listen_host="127.0.0.1", listen_port=1080)
     session.start()
@@ -1708,9 +1708,9 @@ def test_macos_system_proxy_session_roundtrip(monkeypatch) -> None:
 
 
 def test_macos_system_proxy_restore_saved_state(tmp_path, monkeypatch) -> None:
-    from baleobala.control.macos import MacOSSystemProxySession
+    from userbot_bale.control.macos import MacOSSystemProxySession
 
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     state_file = tmp_path / "macos_system_proxy.json"
     outputs = {
         ("networksetup", "-getwebproxy", "Wi-Fi"): "Enabled: No\nServer: \nPort: 0\n",
@@ -1742,9 +1742,9 @@ def test_macos_system_proxy_restore_saved_state(tmp_path, monkeypatch) -> None:
 
 
 def test_macos_system_proxy_services_from_env(monkeypatch) -> None:
-    from baleobala.control.macos import MacOSSystemProxySession
+    from userbot_bale.control.macos import MacOSSystemProxySession
 
-    monkeypatch.setenv("BALEOBALA_MACOS_PROXY_SERVICES", "Wi-Fi, V2BOX")
+    monkeypatch.setenv("USERBOT_BALE_MACOS_PROXY_SERVICES", "Wi-Fi, V2BOX")
     calls: list[tuple[str, ...]] = []
 
     def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001
@@ -1766,7 +1766,7 @@ def test_macos_system_proxy_services_from_env(monkeypatch) -> None:
 
 
 def test_windows_system_proxy_session_roundtrip(tmp_path) -> None:
-    from baleobala.control.windows import WindowsSystemProxySession
+    from userbot_bale.control.windows import WindowsSystemProxySession
 
     outputs = {
         ("netsh", "winhttp", "show", "proxy"): (
@@ -1797,8 +1797,8 @@ def test_windows_system_proxy_session_roundtrip(tmp_path) -> None:
 
 
 def test_windows_system_proxy_restore_saved_state(tmp_path) -> None:
-    from baleobala.control.windows import WindowsSystemProxySession
-    from baleobala.control.store import JsonStore
+    from userbot_bale.control.windows import WindowsSystemProxySession
+    from userbot_bale.control.store import JsonStore
 
     state_file = tmp_path / "windows_system_proxy.json"
     JsonStore(state_file).save({"mode": "proxy", "server": "10.0.0.5:3128", "bypass": "localhost"})
@@ -1815,9 +1815,9 @@ def test_windows_system_proxy_restore_saved_state(tmp_path) -> None:
 
 
 def test_macos_system_proxy_privileged_setters_use_osascript(monkeypatch) -> None:
-    from baleobala.control.macos import MacOSSystemProxySession
+    from userbot_bale.control.macos import MacOSSystemProxySession
 
-    monkeypatch.setenv("BALEOBALA_MACOS_PROXY_PRIVILEGED", "1")
+    monkeypatch.setenv("USERBOT_BALE_MACOS_PROXY_PRIVILEGED", "1")
     calls: list[tuple[str, ...]] = []
 
     def fake_run(cmd, check=True, capture_output=True, text=True):  # noqa: ANN001
@@ -1845,10 +1845,10 @@ def test_macos_system_proxy_privileged_setters_use_osascript(monkeypatch) -> Non
 
 
 def test_macos_system_proxy_privileged_restore_is_batched(tmp_path, monkeypatch) -> None:
-    from baleobala.control.macos import MacOSSystemProxySession
+    from userbot_bale.control.macos import MacOSSystemProxySession
 
-    monkeypatch.setenv("BALEOBALA_MACOS_PROXY_PRIVILEGED", "1")
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_MACOS_PROXY_PRIVILEGED", "1")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     state_file = tmp_path / "macos_system_proxy.json"
     state_file.write_text(
         __import__("json").dumps(
@@ -1887,12 +1887,12 @@ def test_macos_system_proxy_privileged_restore_is_batched(tmp_path, monkeypatch)
 
 
 def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
-    from baleobala.control import AuthStore, PairingStore, VpnStore
-    import baleobala.cli as cli
+    from userbot_bale.control import AuthStore, PairingStore, VpnStore
+    import userbot_bale.cli as cli
 
     auth_store = AuthStore()
     auth_store.save_jwt("jwt-token", user_id=99, phone="+989")
@@ -1901,7 +1901,7 @@ def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch) -> None:
     pairing_store.accept(pairing.pair_code)
     vpn_store = VpnStore()
     vpn_store.save(
-        __import__("baleobala.control.vpn", fromlist=["VpnProfile"]).VpnProfile(
+        __import__("userbot_bale.control.vpn", fromlist=["VpnProfile"]).VpnProfile(
             profile_id=pairing.profile_id,
             name="client",
             backend="proxy",
@@ -1932,12 +1932,12 @@ def test_vpn_up_uses_saved_pairing_and_auth(tmp_path, monkeypatch) -> None:
 
 
 def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
-    from baleobala.control import AuthStore, PairingStore, VpnStore
-    import baleobala.cli as cli
+    from userbot_bale.control import AuthStore, PairingStore, VpnStore
+    import userbot_bale.cli as cli
 
     AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
     pairing_store = PairingStore()
@@ -1949,7 +1949,7 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
     captured = {}
 
     def fake_start_connection(self, profile_id=None):  # noqa: ANN001,ARG001
-        from baleobala.control import ConnectionSnapshot, VpnStore
+        from userbot_bale.control import ConnectionSnapshot, VpnStore
 
         stored = VpnStore().load() or VpnStore().ensure_default()
         captured["stored_profile"] = stored
@@ -1965,8 +1965,8 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
             connection={},
         )
 
-    monkeypatch.setattr("baleobala.control.service.ControlService.start_connection", fake_start_connection)
-    monkeypatch.setattr("baleobala.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
+    monkeypatch.setattr("userbot_bale.control.service.ControlService.start_connection", fake_start_connection)
+    monkeypatch.setattr("userbot_bale.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
     monkeypatch.setattr(cli, "_hold_backend", lambda endpoint, *, label: 0)
 
     import argparse
@@ -1982,12 +1982,12 @@ def test_vpn_up_autoselects_active_pairing(tmp_path, monkeypatch) -> None:
 
 
 def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
-    from baleobala.control import AuthStore, PairingStore, VpnStore
-    import baleobala.cli as cli
+    from userbot_bale.control import AuthStore, PairingStore, VpnStore
+    import userbot_bale.cli as cli
 
     AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
     pairing_store = PairingStore()
@@ -1999,7 +1999,7 @@ def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -
     captured = {}
 
     def fake_start_connection(self, profile_id=None):  # noqa: ANN001,ARG001
-        from baleobala.control import ConnectionSnapshot, VpnStore
+        from userbot_bale.control import ConnectionSnapshot, VpnStore
 
         stored = VpnStore().load() or VpnStore().ensure_default()
         captured["stored_profile"] = stored
@@ -2015,8 +2015,8 @@ def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -
             connection={},
         )
 
-    monkeypatch.setattr("baleobala.control.service.ControlService.start_connection", fake_start_connection)
-    monkeypatch.setattr("baleobala.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
+    monkeypatch.setattr("userbot_bale.control.service.ControlService.start_connection", fake_start_connection)
+    monkeypatch.setattr("userbot_bale.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
 
     def fake_hold_backend(endpoint, *, label):  # noqa: ANN001
         captured["held"] = (endpoint, label)
@@ -2031,13 +2031,13 @@ def test_vpn_up_prefers_packet_tunnel_on_darwin(tmp_path, monkeypatch, capsys) -
 
 
 def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
     monkeypatch.setattr("sys.platform", "darwin")
 
-    from baleobala.control import AuthStore, VpnStore
-    from baleobala.control.vpn import VpnProfile
-    import baleobala.cli as cli
+    from userbot_bale.control import AuthStore, VpnStore
+    from userbot_bale.control.vpn import VpnProfile
+    import userbot_bale.cli as cli
 
     AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
     VpnStore().save(
@@ -2047,7 +2047,7 @@ def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None
     captured = {}
 
     def fake_start_connection(self, profile_id=None):  # noqa: ANN001,ARG001
-        from baleobala.control import ConnectionSnapshot, VpnStore
+        from userbot_bale.control import ConnectionSnapshot, VpnStore
 
         stored = VpnStore().load() or VpnStore().ensure_default()
         captured["stored_profile"] = stored
@@ -2063,8 +2063,8 @@ def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None
             connection={},
         )
 
-    monkeypatch.setattr("baleobala.control.service.ControlService.start_connection", fake_start_connection)
-    monkeypatch.setattr("baleobala.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
+    monkeypatch.setattr("userbot_bale.control.service.ControlService.start_connection", fake_start_connection)
+    monkeypatch.setattr("userbot_bale.control.service.ControlService.stop_connection", lambda self, profile_id=None: None)
     monkeypatch.setattr(cli, "_hold_backend", lambda endpoint, *, label: 0)
 
     import argparse
@@ -2073,12 +2073,12 @@ def test_vpn_up_packet_tunnel_uses_active_pairing(tmp_path, monkeypatch) -> None
 
 
 def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     monkeypatch.setattr("sys.platform", "linux")
 
-    from baleobala.control import AuthStore, PairingStore, VpnStore
-    from baleobala.control.vpn import VpnProfile
-    import baleobala.cli as cli
+    from userbot_bale.control import AuthStore, PairingStore, VpnStore
+    from userbot_bale.control.vpn import VpnProfile
+    import userbot_bale.cli as cli
 
     AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
     pairing_store = PairingStore()
@@ -2123,8 +2123,8 @@ def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
         ))
         return 0
 
-    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", fake_backend_for_profile)
-    monkeypatch.setattr("baleobala.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
+    monkeypatch.setattr("userbot_bale.control.backend.backend_for_profile", fake_backend_for_profile)
+    monkeypatch.setattr("userbot_bale.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
 
     import argparse
     assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0
@@ -2139,12 +2139,12 @@ def test_vpn_up_uses_linux_tun_backend(tmp_path, monkeypatch) -> None:
 
 
 def test_vpn_up_linux_tun_exit_node_runs_nat_setup(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     monkeypatch.setattr("sys.platform", "linux")
 
-    from baleobala.control import AuthStore, PairingStore, VpnStore
-    from baleobala.control.vpn import VpnProfile
-    import baleobala.cli as cli
+    from userbot_bale.control import AuthStore, PairingStore, VpnStore
+    from userbot_bale.control.vpn import VpnProfile
+    import userbot_bale.cli as cli
 
     AuthStore().save_jwt("jwt-token", user_id=99, phone="+989")
     pairing_store = PairingStore()
@@ -2192,9 +2192,9 @@ def test_vpn_up_linux_tun_exit_node_runs_nat_setup(tmp_path, monkeypatch) -> Non
         ))
         return 0
 
-    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", fake_backend_for_profile)
-    monkeypatch.setattr("baleobala.vpn.cli._run_nat_setup", fake_nat_setup)
-    monkeypatch.setattr("baleobala.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
+    monkeypatch.setattr("userbot_bale.control.backend.backend_for_profile", fake_backend_for_profile)
+    monkeypatch.setattr("userbot_bale.vpn.cli._run_nat_setup", fake_nat_setup)
+    monkeypatch.setattr("userbot_bale.vpn.cli._run_tunnel_session", fake_run_tunnel_session)
 
     import argparse
     assert cli.cmd_vpn(argparse.Namespace(vpn_cmd="up", profile_id=None, backend=None)) == 0

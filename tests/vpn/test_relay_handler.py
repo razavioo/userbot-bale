@@ -19,9 +19,9 @@ from typing import Any
 
 import pytest
 
-from baleobala.vpn.constants import DEFAULT_TUNNEL_SESS_ID
-from baleobala.vpn.relay_handler import RelayCallHandler
-from baleobala.vpn.relay_state import (
+from userbot_bale.vpn.constants import DEFAULT_TUNNEL_SESS_ID
+from userbot_bale.vpn.relay_handler import RelayCallHandler
+from userbot_bale.vpn.relay_state import (
     DEFAULT_STALE_ACTIVE_FLAG_SECS,
     RelayState,
 )
@@ -143,7 +143,7 @@ def _fake_recv_provision(transport: FakeDataChannelTransport, *, timeout: float)
     via stage_provision_ack(); we decode that here."""
     if transport._ack_payload is None:
         return None
-    from baleobala.vpn.provisioning import MeshProvisionMessage
+    from userbot_bale.vpn.provisioning import MeshProvisionMessage
     return MeshProvisionMessage.decode(transport._ack_payload)
 
 
@@ -302,7 +302,7 @@ class _Harness:
             # Auto-stage a successful provisioning ACK so the tunnel
             # bring-up reaches sessions.append. Tests that want to
             # check pre-provision behavior can override before calling.
-            from baleobala.vpn.provisioning import MeshProvisionMessage
+            from userbot_bale.vpn.provisioning import MeshProvisionMessage
             t.stage_provision_ack(
                 MeshProvisionMessage(
                     version=1,
@@ -322,7 +322,7 @@ class _Harness:
         def enc_factory(transport: Any, key: bytes) -> Any:
             return transport  # passthrough — the encryption layer isn't on test path
 
-        from baleobala.vpn.provisioning import (
+        from userbot_bale.vpn.provisioning import (
             MeshProvisionMessage,
             ProvisioningError,
         )
@@ -541,7 +541,7 @@ def test_sess_id_used_in_mesh_provision_matches_constant():
     h.handler.handle_call(event)
 
     # Decode the provisioning message the handler sent on the transport.
-    from baleobala.vpn.provisioning import MeshProvisionMessage
+    from userbot_bale.vpn.provisioning import MeshProvisionMessage
     sent = h.created_transports[0].sent
     assert sent, "no provisioning message sent"
     msg = MeshProvisionMessage.decode(sent[0])

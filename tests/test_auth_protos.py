@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 
-from baleobala.bale.protos import (
+from userbot_bale.bale.protos import (
     RequestStartPhoneAuth,
     RequestValidateCode,
     parse_response_auth,
@@ -17,11 +17,11 @@ def test_start_phone_auth_contains_key_fields():
         app_id=42,
         api_key="test-api-key",
         device_hash=b"\x01" * 16,
-        device_title="baleobala-ci",
+        device_title="userbot-bale-ci",
     )
     buf = req.encode()
     assert b"test-api-key" in buf
-    assert b"baleobala-ci" in buf
+    assert b"userbot-bale-ci" in buf
     assert b"\x01" * 16 in buf
 
 

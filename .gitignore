@@ -28,7 +28,7 @@ native/macos/*.xcodeproj/xcuserdata/
 /bale.objection.apk
 /*.apktool.yml
 # Persistent Bale session (contains auth_key + JWT)
-/.baleobala/
+/.userbot-bale/
 # mitmproxy captures (contain session secrets)
 /captures/
 /.claude/

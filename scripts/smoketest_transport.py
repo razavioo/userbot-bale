@@ -19,7 +19,7 @@ from pathlib import Path
 # Allow running without install
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from baleobala.bale.endpoints import fetch_endpoints  # noqa: E402
+from userbot_bale.bale.endpoints import fetch_endpoints  # noqa: E402
 
 
 def sha256_hex(b: bytes) -> str:

@@ -2,7 +2,7 @@
 
 This repo now has the source pieces needed for signed macOS builds and packaged Linux builds.
 
-For production packaging and operator docs, expose `baleobala` as the single entrypoint and center
+For production packaging and operator docs, expose `userbot-bale` as the single entrypoint and center
 the user flow on `doctor`, `auth bale-login`, `pair`, `relay`, `vpn`, and `gui`. Legacy and low-level
 transport commands remain available for compatibility or debugging, but should not be presented as
 parallel first-run paths.
@@ -64,9 +64,9 @@ Ship the wheel alongside system packages for:
 
 ## Bootstrap checklist
 
-- `baleobala doctor` passes on the target machine.
-- `baleobala auth bale-login --phone ... --save` stores auth locally and expired sessions are treated as missing.
-- `baleobala userbot` and `baleobala mcp` require an explicit per-peer allowlist before they can
+- `userbot-bale doctor` passes on the target machine.
+- `userbot-bale auth bale-login --phone ... --save` stores auth locally and expired sessions are treated as missing.
+- `userbot-bale userbot` and `userbot-bale mcp` require an explicit per-peer allowlist before they can
   read dialogs/messages or send text for that peer.
 - A relay pairing exists or can be created on first run.
 - `vpn up` or `gui` starts the correct platform connection flow.

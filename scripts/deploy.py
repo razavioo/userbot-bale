@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""baleobala declarative deployer.
+"""userbot-bale declarative deployer.
 
 Reads deploy/inventory.yaml and syncs code + runs install scripts on each node.
 
@@ -68,7 +68,7 @@ def _deploy_node(node: dict, dry_run: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Deploy baleobala nodes from inventory.yaml")
+    parser = argparse.ArgumentParser(description="Deploy userbot-bale nodes from inventory.yaml")
     parser.add_argument("--node", help="Deploy only this named node (matches name or role)")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them")
     parser.add_argument("--inventory", default=str(INVENTORY), help="Path to inventory YAML")

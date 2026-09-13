@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-project="${repo_root}/native/macos/Baleobala.xcodeproj"
-scheme="${SCHEME:-Baleobala}"
+project="${repo_root}/native/macos/UserbotBale.xcodeproj"
+scheme="${SCHEME:-UserbotBale}"
 configuration="${CONFIGURATION:-Release}"
 derived_data="${DERIVED_DATA_PATH:-${repo_root}/build/macos}"
 archive_path="${ARCHIVE_PATH:-${derived_data}/archive/${scheme}.xcarchive}"
@@ -40,9 +40,9 @@ append_setting_if_present() {
 append_setting_if_present "DEVELOPMENT_TEAM" "${MACOS_DEVELOPMENT_TEAM:-}"
 append_setting_if_present "CODE_SIGN_IDENTITY" "${MACOS_CODE_SIGN_IDENTITY:-}"
 append_setting_if_present "OTHER_CODE_SIGN_FLAGS" "${MACOS_OTHER_CODE_SIGN_FLAGS:-}"
-append_setting_if_present "BALEOBALA_APP_BUNDLE_ID" "${MACOS_APP_BUNDLE_ID:-}"
-append_setting_if_present "BALEOBALA_PACKET_TUNNEL_BUNDLE_ID" "${MACOS_PACKET_TUNNEL_BUNDLE_ID:-}"
-append_setting_if_present "BALEOBALA_APP_GROUP_IDENTIFIER" "${MACOS_APP_GROUP_IDENTIFIER:-}"
+append_setting_if_present "USERBOT_BALE_APP_BUNDLE_ID" "${MACOS_APP_BUNDLE_ID:-}"
+append_setting_if_present "USERBOT_BALE_PACKET_TUNNEL_BUNDLE_ID" "${MACOS_PACKET_TUNNEL_BUNDLE_ID:-}"
+append_setting_if_present "USERBOT_BALE_APP_GROUP_IDENTIFIER" "${MACOS_APP_GROUP_IDENTIFIER:-}"
 
 validate_release_env() {
   local missing=()
@@ -83,7 +83,7 @@ prepare_export_options_plist() {
   fi
 
   mkdir -p "$(dirname "${generated_export_options_plist}")"
-  app_bundle_id="${MACOS_APP_BUNDLE_ID:-com.baleobala.app}"
+  app_bundle_id="${MACOS_APP_BUNDLE_ID:-com.userbot_bale.app}"
   packet_tunnel_bundle_id="${MACOS_PACKET_TUNNEL_BUNDLE_ID:-${app_bundle_id}.packet-tunnel}"
   cat > "${generated_export_options_plist}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -173,19 +173,19 @@ case "${mode}" in
       exit 2
     fi
     mkdir -p "$(dirname "${notary_log_path}")"
-    xcrun notarytool submit "${export_path}/Baleobala.app" \
+    xcrun notarytool submit "${export_path}/UserbotBale.app" \
       --keychain-profile "${MACOS_NOTARY_PROFILE}" \
       --wait \
       --output-format json > "${notary_log_path}"
     write_release_metadata
     ;;
   staple)
-    if [[ ! -d "${export_path}/Baleobala.app" ]]; then
-      echo "missing exported app at ${export_path}/Baleobala.app" >&2
+    if [[ ! -d "${export_path}/UserbotBale.app" ]]; then
+      echo "missing exported app at ${export_path}/UserbotBale.app" >&2
       echo "run: ${0} export" >&2
       exit 2
     fi
-    xcrun stapler staple "${export_path}/Baleobala.app"
+    xcrun stapler staple "${export_path}/UserbotBale.app"
     write_release_metadata
     ;;
   release)

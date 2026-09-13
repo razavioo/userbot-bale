@@ -1,4 +1,4 @@
-from baleobala.control.reconnect_policy import DEFAULT_RECONNECT_POLICY, ReconnectPolicy
+from userbot_bale.control.reconnect_policy import DEFAULT_RECONNECT_POLICY, ReconnectPolicy
 
 
 def test_default_matches_android_constants():

@@ -6,8 +6,8 @@ import threading
 import time
 from pathlib import Path
 
-from baleobala.control.observability import StructuredEventRecorder
-from baleobala.vpn.supervisor import (
+from userbot_bale.control.observability import StructuredEventRecorder
+from userbot_bale.vpn.supervisor import (
     SessionCheckpoint,
     SupervisedRunner,
     SupervisorConfig,

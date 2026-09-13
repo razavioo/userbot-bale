@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 
-from baleobala.vpn.relay_state import (
+from userbot_bale.vpn.relay_state import (
     DEFAULT_STALE_ACTIVE_FLAG_SECS,
     RelayState,
 )

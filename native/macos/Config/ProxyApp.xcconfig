@@ -1,9 +1,9 @@
 #include "Base.xcconfig"
 
-PRODUCT_NAME = BaleobalaProxy
-PRODUCT_BUNDLE_IDENTIFIER = com.baleobala.proxy
-INFOPLIST_FILE = ../macos/BaleobalaProxyApp/Info.plist
-CODE_SIGN_ENTITLEMENTS = ../macos/BaleobalaProxyApp/BaleobalaProxy.entitlements
+PRODUCT_NAME = UserbotBaleProxy
+PRODUCT_BUNDLE_IDENTIFIER = com.userbot_bale.proxy
+INFOPLIST_FILE = ../macos/UserbotBaleProxyApp/Info.plist
+CODE_SIGN_ENTITLEMENTS = ../macos/UserbotBaleProxyApp/UserbotBaleProxy.entitlements
 ENABLE_APP_SANDBOX = NO
 ENABLE_HARDENED_RUNTIME = YES
 TARGETED_DEVICE_FAMILY = 1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-theme = pytest.importorskip("baleobala.gui.theme")
+theme = pytest.importorskip("userbot_bale.gui.theme")
 
 
 def test_resolve_theme_light_vs_dark() -> None:

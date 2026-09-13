@@ -1,26 +1,26 @@
-# Baleobala macOS Native Integration
+# UserbotBale macOS Native Integration
 
 This directory holds the native macOS companion app and packet-tunnel extension scaffold, plus the shared configuration and transport contract that the Python control plane depends on.
 
 ## Which app ships
 
-**`Baleobala.xcodeproj`** is the canonical production project. It contains two targets:
+**`UserbotBale.xcodeproj`** is the canonical production project. It contains two targets:
 
-- `BaleobalaApp` — the user-facing app that installs the VPN profile into System Settings and drives the tunnel lifecycle.
-- `BaleobalaPacketTunnel` — the `NEPacketTunnelProvider` system extension that owns kernel-level routing, DNS, and packet bridging to the Python carrier socket.
+- `UserbotBaleApp` — the user-facing app that installs the VPN profile into System Settings and drives the tunnel lifecycle.
+- `UserbotBalePacketTunnel` — the `NEPacketTunnelProvider` system extension that owns kernel-level routing, DNS, and packet bridging to the Python carrier socket.
 
-**`BaleobalaProxy.xcodeproj`** (`BaleobalaProxyApp` target) is the SOCKS5 proxy fallback for environments where a full-device system VPN extension is not available (e.g., missing system-extension entitlement, enterprise MDM restriction). It wraps the Python `bale-proxy system` flow instead of using `NEPacketTunnelProvider`. Use it only when the main app cannot obtain system-extension approval.
+**`UserbotBaleProxy.xcodeproj`** (`UserbotBaleProxyApp` target) is the SOCKS5 proxy fallback for environments where a full-device system VPN extension is not available (e.g., missing system-extension entitlement, enterprise MDM restriction). It wraps the Python `bale-proxy system` flow instead of using `NEPacketTunnelProvider`. Use it only when the main app cannot obtain system-extension approval.
 
-The rest of this document describes `Baleobala.xcodeproj` / `BaleobalaApp` unless noted.
+The rest of this document describes `UserbotBale.xcodeproj` / `UserbotBaleApp` unless noted.
 
 The native app is the system-control companion: it installs the packet-tunnel profile into System Settings, shows tunnel readiness, and starts or stops the macOS tunnel after sign-in and pairing are already handled in the shared CLI/Qt flow.
 
 ## Shape
 
-- `BaleobalaApp/` is the user-facing macOS app that installs and controls the VPN profile.
-- `BaleobalaPacketTunnel/` is the `NEPacketTunnelProvider` extension that owns system networking.
+- `UserbotBaleApp/` is the user-facing macOS app that installs and controls the VPN profile.
+- `UserbotBalePacketTunnel/` is the `NEPacketTunnelProvider` extension that owns system networking.
 - `Shared/` contains the app-group constants, keychain helpers, tunnel manager, and Unix-socket client used by both targets.
-- `BaleobalaProxyApp/` is the SOCKS5 proxy fallback target (see "Which app ships" above).
+- `UserbotBaleProxyApp/` is the SOCKS5 proxy fallback target (see "Which app ships" above).
 
 ## Design Notes
 
@@ -51,7 +51,7 @@ That keeps the macOS extension responsible for routing, while Python remains the
 
 ## App-Control Helper
 
-The app target bundles a small `baleobala-app-control` wrapper in `Contents/Resources` together with the `baleobala` Python package. Swift launches that wrapper through `Bundle.main` and exchanges JSON with `baleobala.control.app_control`; development builds can still override the helper with `BALEOBALA_APP_CONTROL_HELPER` or `BALEOBALA_PYTHON`.
+The app target bundles a small `userbot-bale-app-control` wrapper in `Contents/Resources` together with the `userbot-bale` Python package. Swift launches that wrapper through `Bundle.main` and exchanges JSON with `userbot_bale.control.app_control`; development builds can still override the helper with `USERBOT_BALE_APP_CONTROL_HELPER` or `USERBOT_BALE_PYTHON`.
 
 The wrapper is packaged as an app resource and is covered by the app signature. Release machines still need a suitable Python 3 runtime available, or a future standalone helper binary can replace the wrapper without changing the Swift JSON contract.
 
@@ -132,8 +132,8 @@ The supported ship-ready path is direct distribution outside the Mac App Store.
 ### 1. Apple-side prerequisites
 
 - Create Developer ID signing assets for the macOS app.
-- Create provisioning profiles for both app bundle identifiers. Defaults are `com.baleobala.app` and `com.baleobala.app.packet-tunnel`; use a team-owned prefix when those identifiers are unavailable.
-- Enable the app group for both targets. The default is `group.com.baleobala.vpn`; use the matching team-owned app group when you override the bundle identifiers.
+- Create provisioning profiles for both app bundle identifiers. Defaults are `com.userbot_bale.app` and `com.userbot_bale.app.packet-tunnel`; use a team-owned prefix when those identifiers are unavailable.
+- Enable the app group for both targets. The default is `group.com.userbot_bale.vpn`; use the matching team-owned app group when you override the bundle identifiers.
 - Enable the `packet-tunnel-provider` Network Extension entitlement for the packet-tunnel target.
 - Configure a notarytool keychain profile on the release machine.
 
@@ -144,17 +144,17 @@ Set these before running any signed build or release command:
 ```bash
 export MACOS_DEVELOPMENT_TEAM=YOURTEAMID
 export MACOS_CODE_SIGN_IDENTITY="Developer ID Application: Your Name (YOURTEAMID)"
-export MACOS_APP_PROFILE_SPECIFIER="Baleobala Direct App"
-export MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER="Baleobala Packet Tunnel"
-export MACOS_NOTARY_PROFILE="baleobala-notary"
+export MACOS_APP_PROFILE_SPECIFIER="UserbotBale Direct App"
+export MACOS_PACKET_TUNNEL_PROFILE_SPECIFIER="UserbotBale Packet Tunnel"
+export MACOS_NOTARY_PROFILE="userbot-bale-notary"
 ```
 
 Optional bundle/app-group overrides for a team-owned identifier namespace:
 
 ```bash
-export MACOS_APP_BUNDLE_ID="com.example.baleobala"
-export MACOS_PACKET_TUNNEL_BUNDLE_ID="com.example.baleobala.packet-tunnel"
-export MACOS_APP_GROUP_IDENTIFIER="group.com.example.baleobala"
+export MACOS_APP_BUNDLE_ID="com.example.userbot-bale"
+export MACOS_PACKET_TUNNEL_BUNDLE_ID="com.example.userbot_bale.packet-tunnel"
+export MACOS_APP_GROUP_IDENTIFIER="group.com.example.userbot-bale"
 ```
 
 `EXPORT_OPTIONS_PLIST` defaults to `native/macos/ExportOptions.direct.plist`. The build script expands that template into a generated plist with the resolved team and provisioning-profile values at export time. Override it only when the release machine needs a different direct-distribution export configuration.
@@ -176,8 +176,8 @@ Create the distributable app:
 
 Artifacts land under `build/macos/`:
 
-- `archive/Baleobala.xcarchive`
-- `export/Baleobala.app`
+- `archive/UserbotBale.xcarchive`
+- `export/UserbotBale.app`
 - `notary/submission.json`
 - `release-metadata.txt`
 
@@ -206,13 +206,13 @@ During a real signed session, verify:
 Relay pairing is now modeled as a provisioning workflow instead of a JSON file exchange:
 
 1. Enroll the relay:
-   `baleobala pair enroll --name home-relay --role client`
+   `userbot-bale pair enroll --name home-relay --role client`
 2. Request access for the current device:
-   `baleobala pair request-access --profile-id <id>`
+   `userbot-bale pair request-access --profile-id <id>`
 3. Approve the pending request from an authorized owner session:
-   `baleobala pair approve --profile-id <id>`
+   `userbot-bale pair approve --profile-id <id>`
 4. Sync local state and credentials when needed:
-   `baleobala pair sync --profile-id <id>`
+   `userbot-bale pair sync --profile-id <id>`
 
 The older `export-request`, `accept-request`, and `apply-response` commands remain debug-only compatibility paths.
 
@@ -224,4 +224,4 @@ For a quick developer loop on macOS, run:
 ./scripts/run-macos.sh
 ```
 
-That builds the Debug app bundle with signing disabled for local development and opens the resulting `Baleobala.app`.
+That builds the Debug app bundle with signing disabled for local development and opens the resulting `UserbotBale.app`.

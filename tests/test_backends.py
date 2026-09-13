@@ -9,10 +9,10 @@ import pytest
 
 pytest.importorskip("ggwave")
 
-from baleobala.backends.memory import MemorySink, MemorySource
-from baleobala.codec import Protocol
-from baleobala.receiver import Receiver
-from baleobala.transmitter import Transmitter
+from userbot_bale.backends.memory import MemorySink, MemorySource
+from userbot_bale.codec import Protocol
+from userbot_bale.receiver import Receiver
+from userbot_bale.transmitter import Transmitter
 
 
 def test_memory_sink_accepts_waveforms() -> None:

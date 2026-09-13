@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_top_level_help_prioritizes_core_commands() -> None:
-    from baleobala.cli import build_parser
+    from userbot_bale.cli import build_parser
 
     help_text = build_parser().format_help()
 
@@ -20,7 +20,7 @@ def test_top_level_help_prioritizes_core_commands() -> None:
 
 
 def test_userbot_and_mcp_commands_are_exposed() -> None:
-    from baleobala.cli import build_parser
+    from userbot_bale.cli import build_parser
 
     parser = build_parser()
     userbot_args = parser.parse_args(["userbot", "allow-peer", "123"])
@@ -31,7 +31,7 @@ def test_userbot_and_mcp_commands_are_exposed() -> None:
     assert mcp_args.mcp_cmd == "serve"
 
 def test_auth_subcommand_help_text() -> None:
-    from baleobala.cli import build_parser
+    from userbot_bale.cli import build_parser
 
     parser = build_parser()
     auth_parser = None
@@ -50,7 +50,7 @@ def test_auth_subcommand_help_text() -> None:
 def test_tunnel_help_lists_mtproto_rpc_transport() -> None:
     import argparse
 
-    from baleobala.vpn.cli import add_tunnel_subparser
+    from userbot_bale.vpn.cli import add_tunnel_subparser
 
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd")
@@ -73,7 +73,7 @@ def _exit_node_mesh_parser():
     """Build the `tunnel exit-node-mesh` subparser in isolation."""
     import argparse
 
-    from baleobala.vpn.cli import add_tunnel_subparser
+    from userbot_bale.vpn.cli import add_tunnel_subparser
 
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd")
@@ -112,21 +112,21 @@ def test_exit_node_mesh_minimal_args_accepted() -> None:
 
 
 def test_vpn_status_summary_guides_next_step(monkeypatch, capsys, tmp_path) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     class Args:
         vpn_cmd = "status"
 
     assert cmd_vpn(Args()) == 0
     captured = capsys.readouterr()
-    assert "baleobala secure connection status" in captured.out
+    assert "userbot-bale secure connection status" in captured.out
     assert "Next step:" in captured.out
 
 
 def test_vpn_status_prints_path_health_when_backend_exposes_it(monkeypatch, capsys, tmp_path) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     class FakeBackend:
         def status(self):
@@ -139,7 +139,7 @@ def test_vpn_status_prints_path_health_when_backend_exposes_it(monkeypatch, caps
                 "egress_ready": "yes",
             }
 
-    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", lambda profile: FakeBackend())
+    monkeypatch.setattr("userbot_bale.control.backend.backend_for_profile", lambda profile: FakeBackend())
 
     class Args:
         vpn_cmd = "status"
@@ -155,9 +155,9 @@ def test_vpn_status_prints_path_health_when_backend_exposes_it(monkeypatch, caps
 
 
 def test_bale_auth_warns_and_still_prints_jwt(monkeypatch, capsys) -> None:
-    from baleobala.cli import cmd_bale_auth
+    from userbot_bale.cli import cmd_bale_auth
 
-    monkeypatch.setattr("baleobala.cli._run_bale_auth_login", lambda args: "jwt-token")
+    monkeypatch.setattr("userbot_bale.cli._run_bale_auth_login", lambda args: "jwt-token")
 
     class Args:
         phone = "+98912"
@@ -165,7 +165,7 @@ def test_bale_auth_warns_and_still_prints_jwt(monkeypatch, capsys) -> None:
     assert cmd_bale_auth(Args()) == 0
     captured = capsys.readouterr()
     assert "jwt-token" in captured.out
-    assert "`baleobala bale-auth` is deprecated" in captured.err
+    assert "`userbot-bale bale-auth` is deprecated" in captured.err
     assert "auth bale-login" in captured.err
     assert "auth login --jwt-file" in captured.err
 
@@ -182,8 +182,8 @@ def test_docs_align_on_production_auth_story() -> None:
     for name, text in docs.items():
         assert "auth bale-login" in text, name
 
-    assert "baleobala auth login` first" not in docs["SETUP"]
-    assert "Start with `baleobala auth login`" not in docs["INSTALL"]
+    assert "userbot-bale auth login` first" not in docs["SETUP"]
+    assert "Start with `userbot-bale auth login`" not in docs["INSTALL"]
     # README must document the bale-login command (canonical auth entry point).
     assert "bale-login" in docs["README"]
 
@@ -204,7 +204,7 @@ def test_docs_share_main_product_path_language() -> None:
 
 
 def test_marker_emitter_writes_exact_line(capsys) -> None:
-    from baleobala.cli import _emit_marker
+    from userbot_bale.cli import _emit_marker
 
     _emit_marker("call_established")
     captured = capsys.readouterr()
@@ -212,8 +212,8 @@ def test_marker_emitter_writes_exact_line(capsys) -> None:
 
 
 def test_vpn_verdict_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     class FakeBackend:
         def status(self):
@@ -232,10 +232,10 @@ def test_vpn_verdict_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
                 "artifact_bundle": "/tmp/bundle",
             }
 
-    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", lambda profile: FakeBackend())
+    monkeypatch.setattr("userbot_bale.control.backend.backend_for_profile", lambda profile: FakeBackend())
     monkeypatch.setattr(
-        "baleobala.control.build_product_verdict",
-        lambda status, bundle_analysis=None: __import__("baleobala.control.analyzer", fromlist=["ProductVerdict"]).ProductVerdict(
+        "userbot_bale.control.build_product_verdict",
+        lambda status, bundle_analysis=None: __import__("userbot_bale.control.analyzer", fromlist=["ProductVerdict"]).ProductVerdict(
             ok="yes",
             backend="linux-tun",
             state="running",
@@ -271,8 +271,8 @@ def test_vpn_verdict_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
 
 
 def test_vpn_smoke_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     class FakeBackend:
         def status(self):
@@ -309,8 +309,8 @@ def test_vpn_smoke_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
                 "last_error": "",
             }
 
-    monkeypatch.setattr("baleobala.control.backend.backend_for_profile", lambda profile: FakeBackend())
-    monkeypatch.setattr("baleobala.control.smoke_backend_status", lambda status, timeout=1.0: FakeSmokeReport())
+    monkeypatch.setattr("userbot_bale.control.backend.backend_for_profile", lambda profile: FakeBackend())
+    monkeypatch.setattr("userbot_bale.control.smoke_backend_status", lambda status, timeout=1.0: FakeSmokeReport())
 
     class Args:
         vpn_cmd = "smoke"
@@ -331,12 +331,12 @@ def test_vpn_smoke_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
 
 
 def test_vpn_analyze_bundle_prints_path_health(monkeypatch, capsys, tmp_path) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     monkeypatch.setattr(
-        "baleobala.control.analyze_bundle",
-        lambda bundle_path: __import__("baleobala.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
+        "userbot_bale.control.analyze_bundle",
+        lambda bundle_path: __import__("userbot_bale.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
             classification="accepted_flow",
             reason="bundle indicates accepted flow",
             bundle_path=str(bundle_path),
@@ -349,7 +349,7 @@ def test_vpn_analyze_bundle_prints_path_health(monkeypatch, capsys, tmp_path) ->
         ),
     )
     monkeypatch.setattr(
-        "baleobala.control.bundle_status",
+        "userbot_bale.control.bundle_status",
         lambda bundle_path: {
             "artifact_bundle": str(bundle_path),
             "route_ready": "yes",
@@ -378,12 +378,12 @@ def test_vpn_analyze_bundle_prints_path_health(monkeypatch, capsys, tmp_path) ->
 def test_vpn_analyze_bundle_json_includes_path_health(monkeypatch, capsys, tmp_path) -> None:
     import json
 
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     monkeypatch.setattr(
-        "baleobala.control.analyze_bundle",
-        lambda bundle_path: __import__("baleobala.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
+        "userbot_bale.control.analyze_bundle",
+        lambda bundle_path: __import__("userbot_bale.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
             classification="infra_flake",
             reason="dns_config_failed",
             bundle_path=str(bundle_path),
@@ -396,7 +396,7 @@ def test_vpn_analyze_bundle_json_includes_path_health(monkeypatch, capsys, tmp_p
         ),
     )
     monkeypatch.setattr(
-        "baleobala.control.bundle_status",
+        "userbot_bale.control.bundle_status",
         lambda bundle_path: {
             "artifact_bundle": str(bundle_path),
             "route_ready": "yes",
@@ -422,12 +422,12 @@ def test_vpn_analyze_bundle_json_includes_path_health(monkeypatch, capsys, tmp_p
 
 
 def test_vpn_analyze_bundle_prints_failure_hints(monkeypatch, capsys, tmp_path) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    from baleobala.cli import cmd_vpn
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    from userbot_bale.cli import cmd_vpn
 
     monkeypatch.setattr(
-        "baleobala.control.analyze_bundle",
-        lambda bundle_path: __import__("baleobala.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
+        "userbot_bale.control.analyze_bundle",
+        lambda bundle_path: __import__("userbot_bale.control.analyzer", fromlist=["BundleAnalysis"]).BundleAnalysis(
             classification="product_bug",
             reason="route_program_failed",
             bundle_path=str(bundle_path),
@@ -440,7 +440,7 @@ def test_vpn_analyze_bundle_prints_failure_hints(monkeypatch, capsys, tmp_path) 
         ),
     )
     monkeypatch.setattr(
-        "baleobala.control.bundle_status",
+        "userbot_bale.control.bundle_status",
         lambda bundle_path: {
             "artifact_bundle": str(bundle_path),
             "route_ready": "no",

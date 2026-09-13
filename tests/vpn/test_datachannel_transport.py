@@ -7,8 +7,8 @@ import pytest
 
 pytest.importorskip("livekit")
 
-from baleobala.bale.livekit_backend import LiveKitDataChannel
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.bale.livekit_backend import LiveKitDataChannel
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 class _FakeSession:

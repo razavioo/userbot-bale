@@ -1,5 +1,5 @@
 """
-Multi-party mesh tests for baleobala.
+Multi-party mesh tests for userbot_bale.
 
 Test coverage
 -------------
@@ -30,13 +30,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from baleobala.bale import livekit_backend as lk
-from baleobala.vpn.fake_tun import FakeTun
-from baleobala.vpn.mesh.allocator import IpAllocator
-from baleobala.vpn.mesh.exit_node import MeshExitNode
-from baleobala.vpn.mesh.router import PacketRouter
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.bale import livekit_backend as lk
+from userbot_bale.vpn.fake_tun import FakeTun
+from userbot_bale.vpn.mesh.allocator import IpAllocator
+from userbot_bale.vpn.mesh.exit_node import MeshExitNode
+from userbot_bale.vpn.mesh.router import PacketRouter
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 # ---------------------------------------------------------------------------

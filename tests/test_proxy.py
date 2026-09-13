@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from baleobala.runtime import MemoryByteChannel, NullSecurityProvider, QueuedTunnelTransport, TunnelRole, TunnelSession
-from baleobala.runtime.proxy import (
+from userbot_bale.runtime import MemoryByteChannel, NullSecurityProvider, QueuedTunnelTransport, TunnelRole, TunnelSession
+from userbot_bale.runtime.proxy import (
     DirectFirstSocks5ProxyServer,
     ProxyHub,
     ProxyPacket,
@@ -17,7 +17,7 @@ from baleobala.runtime.proxy import (
     Socks5ProxyServer,
     TunnelTcpRelay,
 )
-from baleobala.runtime.proxy import HEADER_SIZE, MAGIC, MAX_DATA_LEN, MAX_HOST_LEN
+from userbot_bale.runtime.proxy import HEADER_SIZE, MAGIC, MAX_DATA_LEN, MAX_HOST_LEN
 
 PROXY_SECRET = b"proxy-secret"
 
@@ -409,7 +409,7 @@ def test_direct_first_proxy_respects_tunnel_only_domains() -> None:
 
 
 def test_proxy_policy_parses_iran_and_gfw_domain_lists() -> None:
-    from baleobala.runtime.proxy_policy import parse_domain_lines, parse_gfwlist_domains
+    from userbot_bale.runtime.proxy_policy import parse_domain_lines, parse_gfwlist_domains
 
     iran_domains = parse_domain_lines(
         """
@@ -434,13 +434,13 @@ def test_proxy_policy_parses_iran_and_gfw_domain_lists() -> None:
 
 
 def test_proxy_policy_direct_domains_win_over_tunnel_domains(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
-    monkeypatch.setenv("BALEOBALA_PROXY_DIRECT_ONLY_DOMAIN", "digikala.com")
-    monkeypatch.setenv("BALEOBALA_PROXY_TUNNEL_ONLY_DOMAIN", "digikala.com,blocked.example")
-    monkeypatch.setenv("BALEOBALA_IRAN_HOSTED_DOMAINS_URL", "file:///missing")
-    monkeypatch.setenv("BALEOBALA_GFWLIST_URL", "file:///missing")
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_PROXY_DIRECT_ONLY_DOMAIN", "digikala.com")
+    monkeypatch.setenv("USERBOT_BALE_PROXY_TUNNEL_ONLY_DOMAIN", "digikala.com,blocked.example")
+    monkeypatch.setenv("USERBOT_BALE_IRAN_HOSTED_DOMAINS_URL", "file:///missing")
+    monkeypatch.setenv("USERBOT_BALE_GFWLIST_URL", "file:///missing")
 
-    from baleobala.runtime.proxy_policy import load_proxy_domain_policy
+    from userbot_bale.runtime.proxy_policy import load_proxy_domain_policy
 
     policy = load_proxy_domain_policy(timeout=0.01)
 
@@ -450,7 +450,7 @@ def test_proxy_policy_direct_domains_win_over_tunnel_domains(tmp_path, monkeypat
 
 
 def test_proxy_policy_loads_bundled_lists_without_network(monkeypatch) -> None:
-    from baleobala.runtime import proxy_policy
+    from userbot_bale.runtime import proxy_policy
 
     monkeypatch.setattr(proxy_policy, "_fetch_text", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network used")))
 

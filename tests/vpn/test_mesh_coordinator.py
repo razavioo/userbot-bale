@@ -18,11 +18,11 @@ import threading
 
 import pytest
 
-from baleobala.vpn.mesh.multiparty import MeshCoordinator, DEFAULT_ROOM_CAPACITY
-from baleobala.vpn.fake_tun import FakeTun
-from baleobala.vpn.mesh.exit_node import MeshExitNode
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.vpn.mesh.multiparty import MeshCoordinator, DEFAULT_ROOM_CAPACITY
+from userbot_bale.vpn.fake_tun import FakeTun
+from userbot_bale.vpn.mesh.exit_node import MeshExitNode
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 # ---------------------------------------------------------------------------

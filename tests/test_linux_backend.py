@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from baleobala.control.linux import LinuxKillSwitch, LinuxTunBackend, LinuxTunSession, TunPlan
-from baleobala.control.resolver import (
+from userbot_bale.control.linux import LinuxKillSwitch, LinuxTunBackend, LinuxTunSession, TunPlan
+from userbot_bale.control.resolver import (
     LinuxResolver,
     MacOSResolver,
     NullResolver,
     RoutePlan,
 )
-from baleobala.control.vpn import VpnProfile
+from userbot_bale.control.vpn import VpnProfile
 
 
 class FakeRunner:

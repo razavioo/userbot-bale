@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.bale.api import BaleApiClient, LiveKitCredentials
-from baleobala.bale.endpoints import Endpoint
-from baleobala.bale.messaging_backend import MessagingBackend
-from baleobala.bale.protos import (
+from userbot_bale.bale.api import BaleApiClient, LiveKitCredentials
+from userbot_bale.bale.endpoints import Endpoint
+from userbot_bale.bale.messaging_backend import MessagingBackend
+from userbot_bale.bale.protos import (
     CallCredentials, DialogInfo, InboundMessage, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
     parse_incoming_call_offer,
 )
-from baleobala.bale.rpc_envelope import Response
+from userbot_bale.bale.rpc_envelope import Response
 
 
 def test_livekit_credentials_shape() -> None:
@@ -204,7 +204,7 @@ def test_api_client_bootstrap_caches_endpoint_fetch(monkeypatch) -> None:
         calls["count"] += 1
         return expected
 
-    monkeypatch.setattr("baleobala.bale.api.fetch_endpoints", fake_fetch_endpoints)
+    monkeypatch.setattr("userbot_bale.bale.api.fetch_endpoints", fake_fetch_endpoints)
     client = BaleApiClient()
 
     first = client.bootstrap()
@@ -233,7 +233,7 @@ def test_listen_all_messages_receives_decoded_events(monkeypatch) -> None:
 
     client.listen_all_messages(on_message)
     inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
-    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
+    monkeypatch.setattr("userbot_bale.bale.api.find_inbound_messages", lambda raw: [inbound])
 
     client._dispatch_inbound_messages(b"update")
 
@@ -268,7 +268,7 @@ def test_all_message_subscription_runs_through_update_dispatch(monkeypatch) -> N
 
     client.listen_all_messages(on_message)
     inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
-    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
+    monkeypatch.setattr("userbot_bale.bale.api.find_inbound_messages", lambda raw: [inbound])
 
     client._dispatch_update(Response(seq=None, payload=b"", raw=b"update"))
 
@@ -283,7 +283,7 @@ def test_all_message_callback_runs_off_dispatch_thread(monkeypatch) -> None:
     callback_thread: list[int] = []
     delivered = threading.Event()
     inbound = InboundMessage(peer_user_id=7, sender_uid=8, rid=9, text="hello")
-    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [inbound])
+    monkeypatch.setattr("userbot_bale.bale.api.find_inbound_messages", lambda raw: [inbound])
 
     def on_message(message: InboundMessage) -> None:
         callback_thread.append(threading.get_ident())
@@ -313,7 +313,7 @@ def test_message_deduplication_keeps_equal_rids_from_distinct_peers(monkeypatch)
     client.listen_all_messages(on_message)
     first = InboundMessage(peer_user_id=7, sender_uid=7, rid=9, text="first")
     second = InboundMessage(peer_user_id=8, sender_uid=8, rid=9, text="second")
-    monkeypatch.setattr("baleobala.bale.api.find_inbound_messages", lambda raw: [first, second])
+    monkeypatch.setattr("userbot_bale.bale.api.find_inbound_messages", lambda raw: [first, second])
 
     client._dispatch_inbound_messages(b"update")
 
@@ -335,7 +335,7 @@ def test_load_dialogs_prefers_current_grouped_dialog_rpc(monkeypatch) -> None:
     client._ws = ws  # type: ignore[assignment]
     expected = [DialogInfo(peer_id=7, peer_type=1, unread_count=0, last_message_date=9, access_hash=11)]
     monkeypatch.setattr(
-        "baleobala.bale.api.parse_load_grouped_dialogs_response", lambda payload: expected,
+        "userbot_bale.bale.api.parse_load_grouped_dialogs_response", lambda payload: expected,
     )
 
     assert client.load_dialogs(limit=20) == expected
@@ -357,10 +357,10 @@ def test_load_dialogs_falls_back_to_legacy_when_grouped_is_empty(monkeypatch) ->
     client._ws = ws  # type: ignore[assignment]
     expected = [DialogInfo(peer_id=7, peer_type=1, unread_count=0, last_message_date=9)]
     monkeypatch.setattr(
-        "baleobala.bale.api.parse_load_grouped_dialogs_response", lambda payload: [],
+        "userbot_bale.bale.api.parse_load_grouped_dialogs_response", lambda payload: [],
     )
     monkeypatch.setattr(
-        "baleobala.bale.api.parse_load_dialogs_response", lambda payload: expected,
+        "userbot_bale.bale.api.parse_load_dialogs_response", lambda payload: expected,
     )
 
     assert client.load_dialogs(limit=20) == expected

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from baleobala.bale.endpoints import Endpoint
-from baleobala.bale.mtproto import (
+from userbot_bale.bale.endpoints import Endpoint
+from userbot_bale.bale.mtproto import (
     MtprotoAuthKey,
     MtprotoSession,
     MtprotoSessionState,
@@ -23,7 +23,7 @@ class _Rpc:
 
 
 def test_mtproto_session_store_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     store = MtprotoSessionStore()
     session = PersistedMtprotoSession(
         endpoint_host="rpc-c002.bale.ai",
@@ -44,7 +44,7 @@ def test_mtproto_session_store_roundtrip(tmp_path, monkeypatch) -> None:
 
 
 def test_mtproto_session_persists_on_start(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_HOME", str(tmp_path))
+    monkeypatch.setenv("USERBOT_BALE_HOME", str(tmp_path))
     store = MtprotoSessionStore()
     state = MtprotoSessionState.create(
         endpoint=Endpoint(

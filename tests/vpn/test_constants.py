@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from baleobala.vpn.constants import DEFAULT_TUNNEL_SESS_ID
+from userbot_bale.vpn.constants import DEFAULT_TUNNEL_SESS_ID
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +27,7 @@ ANDROID_VPN_SERVICE = (
     / "main"
     / "java"
     / "com"
-    / "baleobala"
+    / "userbot-bale"
     / "vpn"
     / "BaleVpnService.kt"
 )
@@ -41,10 +41,10 @@ def test_default_tunnel_sess_id_value_is_locked():
 
 def test_python_relay_uses_the_central_constant():
     """Every Python entry point that builds a tunnel must source its
-    sess_id from baleobala.vpn.constants — not a copy of the literal —
+    sess_id from userbot_bale.vpn.constants — not a copy of the literal —
     so a future change to the constant propagates everywhere at once."""
-    from baleobala.vpn.cli import DEFAULT_TUNNEL_SESS_ID as cli_const
-    from baleobala.vpn.mesh.exit_node import DEFAULT_TUNNEL_SESS_ID as mesh_const
+    from userbot_bale.vpn.cli import DEFAULT_TUNNEL_SESS_ID as cli_const
+    from userbot_bale.vpn.mesh.exit_node import DEFAULT_TUNNEL_SESS_ID as mesh_const
 
     assert cli_const is DEFAULT_TUNNEL_SESS_ID
     assert mesh_const is DEFAULT_TUNNEL_SESS_ID

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Install baleobala relay/client as a systemd service.
+# Install userbot-bale relay/client as a systemd service.
 #
 set -euo pipefail
 
 PEER_ID="${1:-}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/baleobala}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/userbot-bale}"
 TUN_IFACE="${TUN_IFACE:-vpn0}"
 
 if [[ -z "$PEER_ID" ]]; then
-    PEER_ID="$(cat /etc/baleobala/exit_peer_id.txt 2>/dev/null || true)"
+    PEER_ID="$(cat /etc/userbot-bale/exit_peer_id.txt 2>/dev/null || true)"
 fi
 if [[ -z "$PEER_ID" ]]; then
     echo "ERROR: exit node peer ID required"
@@ -21,17 +21,17 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-cat > /etc/systemd/system/baleobala-relay.service << EOF
+cat > /etc/systemd/system/userbot-bale-relay.service << EOF
 [Unit]
-Description=baleobala VPN Relay Client
+Description=userbot-bale VPN Relay Client
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/.venv/bin/baleobala tunnel up \\
-    --bale-jwt-file /etc/baleobala/jwt.txt \\
+ExecStart=${INSTALL_DIR}/.venv/bin/userbot-bale tunnel up \\
+    --bale-jwt-file /etc/userbot-bale/jwt.txt \\
     --peer-id ${PEER_ID} \\
     --tun ${TUN_IFACE}
 Restart=on-failure
@@ -44,9 +44,9 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable baleobala-relay.service
-systemctl start baleobala-relay.service
+systemctl enable userbot-bale-relay.service
+systemctl start userbot-bale-relay.service
 
-echo "OK: baleobala-relay service installed and started"
-echo "  Status : systemctl status baleobala-relay"
-echo "  Logs   : journalctl -u baleobala-relay -f"
+echo "OK: userbot-bale-relay service installed and started"
+echo "  Status : systemctl status userbot-bale-relay"
+echo "  Logs   : journalctl -u userbot-bale-relay -f"

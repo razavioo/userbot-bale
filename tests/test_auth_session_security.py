@@ -6,8 +6,8 @@ import sys
 import types
 from pathlib import Path
 
-from baleobala.control.auth import AuthStore
-from baleobala.control.keychain import KeyringSecretBackend
+from userbot_bale.control.auth import AuthStore
+from userbot_bale.control.keychain import KeyringSecretBackend
 
 
 def test_keyring_backend_delegates_to_the_platform_credential_manager(monkeypatch) -> None:
@@ -23,7 +23,7 @@ def test_keyring_backend_delegates_to_the_platform_credential_manager(monkeypatc
         errors=types.SimpleNamespace(PasswordDeleteError=PasswordDeleteError),
     )
     monkeypatch.setitem(sys.modules, "keyring", fake)
-    backend = KeyringSecretBackend(service="test.baleobala")
+    backend = KeyringSecretBackend(service="test.userbot-bale")
 
     backend.save("auth.jwt", "secret")
     assert backend.load("auth.jwt") == "secret"
@@ -32,7 +32,7 @@ def test_keyring_backend_delegates_to_the_platform_credential_manager(monkeypatc
 
 
 def test_auth_store_exports_a_raw_jwt_only_when_explicitly_enabled(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("BALEOBALA_SECRET_BACKEND", "file")
+    monkeypatch.setenv("USERBOT_BALE_SECRET_BACKEND", "file")
     store = AuthStore(tmp_path / "auth.json")
     exported: list[str] = []
     monkeypatch.setattr(store, "_export_to_accounts", exported.append)
@@ -40,7 +40,7 @@ def test_auth_store_exports_a_raw_jwt_only_when_explicitly_enabled(tmp_path, mon
     store.save_jwt("header.payload.signature")
     assert exported == []
 
-    monkeypatch.setenv("BALEOBALA_EXPORT_ACCOUNT_JWT", "1")
+    monkeypatch.setenv("USERBOT_BALE_EXPORT_ACCOUNT_JWT", "1")
     store.save_jwt("second.header.signature")
     assert exported == ["second.header.signature"]
 

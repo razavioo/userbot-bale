@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from baleobala.vpn import tun
+from userbot_bale.vpn import tun
 
 
 def test_tun_device_reports_an_unsupported_platform_without_import_failure(monkeypatch) -> None:

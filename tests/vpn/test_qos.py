@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import struct
 
-from baleobala.vpn.qos import (
+from userbot_bale.vpn.qos import (
     LEVEL_ACK,
     LEVEL_BULK,
     LEVEL_CONTROL,
@@ -84,7 +84,7 @@ def test_priority_queue_emits_control_first():
 
 
 def test_priority_queue_bulk_cap_drops_oldest():
-    from baleobala.vpn.qos import CAPS
+    from userbot_bale.vpn.qos import CAPS
     q = PriorityQueue()
     bulk_cap = CAPS[LEVEL_BULK]
     # Push cap+10 bulk packets; expect 10 drops and queue size == cap.

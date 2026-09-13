@@ -2,4 +2,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-open "${repo_root}/native/macos/Baleobala.xcodeproj"
+open "${repo_root}/native/macos/UserbotBale.xcodeproj"

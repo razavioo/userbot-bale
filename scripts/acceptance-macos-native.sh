@@ -2,14 +2,14 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-project="${repo_root}/native/macos/Baleobala.xcodeproj"
+project="${repo_root}/native/macos/UserbotBale.xcodeproj"
 base_xcconfig="${repo_root}/native/macos/Config/Base.xcconfig"
 app_xcconfig="${repo_root}/native/macos/Config/App.xcconfig"
 packet_xcconfig="${repo_root}/native/macos/Config/PacketTunnel.xcconfig"
-app_entitlements="${repo_root}/native/macos/BaleobalaApp/BaleobalaApp.entitlements"
-tunnel_entitlements="${repo_root}/native/macos/BaleobalaPacketTunnel/BaleobalaPacketTunnel.entitlements"
+app_entitlements="${repo_root}/native/macos/UserbotBaleApp/UserbotBaleApp.entitlements"
+tunnel_entitlements="${repo_root}/native/macos/UserbotBalePacketTunnel/UserbotBalePacketTunnel.entitlements"
 app_group_swift="${repo_root}/native/macos/Shared/BaleAppGroup.swift"
-provider_swift="${repo_root}/native/macos/BaleobalaPacketTunnel/PacketTunnelProvider.swift"
+provider_swift="${repo_root}/native/macos/UserbotBalePacketTunnel/PacketTunnelProvider.swift"
 export_options_plist="${EXPORT_OPTIONS_PLIST:-${repo_root}/native/macos/ExportOptions.direct.plist}"
 mode="${1:-repo}"
 
@@ -51,7 +51,7 @@ check_release_inputs() {
 app_group="$(python3 - <<'PY' "${base_xcconfig}"
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-match = re.search(r'^BALEOBALA_APP_GROUP_IDENTIFIER\s*=\s*(\S+)\s*$', text, re.M)
+match = re.search(r'^USERBOT_BALE_APP_GROUP_IDENTIFIER\s*=\s*(\S+)\s*$', text, re.M)
 if not match:
     raise SystemExit(1)
 print(match.group(1))
@@ -61,12 +61,12 @@ PY
 provider_bundle="$(python3 - <<'PY' "${base_xcconfig}"
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-values = dict(re.findall(r'^(BALEOBALA_[A-Z_]+)\s*=\s*(\S+)\s*$', text, re.M))
-provider = values.get("BALEOBALA_PACKET_TUNNEL_BUNDLE_ID", "")
-app = values.get("BALEOBALA_APP_BUNDLE_ID", "")
+values = dict(re.findall(r'^(USERBOT_BALE_[A-Z_]+)\s*=\s*(\S+)\s*$', text, re.M))
+provider = values.get("USERBOT_BALE_PACKET_TUNNEL_BUNDLE_ID", "")
+app = values.get("USERBOT_BALE_APP_BUNDLE_ID", "")
 if not provider:
     raise SystemExit(1)
-print(provider.replace("$(BALEOBALA_APP_BUNDLE_ID)", app))
+print(provider.replace("$(USERBOT_BALE_APP_BUNDLE_ID)", app))
 PY
 )"
 
@@ -80,13 +80,13 @@ PY
 
 for path in "${app_entitlements}" "${tunnel_entitlements}"; do
   entitlements_xml="$(plutil -convert xml1 -o - "${path}")"
-  if ! grep -Fq "${app_group}" <<<"${entitlements_xml}" && ! grep -Fq '$(BALEOBALA_APP_GROUP_IDENTIFIER)' <<<"${entitlements_xml}"; then
+  if ! grep -Fq "${app_group}" <<<"${entitlements_xml}" && ! grep -Fq '$(USERBOT_BALE_APP_GROUP_IDENTIFIER)' <<<"${entitlements_xml}"; then
     echo "app group ${app_group} missing from ${path}" >&2
     exit 3
   fi
 done
 
-require_pattern "BALEOBALA_PACKET_TUNNEL_BUNDLE_ID" "${packet_xcconfig}" "provider bundle setting missing from PacketTunnel.xcconfig"
+require_pattern "USERBOT_BALE_PACKET_TUNNEL_BUNDLE_ID" "${packet_xcconfig}" "provider bundle setting missing from PacketTunnel.xcconfig"
 require_pattern "com.apple.developer.networking.networkextension" "${tunnel_entitlements}" "packet-tunnel entitlement missing network extension capability"
 require_pattern "packet-tunnel-provider" "${tunnel_entitlements}" "packet-tunnel entitlement missing packet-tunnel-provider value"
 require_pattern "com.apple.security.application-groups" "${app_entitlements}" "app entitlements missing application-groups capability"
@@ -96,7 +96,7 @@ require_pattern '"type": "status"' "${provider_swift}" "packet tunnel provider i
 
 xcodebuild \
   -project "${project}" \
-  -scheme Baleobala \
+  -scheme UserbotBale \
   -configuration Debug \
   -destination "platform=macOS" \
   CODE_SIGNING_ALLOWED=NO \

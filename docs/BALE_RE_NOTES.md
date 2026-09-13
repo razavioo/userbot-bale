@@ -126,7 +126,7 @@ tcp@6d9ba5c5c665b0a7066682a05329f2a9c4c11aa08c9c548ebd33b9d06bf6e444://rpc-c002.
 ```
 
 Format is `tls|tcp @<sha256_pin> :// <hostname> @ <ip> : <port> #<id>`.
-Parsed by [src/baleobala/bale/endpoints.py](../src/baleobala/bale/endpoints.py);
+Parsed by [src/userbot-bale/bale/endpoints.py](../src/userbot-bale/bale/endpoints.py);
 `BaleApiClient.bootstrap()` returns the list at runtime.
 
 `configs.json` currently disables these RPCs server-side, so a
@@ -156,7 +156,7 @@ through the MTProto handshake, which verifies the server holds the
 private key matching this fingerprint.
 
 This aligns with upstream Actor Platform where `Endpoint.key` carries
-the MTProto server identity. `src/baleobala/bale/mtproto/endpoint.py`
+the MTProto server identity. `src/userbot-bale/bale/mtproto/endpoint.py`
 is updated accordingly: TLS is plain, pin flows into the next layer.
 
 ## Remaining MTProto research milestones
@@ -164,7 +164,7 @@ is updated accordingly: TLS is plain, pin flows into the next layer.
 1. ✅ **Endpoint bootstrap.** Done — see `endpoints.py`. Live-tested
    against bale.ai on 2026-04-19.
 2. ✅ **Live TLS endpoint connect.** Done — see
-   `src/baleobala/bale/mtproto/endpoint.py`. Live-tested same day.
+   `src/userbot-bale/bale/mtproto/endpoint.py`. Live-tested same day.
 3. **Extract the MTProto client identifier (api_id / device_hash).** Not
    found as a literal in the decompile; likely derived at runtime in
    `ir.nasim.core.modules.*` initialization or passed as a

@@ -9,8 +9,8 @@ from __future__ import annotations
 import queue
 import time
 
-from baleobala.vpn.transports import InMemoryTransport
-from baleobala.vpn.tunnel import Tunnel
+from userbot_bale.vpn.transports import InMemoryTransport
+from userbot_bale.vpn.tunnel import Tunnel
 
 
 def test_swap_mid_session_resumes_tunnel():
