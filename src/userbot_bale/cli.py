@@ -2637,6 +2637,23 @@ def build_parser() -> argparse.ArgumentParser:
     userbot_messages.set_defaults(func=cmd_userbot)
     userbot_status = userbot_sub.add_parser("status", help="show userbot status and allowlist")
     userbot_status.set_defaults(func=cmd_userbot)
+    userbot_read = userbot_sub.add_parser("mark-read", help="mark messages read up to a server date")
+    userbot_read.add_argument("peer_id", type=int, help="numeric Bale peer ID")
+    userbot_read.add_argument("date", type=int, help="server timestamp date to mark read")
+    userbot_read.set_defaults(func=cmd_userbot)
+    userbot_search = userbot_sub.add_parser("search", help="search message history")
+    userbot_search.add_argument("query", help="text query to search for")
+    userbot_search.add_argument("--peer-id", type=int, default=None, help="limit search to peer")
+    userbot_search.add_argument("--limit", type=int, default=20, help="max results")
+    userbot_search.set_defaults(func=cmd_userbot)
+    userbot_whoami = userbot_sub.add_parser("whoami", help="display the active account user id and status")
+    userbot_whoami.set_defaults(func=cmd_userbot)
+    userbot_contacts = userbot_sub.add_parser("search-contacts", help="search Bale contacts and public directory")
+    userbot_contacts.add_argument("query", help="name, phone, or search query")
+    userbot_contacts.set_defaults(func=cmd_userbot)
+    userbot_resolve = userbot_sub.add_parser("resolve-phone", help="resolve phone number to numeric user ID")
+    userbot_resolve.add_argument("phone", help="phone number e.g. +98912...")
+    userbot_resolve.set_defaults(func=cmd_userbot)
 
     mcp = sub.add_parser("mcp", help="serve Bale tools over Model Context Protocol")
     mcp_sub = mcp.add_subparsers(dest="mcp_cmd", required=True)
@@ -3375,6 +3392,17 @@ def cmd_userbot(args: argparse.Namespace) -> int:
         print(f"Allowed peers : {peers if peers else 'none'}")
         return 0
 
+    if args.userbot_cmd == "whoami":
+        record = AuthStore().load()
+        if record is None:
+            raise RuntimeError("no valid Bale session; run 'userbot-bale auth bale-login --save' first")
+        ttl = record.seconds_until_expiry()
+        print(f"user_id: {record.user_id}")
+        if record.phone:
+            print(f"phone  : {record.phone}")
+        print(f"expires: {ttl:.0f}s" if ttl else "expires: unknown")
+        return 0
+
     record = AuthStore().load()
     if record is None:
         raise RuntimeError("no valid Bale session; run 'userbot-bale auth bale-login --save' first")
@@ -3423,6 +3451,55 @@ def cmd_userbot(args: argparse.Namespace) -> int:
                 sender = m.get("sender_id", 0)
                 text = m.get("text", "")
                 print(f"[{direction} sender={sender}] {text}")
+        finally:
+            client.stop()
+        return 0
+
+    if args.userbot_cmd == "mark-read":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        client.start()
+        try:
+            client.mark_read(args.peer_id, args.date)
+            print(f"marked read peer={args.peer_id} date={args.date}")
+        finally:
+            client.stop()
+        return 0
+
+    if args.userbot_cmd == "search":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        results = client.search_messages(args.query, peer_id=args.peer_id, limit=args.limit)
+        if not results:
+            print(f"no messages found matching {args.query!r}")
+        for m in reversed(results):
+            direction = m.get("direction", "inbound")
+            sender = m.get("sender_id", 0)
+            peer = m.get("peer_id")
+            text = m.get("text", "")
+            print(f"[{direction} peer={peer} sender={sender}] {text}")
+        return 0
+
+    if args.userbot_cmd == "search-contacts":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        client.start()
+        try:
+            contacts = client.search_contacts(args.query)
+            if not contacts:
+                print(f"no contacts found matching {args.query!r}")
+            for c in contacts:
+                uid = c.get("user_id")
+                name = c.get("name") or "no-name"
+                phone = c.get("phone_number") or ""
+                print(f"user_id={uid} name={name} phone={phone}")
+        finally:
+            client.stop()
+        return 0
+
+    if args.userbot_cmd == "resolve-phone":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        client.start()
+        try:
+            uid = client.resolve_phone(args.phone)
+            print(f"phone {args.phone} -> user_id {uid}")
         finally:
             client.stop()
         return 0

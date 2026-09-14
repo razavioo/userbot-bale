@@ -152,6 +152,41 @@ class UserbotStore:
             for row in rows
         ]
 
+    def search_messages(
+        self, query: str, *, peer_id: int | None = None, limit: int = 20,
+    ) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        pattern = f"%{query}%"
+        with self._lock:
+            if peer_id is not None:
+                rows = self._conn.execute(
+                    """
+                    SELECT message_id, peer_id, sender_id, direction, text, received_at
+                    FROM messages
+                    WHERE peer_id = ? AND text LIKE ?
+                    ORDER BY received_at DESC LIMIT ?
+                    """,
+                    (peer_id, pattern, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT message_id, peer_id, sender_id, direction, text, received_at
+                    FROM messages
+                    WHERE text LIKE ?
+                    ORDER BY received_at DESC LIMIT ?
+                    """,
+                    (pattern, limit),
+                ).fetchall()
+        return [
+            {
+                "message_id": row[0], "peer_id": row[1], "sender_id": row[2],
+                "direction": row[3], "text": row[4], "received_at": row[5],
+            }
+            for row in rows
+        ]
+
     def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
         """Return locally observed conversations ordered by recent activity.
 

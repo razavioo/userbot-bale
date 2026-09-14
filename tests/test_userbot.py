@@ -246,3 +246,71 @@ def test_cmd_userbot_status_and_cli(tmp_path, capsys) -> None:
         assert "100" in out
     finally:
         userbot_bale.userbot.UserbotStore = old_store_cls
+
+
+def test_command_dispatcher_routes_commands_and_regex(tmp_path) -> None:
+    from userbot_bale.userbot import CommandDispatcher
+
+    api = FakeApiClient()
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    store.allow_peer(77)
+    client = BaleUserClient(jwt="test", store=store, api_client=api)  # type: ignore[arg-type]
+
+    dispatcher = CommandDispatcher(prefix="!")
+    called = {}
+
+    @dispatcher.command("ping")
+    def ping_cmd(event, c, args):
+        called["ping"] = args
+        c.send_text(event.peer_id, "pong")
+
+    @dispatcher.regex(r"^calc\s+(\d+)\+(\d+)")
+    def calc_cmd(event, c, match):
+        res = int(match.group(1)) + int(match.group(2))
+        called["calc"] = res
+        c.send_text(event.peer_id, f"result={res}")
+
+    @dispatcher.default
+    def fallback(event, c):
+        called["default"] = event.text
+
+    runtime = UserbotRuntime(client, [dispatcher])
+    runtime.start()
+
+    # 1. Trigger command
+    api.callback(InboundMessage(peer_user_id=77, sender_uid=77, rid=1, text="!ping now"))
+    assert called.get("ping") == ["now"]
+    assert (77, b"pong") in api.sent
+
+    # 2. Trigger regex
+    api.callback(InboundMessage(peer_user_id=77, sender_uid=77, rid=2, text="calc 10+25"))
+    assert called.get("calc") == 35
+    assert (77, b"result=35") in api.sent
+
+    # 3. Trigger default
+    api.callback(InboundMessage(peer_user_id=77, sender_uid=77, rid=3, text="other text"))
+    assert called.get("default") == "other text"
+
+
+def test_store_search_messages(tmp_path) -> None:
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    store.record_message(
+        message_id="m1", peer_id=10, sender_id=10,
+        direction="inbound", text="apple banana cherry", received_at=1.0,
+    )
+    store.record_message(
+        message_id="m2", peer_id=20, sender_id=20,
+        direction="inbound", text="banana date fig", received_at=2.0,
+    )
+
+    all_banana = store.search_messages("banana")
+    assert len(all_banana) == 2
+    assert all_banana[0]["message_id"] == "m2"
+    assert all_banana[1]["message_id"] == "m1"
+
+    scoped = store.search_messages("banana", peer_id=10)
+    assert len(scoped) == 1
+    assert scoped[0]["message_id"] == "m1"
+
+    none_found = store.search_messages("grape")
+    assert len(none_found) == 0

@@ -45,6 +45,10 @@ class BaleUserClient:
         self._self_user_id = user_id_from_jwt(jwt)
         self._dialog_peer_types: dict[int, int] = {}
 
+    @property
+    def user_id(self) -> int | None:
+        return self._self_user_id
+
     def start(self) -> None:
         if self._started:
             return
@@ -157,6 +161,32 @@ class BaleUserClient:
                     for message in remote
                 ]
         return self.store.list_messages(peer_id, limit)
+
+    def search_messages(
+        self, query: str, *, peer_id: int | None = None, limit: int = 20,
+    ) -> list[dict[str, object]]:
+        return self.store.search_messages(query, peer_id=peer_id, limit=limit)
+
+    def search_contacts(self, query: str) -> list[dict[str, object]]:
+        if not self._started:
+            return []
+        try:
+            contacts = self._api.search_contacts(query)
+            return [
+                {
+                    "user_id": c.user_id,
+                    "phone_number": c.phone_number,
+                    "name": c.name,
+                }
+                for c in contacts
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def resolve_phone(self, phone: str | int) -> int:
+        if not self._started:
+            raise RuntimeError("client not started")
+        return self._api.resolve_peer(phone)
 
     def mark_read(self, peer_id: int, date: int, *, peer_type: int | None = None) -> None:
         if not self.store.is_peer_allowed(peer_id):

@@ -29,6 +29,11 @@ def test_userbot_and_mcp_commands_are_exposed() -> None:
     dialogs_args = parser.parse_args(["userbot", "dialogs", "--limit", "10"])
     messages_args = parser.parse_args(["userbot", "messages", "123", "--limit", "15"])
     status_args = parser.parse_args(["userbot", "status"])
+    read_args = parser.parse_args(["userbot", "mark-read", "123", "999999"])
+    search_args = parser.parse_args(["userbot", "search", "keyword", "--peer-id", "123"])
+    whoami_args = parser.parse_args(["userbot", "whoami"])
+    contacts_args = parser.parse_args(["userbot", "search-contacts", "john"])
+    resolve_args = parser.parse_args(["userbot", "resolve-phone", "+989123456789"])
 
     assert userbot_args.userbot_cmd == "allow-peer"
     assert userbot_args.peer_id == 123
@@ -40,6 +45,15 @@ def test_userbot_and_mcp_commands_are_exposed() -> None:
     assert messages_args.peer_id == 123
     assert messages_args.limit == 15
     assert status_args.userbot_cmd == "status"
+    assert read_args.userbot_cmd == "mark-read"
+    assert read_args.date == 999999
+    assert search_args.userbot_cmd == "search"
+    assert search_args.query == "keyword"
+    assert whoami_args.userbot_cmd == "whoami"
+    assert contacts_args.userbot_cmd == "search-contacts"
+    assert contacts_args.query == "john"
+    assert resolve_args.userbot_cmd == "resolve-phone"
+    assert resolve_args.phone == "+989123456789"
 
 def test_auth_subcommand_help_text() -> None:
     from userbot_bale.cli import build_parser
