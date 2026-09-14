@@ -66,23 +66,23 @@ jobs:
           git add bale.apk re/ docs/BALE_RE_NOTES.md
           git commit -m "chore(re): refresh Bale APK evidence ${DATE}"
           git push origin "$BRANCH"
+          printf "%s\n" \
+            "## Automated Bale APK evidence refresh" \
+            "" \
+            "This PR was opened automatically by the **refresh-bale-evidence** workflow." \
+            "" \
+            "### What changed" \
+            "- \`bale.apk\` updated to the latest version." \
+            "- \`re/jadx-out-<version>/\` new decompile added." \
+            "- \`docs/BALE_RE_NOTES.md\` has a new dated section with the proto/RPC diff." \
+            "" \
+            "### Review checklist" \
+            "- [ ] Check \`BALE_RE_NOTES.md\` for changed proto descriptors or new RPC names." \
+            "- [ ] If any field names or service names changed, update \`src/userbot_bale/bale/protos.py\` and the decoder accordingly." \
+            "- [ ] Run \`pytest tests/\` to confirm nothing broke." \
+            > "$RUNNER_TEMP/pr-body.md"
           gh pr create \
             --title "chore(re): Bale APK evidence refresh ${DATE}" \
-            --body "$(cat <<'EOF'
-## Automated Bale APK evidence refresh
-
-This PR was opened automatically by the **refresh-bale-evidence** workflow.
-
-### What changed
-- \`bale.apk\` updated to the latest version.
-- \`re/jadx-out-<version>/\` new decompile added.
-- \`docs/BALE_RE_NOTES.md\` has a new dated section with the proto/RPC diff.
-
-### Review checklist
-- [ ] Check \`BALE_RE_NOTES.md\` for changed proto descriptors or new RPC names.
-- [ ] If any field names or service names changed, update \`src/userbot_bale/bale/protos.py\` and the decoder accordingly.
-- [ ] Run \`pytest tests/\` to confirm nothing broke.
-EOF
-)" \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
             --base main \
             --head "$BRANCH"

@@ -131,7 +131,7 @@ def test_ws_client_disables_auto_proxy(monkeypatch) -> None:
 
     client = ws_client.WsClient(jwt="secret-jwt")
     with pytest.raises(RuntimeError):
-        client.start(timeout=0.1)
+        client.start(timeout=1.0)
     client.stop()
 
     assert captured["proxy"] is None
