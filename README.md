@@ -96,13 +96,13 @@ To protect accounts against unintended automated sends, peers must be explicitly
 
 ```bash
 # Allow a specific peer
-userbot-bale userbot allow-peer 1956473507
+userbot-bale userbot allow-peer 123456789
 
 # List all allowed peers
 userbot-bale userbot peers
 
 # Remove a peer from the allowlist
-userbot-bale userbot disallow-peer 1956473507
+userbot-bale userbot disallow-peer 123456789
 ```
 
 ### 3. CLI Operations
@@ -117,19 +117,19 @@ userbot-bale userbot whoami
 userbot-bale userbot status
 
 # Send a message to an authorized peer
-userbot-bale userbot send 1956473507 "Hello from userbot CLI!"
+userbot-bale userbot send 123456789 "Hello from userbot CLI!"
 
 # List recent active conversations
 userbot-bale userbot dialogs --limit 10
 
 # Read conversation history with a peer
-userbot-bale userbot messages 1956473507 --limit 20
+userbot-bale userbot messages 123456789 --limit 20
 
 # Search message history locally
-userbot-bale userbot search "order" --peer-id 1956473507
+userbot-bale userbot search "order" --peer-id 123456789
 
 # Mark conversation as read up to a timestamp
-userbot-bale userbot mark-read 1956473507 1789370000000
+userbot-bale userbot mark-read 123456789 1789370000000
 
 # Look up contacts or resolve phone numbers
 userbot-bale userbot search-contacts "Support"
@@ -186,7 +186,7 @@ from userbot_bale.userbot import (
 
 # 1. Initialize store and client
 store = UserbotStore()
-store.allow_peer(1956473507)
+store.allow_peer(123456789)
 
 client = BaleUserClient(
     jwt="YOUR_JWT_HERE",
@@ -247,6 +247,16 @@ pytest tests/
 # Run specific userbot & protocol tests
 pytest tests/test_userbot.py tests/test_cli_surface.py tests/test_new_protos.py
 ```
+
+---
+
+## 📖 Documentation & Languages
+
+- **Persian Documentation:** [docs/PERSIAN_GUIDE.md](docs/PERSIAN_GUIDE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Userbot and MCP](docs/USERBOT.md)
+- [Setup Guide](docs/SETUP.md)
+- [Operations & Deploy](docs/OPERATIONS.md)
 
 ---
 
