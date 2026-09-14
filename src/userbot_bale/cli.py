@@ -3457,6 +3457,12 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if "SSL_CERT_FILE" not in os.environ and "BALE_SSL_CA_FILE" not in os.environ:
+        try:
+            import certifi
+            os.environ["SSL_CERT_FILE"] = certifi.where()
+        except ImportError:
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     level = logging.WARNING - 10 * min(args.verbose, 2)
