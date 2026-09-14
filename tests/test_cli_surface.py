@@ -25,10 +25,21 @@ def test_userbot_and_mcp_commands_are_exposed() -> None:
     parser = build_parser()
     userbot_args = parser.parse_args(["userbot", "allow-peer", "123"])
     mcp_args = parser.parse_args(["mcp", "serve"])
+    send_args = parser.parse_args(["userbot", "send", "123", "hello"])
+    dialogs_args = parser.parse_args(["userbot", "dialogs", "--limit", "10"])
+    messages_args = parser.parse_args(["userbot", "messages", "123", "--limit", "15"])
+    status_args = parser.parse_args(["userbot", "status"])
 
     assert userbot_args.userbot_cmd == "allow-peer"
     assert userbot_args.peer_id == 123
     assert mcp_args.mcp_cmd == "serve"
+    assert send_args.userbot_cmd == "send"
+    assert send_args.peer_id == 123
+    assert send_args.text == "hello"
+    assert dialogs_args.limit == 10
+    assert messages_args.peer_id == 123
+    assert messages_args.limit == 15
+    assert status_args.userbot_cmd == "status"
 
 def test_auth_subcommand_help_text() -> None:
     from userbot_bale.cli import build_parser

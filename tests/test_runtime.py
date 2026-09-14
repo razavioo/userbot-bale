@@ -211,7 +211,9 @@ def test_bale_proxy_system_enables_proxy_after_listener(monkeypatch) -> None:
         def start(self) -> None:
             events.append("proxy.start")
             import signal
-            os.kill(os.getpid(), signal.SIGINT)
+            handler = signal.getsignal(signal.SIGINT)
+            if callable(handler):
+                handler(signal.SIGINT, None)
 
         def stop(self) -> None:
             events.append("proxy.stop")

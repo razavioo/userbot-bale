@@ -31,10 +31,12 @@ class BaleMcpService:
     def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
         self._ensure_started()
         allowed_peers = set(self._store.allowed_peers())
+        # Request more from client to ensure we find allowlisted dialogs
+        candidate_limit = max(limit * 5, 100)
         return [
-            dialog for dialog in self._client.list_dialogs(limit)
+            dialog for dialog in self._client.list_dialogs(candidate_limit)
             if dialog.get("peer_id") in allowed_peers
-        ]
+        ][:limit]
 
     def send_text(self, peer_id: int, text: str) -> dict[str, object]:
         self._require_allowed_peer(peer_id)

@@ -4,9 +4,9 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_src=$(CDPATH= cd -- "${script_dir}/../../../../src" 2>/dev/null && pwd || true)
 
-if [ -d "${script_dir}/userbot-bale" ]; then
+if [ -d "${script_dir}/userbot_bale" ] || [ -d "${script_dir}/userbot-bale" ]; then
   export PYTHONPATH="${script_dir}${PYTHONPATH:+:${PYTHONPATH}}"
-elif [ -n "${repo_src}" ] && [ -d "${repo_src}/userbot-bale" ]; then
+elif [ -n "${repo_src}" ] && { [ -d "${repo_src}/userbot_bale" ] || [ -d "${repo_src}/userbot-bale" ]; }; then
   export PYTHONPATH="${repo_src}${PYTHONPATH:+:${PYTHONPATH}}"
 elif [ -n "${USERBOT_BALE_PYTHONPATH:-}" ]; then
   export PYTHONPATH="${USERBOT_BALE_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"

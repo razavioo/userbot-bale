@@ -7,7 +7,7 @@ name = "userbot-bale"
 version = "0.3.0"
 description = "Bale userbot runtime, MCP server, and transport core across Linux, macOS, and Windows."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "userbot-bale" }]
 keywords = ["bale", "userbot", "mcp", "livekit", "voip", "data-over-sound"]

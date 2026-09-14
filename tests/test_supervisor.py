@@ -86,7 +86,9 @@ def test_supervisor_retries_transport_factory_failures(tmp_path: Path) -> None:
         checkpoint_path=tmp_path / "ck.json",
     )
     sup.start()
-    time.sleep(0.15)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and calls["n"] < 2:
+        time.sleep(0.01)
     sup.stop()
     assert calls["n"] >= 2
 
@@ -115,10 +117,14 @@ def test_supervisor_persists_checkpoint_while_running(tmp_path: Path) -> None:
         recorder=recorder,
     )
     sup.start()
-    assert factory_event.wait(1.0)
-    # give the supervisor a moment to persist after the first factory failure
-    time.sleep(0.05)
-    ck = load_checkpoint(path)
+    assert factory_event.wait(2.0)
+    deadline = time.monotonic() + 2.0
+    ck = None
+    while time.monotonic() < deadline:
+        ck = load_checkpoint(path)
+        if ck is not None and any(e["event"] == "supervisor_retry_scheduled" for e in recorder.events):
+            break
+        time.sleep(0.02)
     assert ck is not None
     assert ck.last_error == "blocked"
     assert any(event["event"] == "transport_setup_failed" for event in recorder.events)

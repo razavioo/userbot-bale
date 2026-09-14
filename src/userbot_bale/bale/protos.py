@@ -619,6 +619,8 @@ class InboundMessage:
     sender_uid: int
     rid: int
     text: str
+    date: int = 0
+    peer_type: int = 1
 
 
 def _walk_len_delim(buf: bytes):
@@ -678,14 +680,18 @@ def _parse_update_message(buf: bytes) -> InboundMessage | None:
     """Parse one UpdateMessage body.
     Fields: peer=1, sender_uid=2, date=3, rid=4, message=5."""
     peer_user_id = 0
+    peer_type = 1
     sender_uid = 0
+    date = 0
     rid = 0
     text: str | None = None
     for fn, val, wt in _walk_len_delim(buf):
         if wt == 2 and fn == 1:
-            _, peer_user_id = _parse_out_peer(val)
+            peer_type, peer_user_id = _parse_out_peer(val)
         elif wt == 0 and fn == 2:
             sender_uid = val
+        elif wt == 0 and fn == 3:
+            date = val
         elif wt == 0 and fn == 4:
             rid = val
         elif wt == 2 and fn == 5:
@@ -697,6 +703,8 @@ def _parse_update_message(buf: bytes) -> InboundMessage | None:
         sender_uid=sender_uid,
         rid=rid,
         text=text,
+        date=date,
+        peer_type=peer_type,
     )
 
 

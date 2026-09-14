@@ -23,6 +23,20 @@ user ID, not a phone number.
 ```bash
 userbot-bale userbot allow-peer 123456789
 userbot-bale userbot peers
+userbot-bale userbot status
+```
+
+You can also send messages or inspect conversations directly from the CLI:
+
+```bash
+# Send a message to an allowed peer
+userbot-bale userbot send 123456789 "Hello from userbot"
+
+# List recent conversations
+userbot-bale userbot dialogs --limit 20
+
+# View recent messages with a peer
+userbot-bale userbot messages 123456789 --limit 20
 ```
 
 ## Run A Userbot

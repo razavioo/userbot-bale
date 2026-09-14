@@ -2624,6 +2624,19 @@ def build_parser() -> argparse.ArgumentParser:
     userbot_disallow.set_defaults(func=cmd_userbot)
     userbot_peers = userbot_sub.add_parser("peers", help="list allowed outbound peers")
     userbot_peers.set_defaults(func=cmd_userbot)
+    userbot_send = userbot_sub.add_parser("send", help="send text message to an allowed peer")
+    userbot_send.add_argument("peer_id", type=int, help="numeric Bale peer ID")
+    userbot_send.add_argument("text", help="message text to send")
+    userbot_send.set_defaults(func=cmd_userbot)
+    userbot_dialogs = userbot_sub.add_parser("dialogs", help="list recent conversations")
+    userbot_dialogs.add_argument("--limit", type=int, default=20, help="max conversations to return (default: 20)")
+    userbot_dialogs.set_defaults(func=cmd_userbot)
+    userbot_messages = userbot_sub.add_parser("messages", help="show recent messages for a peer")
+    userbot_messages.add_argument("peer_id", type=int, help="numeric Bale peer ID")
+    userbot_messages.add_argument("--limit", type=int, default=20, help="max messages to return (default: 20)")
+    userbot_messages.set_defaults(func=cmd_userbot)
+    userbot_status = userbot_sub.add_parser("status", help="show userbot status and allowlist")
+    userbot_status.set_defaults(func=cmd_userbot)
 
     mcp = sub.add_parser("mcp", help="serve Bale tools over Model Context Protocol")
     mcp_sub = mcp.add_subparsers(dest="mcp_cmd", required=True)
@@ -3352,10 +3365,67 @@ def cmd_userbot(args: argparse.Namespace) -> int:
         for peer_id in store.allowed_peers():
             print(peer_id)
         return 0
+    if args.userbot_cmd == "status":
+        status = AuthStore().status()
+        peers = store.allowed_peers()
+        print(f"Auth state    : {status.get('state', 'unknown')}")
+        print(f"User ID       : {status.get('user_id', 'unknown')}")
+        print(f"Phone         : {status.get('phone', 'unknown')}")
+        print(f"Expires in    : {status.get('expires_in', 'unknown')}")
+        print(f"Allowed peers : {peers if peers else 'none'}")
+        return 0
 
     record = AuthStore().load()
     if record is None:
         raise RuntimeError("no valid Bale session; run 'userbot-bale auth bale-login --save' first")
+
+    if args.userbot_cmd == "send":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        client.start()
+        try:
+            client.send_text(args.peer_id, args.text)
+            print(f"sent to {args.peer_id}: {args.text}")
+        finally:
+            client.stop()
+        return 0
+
+    if args.userbot_cmd == "dialogs":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        try:
+            client.start()
+        except Exception:
+            pass
+        try:
+            dialogs = client.list_dialogs(limit=args.limit)
+            if not dialogs:
+                print("no conversations found")
+            for d in dialogs:
+                source = d.get("source", "unknown")
+                peer_id = d.get("peer_id")
+                unread = d.get("unread_count", 0)
+                print(f"peer_id={peer_id} unread={unread} source={source}")
+        finally:
+            client.stop()
+        return 0
+
+    if args.userbot_cmd == "messages":
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        try:
+            client.start()
+        except Exception:
+            pass
+        try:
+            messages = client.list_messages(args.peer_id, limit=args.limit)
+            if not messages:
+                print(f"no messages for peer {args.peer_id}")
+            for m in reversed(messages):
+                direction = m.get("direction", "inbound")
+                sender = m.get("sender_id", 0)
+                text = m.get("text", "")
+                print(f"[{direction} sender={sender}] {text}")
+        finally:
+            client.stop()
+        return 0
     plugins = [EchoPlugin()] if args.echo else []
     runtime = UserbotRuntime(BaleUserClient(jwt=record.jwt, store=store), plugins)
     stopped = threading.Event()

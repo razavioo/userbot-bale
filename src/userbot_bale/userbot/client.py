@@ -20,6 +20,7 @@ class MessageEvent:
     sender_id: int
     text: str
     received_at: float
+    peer_type: int = 1
 
 
 class BaleUserClient:
@@ -71,7 +72,7 @@ class BaleUserClient:
     def on_message(self, handler: Callable[[MessageEvent], None]) -> None:
         self._handlers.append(handler)
 
-    def send_text(self, peer_id: int, text: str) -> None:
+    def send_text(self, peer_id: int, text: str, *, peer_type: int | None = None) -> None:
         if not self.store.is_peer_allowed(peer_id):
             self.store.audit("outbound_rejected", peer_id=peer_id, detail="peer_not_allowlisted")
             raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
@@ -85,29 +86,41 @@ class BaleUserClient:
         ):
             self.store.audit("outbound_rejected", peer_id=peer_id, detail="rate_limited")
             raise RuntimeError("outbound rate limit reached for this peer")
-        self._api.send_message(peer_id, text.encode("utf-8"))
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        if resolved_peer_type != 1:
+            try:
+                self._api.send_message(peer_id, text.encode("utf-8"), peer_type=resolved_peer_type)
+            except TypeError:
+                self._api.send_message(peer_id, text.encode("utf-8"))
+        else:
+            self._api.send_message(peer_id, text.encode("utf-8"))
         message_id = "out:" + hashlib.sha256(
             f"{peer_id}:{time.time_ns()}:{text}".encode("utf-8")
         ).hexdigest()
         self.store.record_message(
-            message_id=message_id, peer_id=peer_id, sender_id=0,
+            message_id=message_id, peer_id=peer_id, sender_id=self._self_user_id or 0,
             direction="outbound", text=text,
         )
         self.store.audit("outbound_sent", peer_id=peer_id, detail=f"characters={len(text)}")
 
     def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
-        dialogs = self._api.load_dialogs(limit=limit)
-        self._remember_dialog_types(dialogs)
-        remote = [
-            {
-                "peer_id": dialog.peer_id,
-                "peer_type": dialog.peer_type,
-                "unread_count": dialog.unread_count,
-                "last_message_date": dialog.last_message_date,
-                "source": "remote",
-            }
-            for dialog in dialogs
-        ]
+        remote: list[dict[str, object]] = []
+        if self._started:
+            try:
+                dialogs = self._api.load_dialogs(limit=limit)
+                self._remember_dialog_types(dialogs)
+                remote = [
+                    {
+                        "peer_id": dialog.peer_id,
+                        "peer_type": dialog.peer_type,
+                        "unread_count": dialog.unread_count,
+                        "last_message_date": dialog.last_message_date,
+                        "source": "remote",
+                    }
+                    for dialog in dialogs
+                ]
+            except Exception:  # noqa: BLE001
+                remote = []
         # Preserve a real server result whenever available. The local index
         # keeps the userbot useful during a transient API failure or while it
         # is offline, without claiming to be full account history.
@@ -145,6 +158,16 @@ class BaleUserClient:
                 ]
         return self.store.list_messages(peer_id, limit)
 
+    def mark_read(self, peer_id: int, date: int, *, peer_type: int | None = None) -> None:
+        if not self.store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        if self._started:
+            resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+            try:
+                self._api.mark_read(peer_id, date, peer_type=resolved_peer_type)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _remember_dialog_types(self, dialogs: list[DialogInfo]) -> None:
         self._dialog_peer_types.update(
             {dialog.peer_id: dialog.peer_type for dialog in dialogs}
@@ -166,6 +189,8 @@ class BaleUserClient:
         ).hexdigest()
         message_id = f"in:{peer_id}:{message.rid}" if message.rid else f"in:{fingerprint}"
         received_at = time.time()
+        if message.peer_type and peer_id:
+            self._dialog_peer_types[peer_id] = message.peer_type
         if not self.store.record_message(
             message_id=message_id, peer_id=peer_id, sender_id=message.sender_uid,
             direction="inbound", text=message.text, received_at=received_at,
@@ -173,7 +198,7 @@ class BaleUserClient:
             return
         event = MessageEvent(
             message_id=message_id, peer_id=peer_id, sender_id=message.sender_uid,
-            text=message.text, received_at=received_at,
+            text=message.text, received_at=received_at, peer_type=message.peer_type or 1,
         )
         self.store.audit("inbound_received", peer_id=peer_id, detail=f"characters={len(message.text)}")
         for handler in tuple(self._handlers):

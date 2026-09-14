@@ -270,13 +270,23 @@ class WsClient:
                 self._pending.pop(seq, None)
 
     def _run_thread(self) -> None:
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
         _patch_nodelay_for_macos_daemon()
         try:
-            self._loop.run_until_complete(self._run())
+            loop.run_until_complete(self._run())
         finally:
-            self._loop.close()
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                try:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:  # noqa: BLE001
+                    pass
+            loop.close()
+            self._loop = None
 
     async def _run(self) -> None:
         backoff = self._reconnect_initial_backoff

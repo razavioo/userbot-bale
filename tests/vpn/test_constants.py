@@ -27,7 +27,7 @@ ANDROID_VPN_SERVICE = (
     / "main"
     / "java"
     / "com"
-    / "userbot-bale"
+    / "userbotbale"
     / "vpn"
     / "BaleVpnService.kt"
 )

@@ -206,3 +206,43 @@ def test_mcp_service_enforces_same_allowlist(tmp_path) -> None:
     store.allow_peer(12)
     assert service.send_text(12, "allowed") == {"ok": True, "peer_id": 12}
     assert api.sent == [(12, b"allowed")]
+
+
+def test_user_client_records_sender_id_and_peer_type(tmp_path) -> None:
+    api = FakeApiClient()
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    store.allow_peer(99)
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"payload": {"user_id": 55}}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    client = BaleUserClient(
+        jwt=f"header.{payload}.signature", store=store, api_client=api,  # type: ignore[arg-type]
+    )
+    client.send_text(99, "hello")
+    messages = store.list_messages(99)
+    assert len(messages) == 1
+    assert messages[0]["sender_id"] == 55
+    assert messages[0]["direction"] == "outbound"
+
+
+def test_cmd_userbot_status_and_cli(tmp_path, capsys) -> None:
+    from userbot_bale.cli import cmd_userbot
+    import argparse
+
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    store.allow_peer(100)
+
+    class Args:
+        userbot_cmd = "status"
+
+    # monkeypatch store path in cmd_userbot
+    import userbot_bale.userbot
+    old_store_cls = userbot_bale.userbot.UserbotStore
+    userbot_bale.userbot.UserbotStore = lambda: store
+    try:
+        assert cmd_userbot(Args()) == 0
+        out = capsys.readouterr().out
+        assert "Auth state" in out
+        assert "100" in out
+    finally:
+        userbot_bale.userbot.UserbotStore = old_store_cls

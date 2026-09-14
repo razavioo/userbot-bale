@@ -460,8 +460,10 @@ class BaleApiClient:
         except UnicodeDecodeError as e:
             raise ValueError("send_message body must be valid UTF-8") from e
 
+        access_key = (peer_type, peer_id)
+        access_hash = self._dialog_access_hashes.get(access_key, 0)
         req = RequestSendMessage(
-            peer=OutPeer(user_id=peer_id, type=peer_type),
+            peer=OutPeer(user_id=peer_id, type=peer_type, access_hash=access_hash),
             text=text,
         )
         payload = req.encode()

@@ -569,6 +569,7 @@ class LiveKitSession:
         log.info("late audio track published (VPN session promoted)")
 
     async def _shutdown(self) -> None:
+        self._stopped.set()
         await self._cancel_tasks()
         room = self._room
         self._audio_source = None
