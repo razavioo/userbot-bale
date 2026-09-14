@@ -443,8 +443,15 @@ class BaleApiClient:
             )
         return auth
 
-    def send_message(self, peer_id: int, body: bytes, *,
-                     peer_type: int = 1) -> None:
+    def send_message(
+        self,
+        peer_id: int,
+        body: bytes,
+        *,
+        peer_type: int = 1,
+        quoted_rid: int | None = None,
+        is_silent: bool = False,
+    ) -> None:
         """Send a text message to `peer_id` via
         `/bale.messaging.v2.Messaging/SendMessage`.
 
@@ -465,6 +472,8 @@ class BaleApiClient:
         req = RequestSendMessage(
             peer=OutPeer(user_id=peer_id, type=peer_type, access_hash=access_hash),
             text=text,
+            quoted_rid=quoted_rid,
+            is_silent=is_silent,
         )
         payload = req.encode()
         log.info("SendMessage peer=%d bytes=%d", peer_id, len(body))

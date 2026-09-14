@@ -269,6 +269,26 @@ class WsClient:
             with self._lock:
                 self._pending.pop(seq, None)
 
+    async def rpc_async(
+        self, service: str, method: str, payload: bytes = b"",
+        timeout: float = 10.0,
+    ) -> Response:
+        if self._loop is None or self._ws is None:
+            raise RuntimeError("WsClient not started")
+        import concurrent.futures
+        seq = next(self._seq_counter)
+        req = Request(service=service, method=method, payload=payload, seq=seq)
+        fut: concurrent.futures.Future[Response] = concurrent.futures.Future()
+        with self._lock:
+            self._pending[seq] = fut
+        frame = req.encode()
+        asyncio.run_coroutine_threadsafe(self._ws.send(frame), self._loop)
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
+        finally:
+            with self._lock:
+                self._pending.pop(seq, None)
+
     def _run_thread(self) -> None:
         loop = asyncio.new_event_loop()
         self._loop = loop
@@ -442,15 +462,19 @@ class WsClient:
         resp = Response.decode(buf)
         if resp.seq is not None:
             with self._lock:
-                q = self._pending.get(resp.seq)
-            if q is not None:
-                try:
-                    q.put_nowait(resp)
-                except queue.Full:
-                    log.error(
-                        "dropping RPC response seq=%s: pending queue full",
-                        resp.seq,
-                    )
+                target = self._pending.get(resp.seq)
+            if target is not None:
+                if isinstance(target, queue.Queue):
+                    try:
+                        target.put_nowait(resp)
+                    except queue.Full:
+                        log.error(
+                            "dropping RPC response seq=%s: pending queue full",
+                            resp.seq,
+                        )
+                elif hasattr(target, "set_result"):
+                    if not target.done():
+                        target.set_result(resp)
                 return
         if self._on_update is not None:
             try:

@@ -1,24 +1,40 @@
-"""userbot-bale — acoustic data bridge over voice/video calls."""
+"""userbot-bale — comprehensive Bale Messenger automation framework, userbot engine, and transport core."""
 
-from userbot_bale.audio_backend import AudioSink, AudioSource
+from userbot_bale import events, filters
+from userbot_bale.events import Message, MessageEvent
 from userbot_bale.framing import Frame, FrameFlag, Reassembler, fragment
+from userbot_bale.userbot.async_client import AsyncBaleClient, BaleClient
+from userbot_bale.userbot.client import BaleUserClient
 
 __all__ = [
+    "AsyncBaleClient",
     "AudioSink",
     "AudioSource",
+    "BaleClient",
+    "BaleUserClient",
+    "Codec",
     "Frame",
     "FrameFlag",
-    "Reassembler",
-    "fragment",
-    "Codec",
+    "Message",
+    "MessageEvent",
     "Protocol",
+    "Reassembler",
     "SAMPLE_RATE",
+    "events",
+    "filters",
+    "fragment",
 ]
 
 __version__ = "0.3.0"
 
 
 def __getattr__(name: str):
+    if name in {"AudioSink", "AudioSource"}:
+        from userbot_bale.audio_backend import AudioSink, AudioSource
+
+        globals()["AudioSink"] = AudioSink
+        globals()["AudioSource"] = AudioSource
+        return globals()[name]
     if name in {"Codec", "Protocol", "SAMPLE_RATE"}:
         from userbot_bale import codec as _codec
 

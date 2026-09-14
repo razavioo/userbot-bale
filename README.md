@@ -173,56 +173,83 @@ userbot-bale mcp serve
 
 ## 💻 Python Developer API
 
-Create customized automation using `CommandDispatcher` and `BaleUserClient`:
+### 1. Modern Async API (Standard Telethon / Pyrogram Style)
+
+The recommended standard way to build userbots and integrate Bale into other projects:
+
+```python
+from userbot_bale import BaleClient, events, filters
+
+# Initialize client (uses saved credentials by default, or provide jwt="...")
+client = BaleClient(jwt="YOUR_JWT_HERE")
+
+@client.on(filters.command("start"))
+async def handle_start(event):
+    await event.reply("Hello from Bale userbot!")
+
+@client.on(filters.command("ping"))
+async def handle_ping(event):
+    await event.reply("pong!")
+
+@client.on(filters.regex(r"^order #?(\d+)"))
+async def handle_order(event):
+    order_id = event.pattern_match.group(1)
+    await event.reply(f"Looking up order {order_id}...")
+
+@client.on(filters.text & filters.private)
+async def handle_private(event):
+    await event.mark_read()
+
+# Run the userbot until interrupted
+client.run()
+```
+
+Or run inside an existing `asyncio` loop:
+
+```python
+async with client:
+    await client.send_message(peer_id=123456789, text="System notification")
+    messages = await client.get_messages(peer_id=123456789, limit=10)
+```
+
+### 2. Synchronous & Classic Plugin API
+
+For lightweight scripts or existing synchronous workflows:
 
 ```python
 import threading
-from userbot_bale.userbot import (
-    BaleUserClient,
-    CommandDispatcher,
-    UserbotRuntime,
-    UserbotStore,
-)
+from userbot_bale import BaleUserClient, filters
 
-# 1. Initialize store and client
+client = BaleUserClient(jwt="YOUR_JWT_HERE", enforce_allowlist=False)
+
+@client.on_message(filters.command("ping"))
+def ping(event):
+    event.reply("pong!")
+
+client.start()
+try:
+    threading.Event().wait()
+finally:
+    client.stop()
+```
+
+Also supports `CommandDispatcher` and `UserbotRuntime` for legacy code:
+
+```python
+from userbot_bale.userbot import BaleUserClient, CommandDispatcher, UserbotRuntime, UserbotStore
+
 store = UserbotStore()
 store.allow_peer(123456789)
+client = BaleUserClient(jwt="YOUR_JWT_HERE", store=store)
 
-client = BaleUserClient(
-    jwt="YOUR_JWT_HERE",
-    store=store,
-)
-
-# 2. Configure Command Dispatcher
 dispatcher = CommandDispatcher(prefix="/")
-
-@dispatcher.command("help")
-def handle_help(event, bot, args):
-    bot.send_text(event.peer_id, "Available commands: /help, /status, /ping")
 
 @dispatcher.command("ping")
 def handle_ping(event, bot, args):
     bot.send_text(event.peer_id, "pong!")
 
-@dispatcher.regex(r"^echo\s+(.*)")
-def handle_echo(event, bot, match):
-    bot.send_text(event.peer_id, f"Echo: {match.group(1)}")
-
-@dispatcher.default
-def handle_fallback(event, bot):
-    # Mark incoming message as read
-    if event.received_at:
-        bot.mark_read(event.peer_id, int(event.received_at * 1000))
-
-# 3. Start the runtime
 runtime = UserbotRuntime(client, plugins=[dispatcher])
 runtime.start()
-
-try:
-    print("Userbot is live. Press Ctrl+C to stop.")
-    threading.Event().wait()
-finally:
-    runtime.stop()
 ```
 
 ---

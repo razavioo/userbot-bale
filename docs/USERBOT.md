@@ -72,7 +72,28 @@ The server provides `account_status`, `list_messages`, `list_dialogs`, and
 per peer per minute. Configure your MCP host to launch `userbot-bale mcp serve`; do
 not use a network transport until an authentication boundary is added.
 
-## Framework API
+## Modern Standard API (Async & Event-Driven)
+
+```python
+from userbot_bale import BaleClient, events, filters
+
+# Connect to Bale
+client = BaleClient()  # Automatically loads saved session from keychain
+
+@client.on(filters.command("start"))
+async def start_handler(event):
+    await event.reply("Hello! Bale userbot is active.")
+
+@client.on(filters.regex(r"^price\s+(.*)"))
+async def price_handler(event):
+    item = event.pattern_match.group(1)
+    await event.reply(f"Price lookup for: {item}")
+
+# Run bot
+client.run()
+```
+
+## Legacy Synchronous Framework API
 
 ```python
 from userbot_bale.userbot import BaleUserClient, UserbotRuntime, UserbotStore
@@ -84,7 +105,7 @@ client = BaleUserClient(jwt="loaded-from-your-secret-store", store=store)
 
 def handle(event):
     if event.text == "/status":
-        client.send_text(event.peer_id, "online")
+        event.reply("online")
 
 client.on_message(handle)
 runtime = UserbotRuntime(client)

@@ -164,7 +164,66 @@ userbot-bale mcp serve
 
 ---
 
-### ۷. توسعه و برنامهنویسی با پایتون
+### ۷. توسعه و برنامهنویسی با پایتون (SDK)
+
+#### شیوه مدرن و استاندارد Async (مشابه تلتون و پایروگرام)
+
+این روش استانداردترین شیوه برای اتصال سایر پروژهها و ساخت رباتهای ناهمگام است:
+
+```python
+from userbot_bale import BaleClient, events, filters
+
+# اتصال به بله (به صورت خودکار از سشن ذخیره شده استفاده میکند یا jwt را پاس دهید)
+client = BaleClient(jwt="YOUR_JWT_TOKEN")
+
+@client.on(filters.command("start"))
+async def start_handler(event):
+    await event.reply("سلام! ربات بله فعال است.")
+
+@client.on(filters.command("ping"))
+async def ping_handler(event):
+    await event.reply("pong!")
+
+@client.on(filters.regex(r"^سفارش #?(\d+)"))
+async def order_handler(event):
+    order_id = event.pattern_match.group(1)
+    await event.reply(f"پیگیری سفارش: {order_id}")
+
+@client.on(filters.text & filters.private)
+async def private_msg_handler(event):
+    await event.mark_read()
+
+# اجرای ربات تا زمان متوقف شدن توسط کاربر
+client.run()
+```
+
+همچنین میتوانید در بدنه کدهای ناهمگام (FastAPI / aiohttp / asyncio) استفاده کنید:
+
+```python
+async with client:
+    await client.send_message(peer_id=123456789, text="اعلان از سرور")
+```
+
+#### شیوه کالبکهای همگام (Synchronous)
+
+```python
+import threading
+from userbot_bale import BaleUserClient, filters
+
+client = BaleUserClient(jwt="YOUR_JWT_TOKEN", enforce_allowlist=False)
+
+@client.on_message(filters.command("ping"))
+def handle_ping(event):
+    event.reply("pong!")
+
+client.start()
+try:
+    threading.Event().wait()
+finally:
+    client.stop()
+```
+
+#### شیوه قدیمی و افزونهها (`CommandDispatcher`)
 
 ```python
 import threading

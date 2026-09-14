@@ -226,3 +226,127 @@ class UserbotStore:
                 (event_type, peer_id, detail, time.time()),
             )
             self._conn.commit()
+
+
+class MemoryUserbotStore:
+    """In-memory state store for tests, ephemeral userbots, and containerized deployments."""
+
+    def __init__(self) -> None:
+        self._allowed_peers: set[int] = set()
+        self._messages: list[dict[str, object]] = []
+        self._message_ids: set[str] = set()
+        self._audit_events: list[dict[str, object]] = []
+        self._reservations: dict[int, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        pass
+
+    def allow_peer(self, peer_id: int) -> None:
+        if peer_id <= 0:
+            raise ValueError("peer_id must be positive")
+        with self._lock:
+            self._allowed_peers.add(peer_id)
+
+    def disallow_peer(self, peer_id: int) -> None:
+        with self._lock:
+            self._allowed_peers.discard(peer_id)
+
+    def is_peer_allowed(self, peer_id: int) -> bool:
+        with self._lock:
+            return peer_id in self._allowed_peers
+
+    def allowed_peers(self) -> list[int]:
+        with self._lock:
+            return sorted(self._allowed_peers)
+
+    def record_message(
+        self,
+        *,
+        message_id: str,
+        peer_id: int,
+        sender_id: int,
+        direction: str,
+        text: str,
+        received_at: float | None = None,
+    ) -> bool:
+        with self._lock:
+            if message_id in self._message_ids:
+                return False
+            self._message_ids.add(message_id)
+            self._messages.append({
+                "message_id": message_id,
+                "peer_id": peer_id,
+                "sender_id": sender_id,
+                "direction": direction,
+                "text": text,
+                "received_at": received_at or time.time(),
+            })
+            return True
+
+    def reserve_outbound(
+        self,
+        peer_id: int,
+        *,
+        maximum: int,
+        window_seconds: float,
+    ) -> bool:
+        now = time.time()
+        cutoff = now - window_seconds
+        with self._lock:
+            times = [t for t in self._reservations.get(peer_id, []) if t >= cutoff]
+            if len(times) >= maximum:
+                return False
+            times.append(now)
+            self._reservations[peer_id] = times
+            return True
+
+    def list_messages(self, peer_id: int, limit: int = 20) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self._lock:
+            matching = [m for m in self._messages if m["peer_id"] == peer_id]
+            matching.sort(key=lambda x: float(x["received_at"]), reverse=True)
+            return matching[:limit]
+
+    def search_messages(
+        self, query: str, *, peer_id: int | None = None, limit: int = 20,
+    ) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        q = query.lower()
+        with self._lock:
+            matching = [
+                m for m in self._messages
+                if (peer_id is None or m["peer_id"] == peer_id) and q in str(m["text"]).lower()
+            ]
+            matching.sort(key=lambda x: float(x["received_at"]), reverse=True)
+            return matching[:limit]
+
+    def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self._lock:
+            by_peer: dict[int, list[dict[str, object]]] = {}
+            for m in self._messages:
+                by_peer.setdefault(int(m["peer_id"]), []).append(m)
+            dialogs = []
+            for pid, msgs in by_peer.items():
+                last_time = max(float(m["received_at"]) for m in msgs)
+                dialogs.append({
+                    "peer_id": pid,
+                    "last_message_at": last_time,
+                    "message_count": len(msgs),
+                    "source": "local_observed",
+                })
+            dialogs.sort(key=lambda x: float(x["last_message_at"]), reverse=True)
+            return dialogs[:limit]
+
+    def audit(self, event_type: str, *, peer_id: int | None = None, detail: str = "") -> None:
+        with self._lock:
+            self._audit_events.append({
+                "event_type": event_type,
+                "peer_id": peer_id,
+                "detail": detail,
+                "created_at": time.time(),
+            })

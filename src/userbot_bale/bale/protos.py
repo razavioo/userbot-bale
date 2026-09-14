@@ -590,8 +590,9 @@ class RequestSendMessage:
         field 1 (len-delim) = peer (OutPeer)
         field 2 (varint)    = rid (int64)
         field 3 (len-delim) = message (Message with text_message at tag 15)
-    Optional fields (is_only_for_user=4, quoted=5, ex_peer=6, is_silent=7,
-    thread_id=8) are omitted — text-only send to a single peer.
+        field 5 (len-delim) = quoted (QuotedMessage with rid at tag 1)
+        field 6 (len-delim) = ex_peer (OutPeer)
+        field 7 (varint)    = is_silent (bool)
     """
     peer: OutPeer
     text: str
@@ -601,6 +602,8 @@ class RequestSendMessage:
     # server accepts the message without ex_peer too; keep this on for
     # maximum parity.
     include_ex_peer: bool = True
+    quoted_rid: int | None = None
+    is_silent: bool = False
 
     def encode(self) -> bytes:
         rid = self.rid if self.rid is not None else secrets.randbits(55)
@@ -608,8 +611,13 @@ class RequestSendMessage:
         out += _enc_len_delim(1, self.peer.encode())
         out += _enc_tag(2, 0) + _enc_varint(rid)
         out += _enc_len_delim(3, _encode_message_with_text(self.text))
+        if self.quoted_rid is not None:
+            quoted_bytes = _enc_tag(1, 0) + _enc_varint(self.quoted_rid)
+            out += _enc_len_delim(5, bytes(quoted_bytes))
         if self.include_ex_peer:
             out += _enc_len_delim(6, self.peer.encode())
+        if self.is_silent:
+            out += _enc_tag(7, 0) + _enc_varint(1)
         return bytes(out)
 
 

@@ -22,16 +22,19 @@ Conventions
 
 from __future__ import annotations
 
-from typing import Iterator, Protocol, runtime_checkable
+from typing import Any, Iterator, Protocol, runtime_checkable
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
 
 
 @runtime_checkable
 class AudioSink(Protocol):
     """Sink of float32 mono samples at 48 kHz."""
 
-    def play(self, waveform: np.ndarray) -> None:
+    def play(self, waveform: Any) -> None:
         """Play a float32 mono buffer. Blocks until the buffer is submitted."""
 
     def close(self) -> None:
@@ -42,7 +45,7 @@ class AudioSink(Protocol):
 class AudioSource(Protocol):
     """Source of float32 mono samples at 48 kHz."""
 
-    def iter_blocks(self) -> Iterator[np.ndarray]:
+    def iter_blocks(self) -> Iterator[Any]:
         """Yield float32 mono blocks until close() is called."""
 
     def close(self) -> None:

@@ -24,9 +24,9 @@ classifiers = [
   "Topic :: Multimedia :: Sound/Audio",
 ]
 dependencies = [
-  "ggwave>=0.4.0",
-  "sounddevice>=0.4.6",
-  "numpy>=1.23",
+  "websockets>=12.0",
+  "cryptography>=40.0",
+  "httpx[http2]>=0.24.0",
 ]
 
 [project.optional-dependencies]
@@ -34,13 +34,26 @@ dev = [
   "pytest>=7",
   "pytest-timeout>=2",
 ]
+audio = [
+  "ggwave>=0.4.0",
+  "sounddevice>=0.4.6",
+  "numpy>=1.23",
+]
 bale = [
   "livekit>=0.17",
   "livekit-api>=0.7",
-  "websockets>=16",
+  "websockets>=12",
   "python-socks[asyncio]>=2.5",
-  "cryptography>=42",
-  "httpx[http2]>=0.25",   # gRPC-Web auth (phone/SMS → JWT)
+  "cryptography>=40",
+  "httpx[http2]>=0.24",
+]
+vpn = [
+  "livekit>=0.17",
+  "livekit-api>=0.7",
+  "python-socks[asyncio]>=2.5",
+  "ggwave>=0.4.0",
+  "sounddevice>=0.4.6",
+  "numpy>=1.23",
 ]
 vpn-video = [
   "opencv-python-headless>=4.8",
