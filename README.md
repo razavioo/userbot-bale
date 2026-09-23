@@ -39,14 +39,14 @@
 
 ### 2. Model Context Protocol (MCP) Server
 - **AI Agent Integration:** Exposes standard Model Context Protocol tools over `stdio`, ready for immediate connection with **Claude Desktop**, **Cursor**, or custom AI agents.
-- **Scoped Tool Boundary:**
+- **Scoped Tool Boundary:** Every tool returns a single JSON object (`structuredContent` type `object`):
   - `account_status`: Inspect connection state, authenticated user ID, token expiration, and allowlisted peers.
-  - `list_dialogs`: Retrieve recent server conversations filtered against the allowed peer set.
-  - `list_messages`: Read verified server/local chat history with an approved peer.
-  - `search_messages`: Search local database history by keyword across allowed chats.
-  - `send_text`: Dispatch verified outbound text to authorized contacts.
-  - `mark_read`: Acknowledge and mark messages as read up to a specific timestamp.
-  - `search_contacts` & `resolve_phone`: Resolve names or phone numbers to numeric IDs.
+  - `list_dialogs`: Retrieve recent server conversations filtered against the allowed peer set → `{dialogs, count}`.
+  - `list_messages`: Read verified server/local chat history with an approved peer → `{messages, count}`.
+  - `search_messages`: Search local database history by keyword across allowed chats → `{messages, count}`.
+  - `search_contacts` & `resolve_phone`: Resolve names or phone numbers to numeric IDs → `{contacts, count}` / `{phone, user_id, is_allowed}`.
+  - `send_text`: Two-phase outbound send to an allowlisted peer. First call returns `{needs_confirm, confirm_token, preview, expires_in}` without sending; second call with the same `peer_id`/`text` and `confirm_token` delivers `{ok, peer_id, confirmed}` (token TTL 5 minutes).
+  - `mark_read`: Acknowledge and mark messages as read up to a specific timestamp → `{ok, peer_id, date}`.
 
 ### 3. Comprehensive CLI Interface
 - Fully unified command line interface (`userbot-bale userbot ...`) for terminal-based usage, administrative management, manual messaging, contact lookup, and status inspection without background daemons.

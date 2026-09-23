@@ -13,6 +13,9 @@ contact import, raw RPCs, or call acceptance.
   WebSocket sessions and separate process lifecycles.
 - Start MCP only through `userbot-bale mcp serve` over stdio. It has no network listener and limits
   dialog/message access and outbound text to the local allowlist.
+- MCP tools return object-shaped `structuredContent` (`{messages, count}`, `{dialogs, count}`, …).
+  `send_text` is two-phase: the first call only returns a `confirm_token` (TTL 300 s) and does not
+  deliver; only a matching second call with that token sends.
 - Outbound automation is capped at 20 messages per peer per minute. A failed network send consumes
   a slot deliberately, preventing retry loops from creating a burst.
 

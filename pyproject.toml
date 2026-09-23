@@ -83,3 +83,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q"
+
+[dependency-groups]
+dev = [
+    "opencv-python-headless>=4.8",
+    "pillow>=10",
+    "pyside6>=6.7",
+    "qrcode>=7",
+]

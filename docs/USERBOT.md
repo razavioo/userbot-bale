@@ -66,11 +66,48 @@ pip install -e ".[mcp]"
 userbot-bale mcp serve
 ```
 
-The server provides `account_status`, `list_messages`, `list_dialogs`, and
-`send_text`. Messages and dialogs are limited to the local allowlist, and
-`send_text` refuses any peer outside it. Automated sends are also capped at 20
-per peer per minute. Configure your MCP host to launch `userbot-bale mcp serve`; do
+The server exposes these tools. Every tool returns a JSON **object**
+(`structuredContent` type `object`), never a bare list:
+
+| Tool | Returns |
+| --- | --- |
+| `account_status` | `{state, user_id, expires_in, allowed_peers}` |
+| `list_dialogs(limit)` | `{dialogs, count}` (allowlisted only; `limit` 1–100) |
+| `list_messages(peer_id, limit)` | `{messages, count}` |
+| `search_messages(query, peer_id?, limit)` | `{messages, count}` (allowlisted only) |
+| `search_contacts(query)` | `{contacts, count}` |
+| `resolve_phone(phone)` | `{phone, user_id, is_allowed}` |
+| `mark_read(peer_id, date)` | `{ok, peer_id, date}` |
+
+### `send_text` two-phase confirm
+
+Outbound text is **not** sent on the first call. Messages and dialogs are
+limited to the local allowlist, and `send_text` refuses any peer outside it.
+Automated sends are also capped at 20 per peer per minute.
+
+1. Call `send_text(peer_id, text)` **without** `confirm_token`.
+   Response (nothing is delivered):
+
+   ```json
+   {
+     "ok": false,
+     "needs_confirm": true,
+     "confirm_token": "…",
+     "peer_id": 123456789,
+     "preview": {"peer_id": 123456789, "text": "…"},
+     "expires_in": 300
+   }
+   ```
+
+2. Call again with the **same** `peer_id` and `text` plus `confirm_token`.
+   On success: `{"ok": true, "peer_id": …, "confirmed": true}`.
+   An unknown/expired/mismatched token raises `PermissionError`; request a
+   fresh token by calling without `confirm_token` again.
+
+Configure your MCP host to launch `userbot-bale mcp serve`; do
 not use a network transport until an authentication boundary is added.
+Hosts that expect the older list-shaped payloads must reconnect after
+upgrading — tool results are now normalized objects.
 
 ## Modern Standard API (Async & Event-Driven)
 

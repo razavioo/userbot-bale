@@ -2385,6 +2385,14 @@ vpn-video = [
     { name = "qrcode" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "opencv-python-headless" },
+    { name = "pillow" },
+    { name = "pyside6" },
+    { name = "qrcode" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=40.0" },
@@ -2418,6 +2426,14 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'bale'", specifier = ">=12" },
 ]
 provides-extras = ["dev", "audio", "bale", "vpn", "vpn-video", "desktop", "mcp"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "opencv-python-headless", specifier = ">=4.8" },
+    { name = "pillow", specifier = ">=10" },
+    { name = "pyside6", specifier = ">=6.7" },
+    { name = "qrcode", specifier = ">=7" },
+]
 
 [[package]]
 name = "uvicorn"

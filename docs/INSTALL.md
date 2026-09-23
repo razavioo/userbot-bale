@@ -88,7 +88,7 @@ userbot-bale mcp serve
 ```
 
 The MCP server uses stdio, not a network listener. See [Userbot and MCP](USERBOT.md) for the
-tool contract and outbound rate limit.
+tool contract (object-shaped results and the two-phase `send_text` confirm) and outbound rate limit.
 
 For engineering-only validation, `userbot-bale loopback` and `userbot-bale tunnel-loopback` remain useful,
 but they are not the primary production quick-start path.

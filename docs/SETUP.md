@@ -38,7 +38,8 @@ pip install -e ".[dev,bale,desktop]"
 
 - `userbot-bale auth`, `pair`, `relay`, and `vpn` manage the product control plane and saved state.
 - `userbot-bale userbot` persists inbound text events locally and dispatches explicit plugins.
-- `userbot-bale mcp serve` exposes allowlist-gated messaging tools over stdio.
+- `userbot-bale mcp serve` exposes allowlist-gated messaging tools over stdio (object-shaped
+  results; `send_text` requires a two-phase `confirm_token`).
 - On Linux, `userbot-bale vpn up` defaults to the native `linux-tun` backend.
 - On macOS, `userbot-bale vpn agent install` creates a LaunchAgent that can start `vpn up` automatically at login.
 

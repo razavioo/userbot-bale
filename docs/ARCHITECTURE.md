@@ -64,6 +64,9 @@ Boundaries:
 - `UserbotStore` persists message and audit data in SQLite but never stores a JWT.
 - MCP is stdio-only, restricts reads and sends to the local peer allowlist, and applies the same
   20-message-per-peer-per-minute outbound cap as the userbot.
+- MCP tool results are normalized JSON objects (`{items, count}` / status objects) so
+  `structuredContent` is always type `object`; `send_text` requires a two-phase
+  `confirm_token` handshake (preview first, deliver only on matching confirm).
 - Neither the userbot nor MCP exposes VPN routing, proxy setup, contact import, raw RPC payloads,
   pairing, or call control.
 

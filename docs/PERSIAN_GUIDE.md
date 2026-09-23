@@ -153,14 +153,15 @@ userbot-bale userbot run --echo
 userbot-bale mcp serve
 ```
 
-ابزارهای در دسترس مدل هوش مصنوعی:
-- `account_status`: وضعیت لاگین و توکن و لیست مجاز
-- `list_dialogs`: دریافت لیست چتها
-- `list_messages`: خواندن پیامهای یک چت مجاز
-- `search_messages`: جستجو در متن پیامها
-- `send_text`: ارسال پاسخ به مخاطب مجاز
-- `mark_read`: تیک خواندهشدن پیامها
-- `search_contacts` و `resolve_phone`: جستجوی مخاطب و تبدیل شماره به آیدی
+ابزارهای در دسترس مدل هوش مصنوعی (همه خروجی‌ها شیء JSON هستند، نه آرایه خام):
+
+- `account_status`: وضعیت لاگین و توکن و لیست مجاز → `{state, user_id, expires_in, allowed_peers}`
+- `list_dialogs`: دریافت لیست چتها → `{dialogs, count}`
+- `list_messages`: خواندن پیامهای یک چت مجاز → `{messages, count}`
+- `search_messages`: جستجو در متن پیامها → `{messages, count}`
+- `search_contacts` و `resolve_phone`: جستجوی مخاطب و تبدیل شماره به آیدی → `{contacts, count}` / `{phone, user_id, is_allowed}`
+- `mark_read`: تیک خواندهشدن پیامها → `{ok, peer_id, date}`
+- `send_text`: ارسال پاسخ به مخاطب مجاز در **دو مرحله** — فراخوانی اول فقط `confirm_token` برمی‌گرداند و چیزی نمی‌فرستد؛ فراخوانی دوم با همان `peer_id`/`text` و توکن، پیام را ارسال می‌کند (اعتبار توکن ۵ دقیقه). بدون `confirm_token` هیچ پیامی ارسال نمی‌شود.
 
 ---
 
