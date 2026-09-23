@@ -8,7 +8,8 @@ from userbot_bale.bale.api import BaleApiClient, LiveKitCredentials
 from userbot_bale.bale.endpoints import Endpoint
 from userbot_bale.bale.messaging_backend import MessagingBackend
 from userbot_bale.bale.protos import (
-    CallCredentials, DialogInfo, InboundMessage, OutPeer, RequestStartLiveKitCall, parse_call_credentials,
+    CallCredentials, DialogInfo, InboundMessage, OutPeer, RequestStartLiveKitCall,
+    ResolvedContact, parse_call_credentials,
     parse_incoming_call_offer,
 )
 from userbot_bale.bale.rpc_envelope import Response
@@ -17,6 +18,29 @@ from userbot_bale.bale.rpc_envelope import Response
 def test_livekit_credentials_shape() -> None:
     c = LiveKitCredentials(url="wss://x", token="t", room="r", identity="i")
     assert c.url == "wss://x"
+
+
+def test_resolve_peer_retries_transient_empty_search(monkeypatch) -> None:
+    client = BaleApiClient(jwt="test")
+    calls = 0
+
+    def search_contacts(query: str) -> list[ResolvedContact]:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            return []
+        return [ResolvedContact(phone_number=989121234567, user_id=42, access_hash=0)]
+
+    monkeypatch.setattr(client, "search_contacts", search_contacts)
+    monkeypatch.setattr(
+        client,
+        "import_contacts",
+        lambda phones: pytest.fail("ImportContacts should not run after a retry succeeds"),
+    )
+    monkeypatch.setattr("userbot_bale.bale.api.time.sleep", lambda _: None)
+
+    assert client.resolve_peer("+989121234567") == 42
+    assert calls == 3
 
 
 def test_outpeer_encode() -> None:

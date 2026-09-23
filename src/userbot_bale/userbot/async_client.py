@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import inspect
 import logging
 import signal
@@ -74,6 +75,8 @@ class AsyncBaleClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._started = False
         self._disconnect_event: asyncio.Event | None = None
+        self._worker_pool: ThreadPoolExecutor | None = None
+        self._handler_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def user_id(self) -> int | None:
@@ -121,6 +124,10 @@ class AsyncBaleClient:
             return
         self._loop = asyncio.get_running_loop()
         self._disconnect_event = asyncio.Event()
+        self._worker_pool = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="userbot-bale",
+        )
 
         # Connect the inbound dispatch
         self._api.listen_all_messages(self._on_inbound_threadsafe)
@@ -133,8 +140,12 @@ class AsyncBaleClient:
         """Disconnect and release resources."""
         if not self._started:
             return
-        self._started = False
         await asyncio.to_thread(self._api.stop)
+        await self.wait_idle()
+        self._started = False
+        if self._worker_pool is not None:
+            self._worker_pool.shutdown(wait=True, cancel_futures=True)
+            self._worker_pool = None
         if self._disconnect_event is not None:
             self._disconnect_event.set()
         if hasattr(self._store, "audit"):
@@ -146,6 +157,11 @@ class AsyncBaleClient:
             await self.start()
         if self._disconnect_event is not None:
             await self._disconnect_event.wait()
+
+    async def wait_idle(self) -> None:
+        """Wait until all inbound events currently being handled are complete."""
+        while self._handler_tasks:
+            await asyncio.gather(*tuple(self._handler_tasks), return_exceptions=True)
 
     def run(self) -> None:
         """Run the client synchronously until interrupted (Pyrogram/Telethon style)."""
@@ -234,7 +250,13 @@ class AsyncBaleClient:
                 raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
         if self._started:
             resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
-            await asyncio.to_thread(self._api.mark_read, peer_id, date, peer_type=resolved_peer_type)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                self._worker_pool,
+                lambda: self._api.mark_read(
+                    peer_id, date, peer_type=resolved_peer_type,
+                ),
+            )
 
     async def get_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
         """Retrieve recent dialogs / conversations."""
@@ -321,7 +343,19 @@ class AsyncBaleClient:
         """Called from the WebSocket background thread when a message arrives."""
         if self._loop is None or not self._loop.is_running():
             return
-        asyncio.run_coroutine_threadsafe(self._process_inbound(message), self._loop)
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is self._loop:
+            self._schedule_inbound(message)
+            return
+        self._loop.call_soon_threadsafe(self._schedule_inbound, message)
+
+    def _schedule_inbound(self, message: InboundMessage) -> None:
+        task = asyncio.create_task(self._process_inbound(message))
+        self._handler_tasks.add(task)
+        task.add_done_callback(self._handler_tasks.discard)
 
     async def _process_inbound(self, message: InboundMessage) -> None:
         if self._self_user_id is not None and message.sender_uid == self._self_user_id:
@@ -373,10 +407,10 @@ class AsyncBaleClient:
 
                 if matched:
                     if inspect.iscoroutinefunction(handler):
-                        asyncio.create_task(handler(event))
+                        await handler(event)
                     else:
                         loop = asyncio.get_running_loop()
-                        loop.run_in_executor(None, handler, event)
+                        await loop.run_in_executor(self._worker_pool, handler, event)
             except Exception:
                 log.exception("Error executing handler %r for event %r", handler, event)
 

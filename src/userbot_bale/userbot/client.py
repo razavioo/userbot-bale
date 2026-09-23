@@ -37,6 +37,7 @@ class BaleUserClient:
         self._started = False
         self._self_user_id = user_id_from_jwt(jwt)
         self._dialog_peer_types: dict[int, int] = {}
+        self._resolved_phones: dict[str, int] = {}
         self.enforce_allowlist = enforce_allowlist
         self.max_outbound_per_minute = max_outbound_per_minute
 
@@ -204,7 +205,15 @@ class BaleUserClient:
     def resolve_phone(self, phone: str | int) -> int:
         if not self._started:
             raise RuntimeError("client not started")
-        return self._api.resolve_peer(phone)
+        normalized = str(phone).strip().lstrip("+")
+        if not normalized.isdigit():
+            raise ValueError("phone must contain digits, with an optional leading +")
+        cached = self._resolved_phones.get(normalized)
+        if cached is not None:
+            return cached
+        user_id = self._api.resolve_peer("+" + normalized)
+        self._resolved_phones[normalized] = user_id
+        return user_id
 
     def mark_read(self, peer_id: int, date: int, *, peer_type: int | None = None) -> None:
         if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):

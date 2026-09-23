@@ -383,9 +383,15 @@ class BaleApiClient:
         q = str(phone).strip()
         if not q.startswith("+") and q.isdigit():
             q = "+" + q
-        results = self.search_contacts(q)
-        if results:
-            return results[0].user_id
+        # SearchContacts can transiently return an empty result immediately
+        # after a fresh WS session. Retry this read-only lookup before using
+        # ImportContacts, which has a server-side write effect.
+        for attempt in range(3):
+            results = self.search_contacts(q)
+            if results:
+                return results[0].user_id
+            if attempt < 2:
+                time.sleep(0.25 * (attempt + 1))
         imported = self.import_contacts([phone])
         if imported:
             return imported[0].user_id

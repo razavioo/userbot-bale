@@ -208,6 +208,33 @@ def test_mcp_service_enforces_same_allowlist(tmp_path) -> None:
     assert api.sent == [(12, b"allowed")]
 
 
+def test_mcp_service_rejects_unbounded_limits(tmp_path) -> None:
+    api = FakeApiClient()
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    store.allow_peer(12)
+    client = BaleUserClient(jwt="test", store=store, api_client=api)  # type: ignore[arg-type]
+    service = BaleMcpService(client, store)
+
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        service.list_dialogs(101)
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        service.list_messages(12, 0)
+
+    assert not api.started
+
+
+def test_user_client_caches_resolved_phones(tmp_path) -> None:
+    api = FakeApiClient()
+    api.resolve_peer = lambda phone: 42
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    client = BaleUserClient(jwt="test", store=store, api_client=api)  # type: ignore[arg-type]
+    client.start()
+
+    assert client.resolve_phone("+989121234567") == 42
+    api.resolve_peer = lambda phone: pytest.fail("resolved phone should be cached")
+    assert client.resolve_phone("989121234567") == 42
+
+
 def test_user_client_records_sender_id_and_peer_type(tmp_path) -> None:
     api = FakeApiClient()
     store = UserbotStore(tmp_path / "userbot.sqlite3")

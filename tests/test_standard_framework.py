@@ -237,8 +237,7 @@ async def test_async_bale_client_basic_flow():
         # Inbound message
         api.messages_callback(InboundMessage(peer_user_id=888, sender_uid=888, rid=202, text="/ping"))
 
-        # Give event loop a moment to process the task
-        await asyncio.sleep(0.05)
+        await client.wait_idle()
 
         assert len(handled_pings) == 1
         assert handled_pings[0].peer_id == 888
@@ -273,7 +272,7 @@ async def test_async_bale_client_filters_and_mark_read():
         api.messages_callback(InboundMessage(peer_user_id=999, sender_uid=999, rid=301, text="/order 456"))
         # Non-match (different peer)
         api.messages_callback(InboundMessage(peer_user_id=111, sender_uid=111, rid=302, text="/order 456"))
-        await asyncio.sleep(0.05)
+        await client.wait_idle()
 
         assert len(handled) == 1
         assert handled[0].args == ["456"]
