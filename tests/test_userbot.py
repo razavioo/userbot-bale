@@ -42,6 +42,9 @@ class FakeApiClient:
     def load_history(self, peer_id: int, *, peer_type: int = 1, limit: int = 20):
         return self.history[:limit]
 
+    def search_contacts(self, query: str):
+        return []
+
 
 def test_user_client_closes_api_if_start_persistence_fails() -> None:
     class FailingStore:
@@ -204,8 +207,17 @@ def test_mcp_service_enforces_same_allowlist(tmp_path) -> None:
         service.list_messages(12)
     assert not api.started
     store.allow_peer(12)
-    assert service.send_text(12, "allowed") == {"ok": True, "peer_id": 12}
+    preview = service.send_text(12, "allowed")
+    assert preview["needs_confirm"] is True
+    assert preview["ok"] is False
+    assert not api.sent
+    confirmed = service.send_text(
+        12, "allowed", confirm_token=preview["confirm_token"],
+    )
+    assert confirmed == {"ok": True, "peer_id": 12, "confirmed": True}
     assert api.sent == [(12, b"allowed")]
+    with pytest.raises(PermissionError, match="confirm_token"):
+        service.send_text(12, "allowed", confirm_token=preview["confirm_token"])
 
 
 def test_mcp_service_rejects_unbounded_limits(tmp_path) -> None:
@@ -223,6 +235,30 @@ def test_mcp_service_rejects_unbounded_limits(tmp_path) -> None:
     assert not api.started
 
 
+def test_mcp_service_returns_normalized_dict_shapes(tmp_path) -> None:
+    api = FakeApiClient()
+    store = UserbotStore(tmp_path / "userbot.sqlite3")
+    store.allow_peer(12)
+    client = BaleUserClient(jwt="test", store=store, api_client=api)  # type: ignore[arg-type]
+    service = BaleMcpService(client, store)
+
+    assert service.list_messages(12) == {"messages": [], "count": 0}
+    assert service.search_messages("hello") == {"messages": [], "count": 0}
+    assert service.search_contacts("ali") == {"contacts": [], "count": 0}
+    assert service.list_dialogs() == {"dialogs": [], "count": 0}
+    # Dict tools must stay dict-shaped so FastMCP does not wrap them
+    # under a different key than the list tools.
+    for result in (
+        service.list_messages(12),
+        service.search_messages("x"),
+        service.search_contacts("x"),
+        service.list_dialogs(),
+        service.account_status(),
+    ):
+        assert isinstance(result, dict)
+        assert set(result) != {"result"}
+
+
 def test_user_client_caches_resolved_phones(tmp_path) -> None:
     api = FakeApiClient()
     api.resolve_peer = lambda phone: 42
@@ -233,6 +269,26 @@ def test_user_client_caches_resolved_phones(tmp_path) -> None:
     assert client.resolve_phone("+989121234567") == 42
     api.resolve_peer = lambda phone: pytest.fail("resolved phone should be cached")
     assert client.resolve_phone("989121234567") == 42
+
+    # A brand-new client/process must hit the durable store, not the network.
+    api2 = FakeApiClient()
+    api2.resolve_peer = lambda phone: pytest.fail("store cache should avoid network")
+    store2 = UserbotStore(tmp_path / "userbot.sqlite3")
+    client2 = BaleUserClient(jwt="test", store=store2, api_client=api2)  # type: ignore[arg-type]
+    client2.start()
+    assert client2.resolve_phone("+989121234567") == 42
+
+
+def test_store_persists_resolved_phone_across_instances(tmp_path) -> None:
+    path = tmp_path / "userbot.sqlite3"
+    store = UserbotStore(path)
+    assert store.get_resolved_phone("989121234567") is None
+    store.put_resolved_phone("989121234567", 42)
+    store.close()
+
+    reopened = UserbotStore(path)
+    assert reopened.get_resolved_phone("989121234567") == 42
+    reopened.close()
 
 
 def test_user_client_records_sender_id_and_peer_type(tmp_path) -> None:

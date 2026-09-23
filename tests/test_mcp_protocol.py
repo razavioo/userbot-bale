@@ -43,6 +43,16 @@ async def test_mcp_stdio_handshake_lists_and_calls_tools(tmp_path, monkeypatch) 
             assert tools_by_name["send_text"].annotations.idempotentHint is False
             assert tools_by_name["mark_read"].annotations.idempotentHint is True
 
+            # Every tool must expose a top-level object schema (dict-shaped
+            # structuredContent), never a bare array under a magic key.
+            for tool in tools.tools:
+                schema = tool.outputSchema or {}
+                assert schema.get("type") == "object", tool.name
+
+            # send_text takes an optional second-phase confirmation token.
+            send_props = (tools_by_name["send_text"].inputSchema or {}).get("properties", {})
+            assert "confirm_token" in send_props
+
             result = await session.call_tool("account_status")
             assert result.isError is False
             assert result.structuredContent == {

@@ -42,6 +42,11 @@ class UserbotStore:
                     detail TEXT NOT NULL,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS resolved_phones (
+                    phone TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    resolved_at REAL NOT NULL
+                );
                 """
             )
             self._conn.commit()
@@ -227,6 +232,27 @@ class UserbotStore:
             )
             self._conn.commit()
 
+    def get_resolved_phone(self, phone: str) -> int | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT user_id FROM resolved_phones WHERE phone = ?", (phone,)
+            ).fetchone()
+        return int(row[0]) if row is not None else None
+
+    def put_resolved_phone(self, phone: str, user_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO resolved_phones(phone, user_id, resolved_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(phone) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    resolved_at=excluded.resolved_at
+                """,
+                (phone, user_id, time.time()),
+            )
+            self._conn.commit()
+
 
 class MemoryUserbotStore:
     """In-memory state store for tests, ephemeral userbots, and containerized deployments."""
@@ -237,6 +263,7 @@ class MemoryUserbotStore:
         self._message_ids: set[str] = set()
         self._audit_events: list[dict[str, object]] = []
         self._reservations: dict[int, list[float]] = {}
+        self._resolved_phones: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def close(self) -> None:
@@ -350,3 +377,11 @@ class MemoryUserbotStore:
                 "detail": detail,
                 "created_at": time.time(),
             })
+
+    def get_resolved_phone(self, phone: str) -> int | None:
+        with self._lock:
+            return self._resolved_phones.get(phone)
+
+    def put_resolved_phone(self, phone: str, user_id: int) -> None:
+        with self._lock:
+            self._resolved_phones[phone] = user_id

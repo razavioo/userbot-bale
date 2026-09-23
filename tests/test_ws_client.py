@@ -101,7 +101,7 @@ def test_ws_client_logs_tls_verify_failures(monkeypatch, caplog) -> None:
 
     client = ws_client.WsClient(jwt="secret-jwt")
     with pytest.raises(RuntimeError) as excinfo:
-        client.start(timeout=0.1)
+        client.start(timeout=1.0)
     client.stop()
 
     assert "WS failed to connect" in str(excinfo.value)

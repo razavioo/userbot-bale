@@ -124,6 +124,16 @@ class GrpcWebClient:
     def set_user_id(self, user_id: int) -> None:
         self._user_id = user_id
 
+    def clear_empty_cookies(self) -> None:
+        """Drop blank cookies (e.g. ``access_token=`` from StartPhoneAuth).
+
+        ValidateCode must echo the blank cookie for flow continuity, but
+        sending ``access_token=`` on GetJWTToken makes the gateway treat the
+        call as authenticated-with-invalid-JWT and answer HTTP 401."""
+        for cookie in list(self._http.cookies.jar):
+            if not cookie.value:
+                self._http.cookies.delete(cookie.name)
+
     def close(self) -> None:
         self._http.close()
 
@@ -211,4 +221,16 @@ def extract_access_token(set_cookies: list[str]) -> Optional[str]:
             value = head.split("=", 1)[1]
             if value:
                 return value
+    return None
+
+
+def extract_any_jwt_cookie(set_cookies: list[str]) -> Optional[str]:
+    """Find a JWT-shaped value in any Set-Cookie (not just access_token)."""
+    for sc in set_cookies:
+        head = sc.split(";", 1)[0].strip()
+        if "=" not in head:
+            continue
+        value = head.split("=", 1)[1].strip()
+        if value.startswith("eyJ") and len(value) >= 50:
+            return value
     return None

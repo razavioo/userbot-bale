@@ -25,6 +25,7 @@ import os
 import queue
 import ssl
 import threading
+import time
 from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
 
@@ -217,6 +218,16 @@ class WsClient:
         )
         self._thread.start()
         if not self._connected.wait(timeout):
+            # The worker thread may record _connect_error a moment after the
+            # wait window closes (slow scheduler / short timeout). Give it a
+            # brief grace period so the real failure is not reported as a
+            # generic connection timeout.
+            for _ in range(50):
+                if self._connect_error is not None or self._connected.is_set():
+                    break
+                time.sleep(0.01)
+            if self._connected.is_set():
+                return
             if self._connect_error is not None:
                 raise RuntimeError(
                     f"WS failed to connect: {self._connect_error}"

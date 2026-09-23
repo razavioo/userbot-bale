@@ -35,6 +35,7 @@ from userbot_bale.bale.grpc_web import (
     GrpcWebClient,
     GrpcWebError,
     extract_access_token,
+    extract_any_jwt_cookie,
 )
 from userbot_bale.bale.protos import (
     AUTH_SERVICE,
@@ -142,6 +143,8 @@ class BaleAuth:
             raise
         jwt = extract_access_token(resp.set_cookies)
         if not jwt:
+            jwt = extract_any_jwt_cookie(resp.set_cookies)
+        if not jwt:
             # Fallback: Bale sometimes ships the JWT inside the
             # ResponseAuth protobuf (field 4) instead of a Set-Cookie —
             # observed on accounts whose gateway does not set the
@@ -161,6 +164,10 @@ class BaleAuth:
             try:
                 if user_id is not None:
                     self._client.set_user_id(user_id)
+                # StartPhoneAuth plants a blank access_token= cookie that
+                # ValidateCode must echo, but GetJWTToken answers 401 when
+                # that blank value is still present in the jar.
+                self._client.clear_empty_cookies()
                 jwt_resp = self._client.unary(
                     AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
                 )
@@ -189,6 +196,8 @@ class BaleAuth:
         resp = self._client.unary(AUTH_SERVICE, "SignUp", req.encode())
         jwt = extract_access_token(resp.set_cookies)
         if not jwt:
+            jwt = extract_any_jwt_cookie(resp.set_cookies)
+        if not jwt:
             parsed = parse_response_auth(resp.body)
             if parsed is not None:
                 jwt = parsed.jwt
@@ -201,6 +210,7 @@ class BaleAuth:
             try:
                 if user_id is not None:
                     self._client.set_user_id(user_id)
+                self._client.clear_empty_cookies()
                 jwt_resp = self._client.unary(
                     AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
                 )

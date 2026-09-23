@@ -211,8 +211,18 @@ class BaleUserClient:
         cached = self._resolved_phones.get(normalized)
         if cached is not None:
             return cached
+        store_cached = None
+        getter = getattr(self.store, "get_resolved_phone", None)
+        if callable(getter):
+            store_cached = getter(normalized)
+        if store_cached is not None:
+            self._resolved_phones[normalized] = store_cached
+            return store_cached
         user_id = self._api.resolve_peer("+" + normalized)
         self._resolved_phones[normalized] = user_id
+        putter = getattr(self.store, "put_resolved_phone", None)
+        if callable(putter):
+            putter(normalized, user_id)
         return user_id
 
     def mark_read(self, peer_id: int, date: int, *, peer_type: int | None = None) -> None:
