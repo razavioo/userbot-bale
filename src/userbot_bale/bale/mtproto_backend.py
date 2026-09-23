@@ -27,9 +27,12 @@ class MtprotoMessagingBackend:
     """Bale messaging backend intended for VPN fallback transport.
 
     When no RPC client is injected, this backend opens a Bale endpoint,
-    performs auth-key negotiation, and starts the MTProto RPC session.
-    The handshake codec is still heuristic, so this path should be treated as
-    experimental until validated against production captures.
+    performs auth-key negotiation (default codec: heuristic P-256 ECDH),
+    and starts the MTProto RPC session. The handshake codec is still
+    heuristic, so this path should be treated as experimental until
+    validated against production captures (docs/CAPTURE.md). With an
+    injected RPC client (tests / pre-established session), send/listen
+    work immediately.
     """
 
     def __init__(

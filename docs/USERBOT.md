@@ -37,6 +37,15 @@ userbot-bale userbot dialogs --limit 20
 
 # View recent messages with a peer
 userbot-bale userbot messages 123456789 --limit 20
+
+# Server-side text search via bale.search.v1.Search
+userbot-bale userbot search-remote "invoice" --limit 10
+
+# Shared media for one allowlisted peer (SharedMedia LoadMedia)
+userbot-bale userbot shared-media 123456789 --limit 10
+
+# Known Bale /bale.* gRPC paths from the offline APK inventory
+userbot-bale userbot rpc-paths --service messaging --query LoadHistory
 ```
 
 ## Run A Userbot

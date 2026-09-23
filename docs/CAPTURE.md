@@ -113,10 +113,12 @@ Stop `mitmdump`. The `.mitm` file now contains everything.
 mitmdump -r captures/bale-<ts>.mitm -s scripts/capture/extract_rpcs.py
 ```
 
-A small script (to be written as part of Phase 4) iterates over the
+A script at `scripts/capture/extract_rpcs.py` iterates over the
 flows and writes each RPC request/response payload to
-`captures/<ts>/<rpc_name>.bin`. Those bins become the corpus for the
-replay tests in `tests/test_bale_mtproto.py`.
+`captures/extracted-<ts>/<service>__<method>.<req|res>.bin`. Those
+bins become the corpus for the replay tests in
+`tests/test_bale_mtproto.py` and for validating the experimental
+MTProto handshake codec.
 
 ## What the captures validate or unblock
 

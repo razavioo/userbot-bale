@@ -10,14 +10,16 @@ direct message and decodes inbound messages back into frames.
 
 Status
 ------
-**Wired but unverified live.** `BaleApiClient.send_message()` and
-`.listen_messages()` exist (Phase 8), built from the decompiled
-`MessagingOuterClass$RequestSendMessage` / `UpdateMessage` protos.
-Unit-tested for wire-format roundtrip against our own encoder; not
-yet tested end-to-end against production servers, so if the server
-rejects with `invalid_payload`, the first thing to check is whether
-the RPC needs an outer-tag wrapper like StartCall (tag 6) /
-ImportContacts (tag 8) — see protos.py for the pattern.
+**Wired.** `BaleApiClient.send_message()` and `.listen_messages()` exist
+(Phase 8), built from the decompiled
+`MessagingOuterClass$RequestSendMessage` / `UpdateMessage` protos, and
+`MtprotoMessagingBackend` implements the same surface for the MTProto
+fallback path. Unit-tested for wire-format roundtrip against our own
+encoder; production E2E still depends on a live two-account smoke run —
+if the server rejects with `invalid_payload`, the first thing to check is
+whether the RPC needs an outer-tag wrapper like StartCall (tag 6) /
+ImportContacts (tag 8) — see protos.py for the pattern. Android ships a
+Kotlin port (`native/.../tunnel/RpcTransport.kt`) with the same framing.
 
 Framing
 -------

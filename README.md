@@ -131,6 +131,15 @@ userbot-bale userbot messages 123456789 --limit 20
 # Search message history locally
 userbot-bale userbot search "order" --peer-id 123456789
 
+# Server-side search (bale.search.v1.Search) across allowlisted peers
+userbot-bale userbot search-remote "invoice" --limit 10
+
+# List shared media for an allowlisted peer (SharedMedia LoadMedia)
+userbot-bale userbot shared-media 123456789 --limit 10
+
+# Discover known Bale gRPC paths from the offline APK inventory
+userbot-bale userbot rpc-paths --service messaging --query LoadHistory
+
 # Mark conversation as read up to a timestamp
 userbot-bale userbot mark-read 123456789 1789370000000
 

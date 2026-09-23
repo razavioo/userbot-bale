@@ -1,12 +1,10 @@
 """
 MTProto frame read/write on top of an EndpointConnection.
 
-Status: **skeleton**. The frame format below matches Actor Platform's
-upstream MTProto v2 but Nasim may have adjusted field sizes or added
-Bale-specific variants. Finalising this requires at least one
-mitmproxy capture of real client↔server traffic — see
-docs/CAPTURE.md. The layout is captured here as a concrete starting
-point; the real wire bytes will either confirm it or point at exact
+Status: **pre-auth path implemented and unit-tested**; post-auth crypto
+and Bale-specific `message_type` constants still need capture validation
+(see docs/CAPTURE.md). The layout below matches Actor Platform's upstream
+MTProto v2; real wire bytes will either confirm it or point at exact
 deltas.
 
 Pre-auth frame layout (from Actor Platform reference):
@@ -20,10 +18,9 @@ Post-auth frame layout (envelope shown; body is encrypted):
     bytes(16)  msg_key          sha1(payload)[4:20]
     bytes(N)   encrypted_payload  AES-256-IGE(aux_key(msg_key, auth_key))
 
-The actual Bale-specific message_type values and post-auth crypto
-details still need capture validation. The plain pre-auth frame shape is
-concrete enough to implement and test offline now, which lets the
-session/RPC machinery stop depending on placeholders.
+The plain pre-auth frame shape is concrete and covered by offline tests,
+which lets the session/RPC machinery stop depending on placeholders for
+that half of the stack.
 """
 
 from __future__ import annotations

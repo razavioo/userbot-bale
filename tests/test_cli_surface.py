@@ -31,6 +31,15 @@ def test_userbot_and_mcp_commands_are_exposed() -> None:
     status_args = parser.parse_args(["userbot", "status"])
     read_args = parser.parse_args(["userbot", "mark-read", "123", "999999"])
     search_args = parser.parse_args(["userbot", "search", "keyword", "--peer-id", "123"])
+    search_remote_args = parser.parse_args(
+        ["userbot", "search-remote", "invoice", "--peer-id", "123", "--limit", "5"],
+    )
+    shared_media_args = parser.parse_args(
+        ["userbot", "shared-media", "123", "--limit", "10", "--content-type", "2"],
+    )
+    rpc_paths_args = parser.parse_args(
+        ["userbot", "rpc-paths", "--service", "messaging", "--query", "LoadHistory", "--limit", "20"],
+    )
     whoami_args = parser.parse_args(["userbot", "whoami"])
     contacts_args = parser.parse_args(["userbot", "search-contacts", "john"])
     resolve_args = parser.parse_args(["userbot", "resolve-phone", "+989123456789"])
@@ -49,6 +58,18 @@ def test_userbot_and_mcp_commands_are_exposed() -> None:
     assert read_args.date == 999999
     assert search_args.userbot_cmd == "search"
     assert search_args.query == "keyword"
+    assert search_remote_args.userbot_cmd == "search-remote"
+    assert search_remote_args.query == "invoice"
+    assert search_remote_args.peer_id == 123
+    assert search_remote_args.limit == 5
+    assert shared_media_args.userbot_cmd == "shared-media"
+    assert shared_media_args.peer_id == 123
+    assert shared_media_args.limit == 10
+    assert shared_media_args.content_type == 2
+    assert rpc_paths_args.userbot_cmd == "rpc-paths"
+    assert rpc_paths_args.service == "messaging"
+    assert rpc_paths_args.query == "LoadHistory"
+    assert rpc_paths_args.limit == 20
     assert whoami_args.userbot_cmd == "whoami"
     assert contacts_args.userbot_cmd == "search-contacts"
     assert contacts_args.query == "john"

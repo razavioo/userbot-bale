@@ -2646,6 +2646,35 @@ def build_parser() -> argparse.ArgumentParser:
     userbot_search.add_argument("--peer-id", type=int, default=None, help="limit search to peer")
     userbot_search.add_argument("--limit", type=int, default=20, help="max results")
     userbot_search.set_defaults(func=cmd_userbot)
+    userbot_search_remote = userbot_sub.add_parser(
+        "search-remote",
+        help="server-side text search via bale.search.v1.Search",
+    )
+    userbot_search_remote.add_argument("query", help="text query to search for")
+    userbot_search_remote.add_argument("--peer-id", type=int, default=None, help="limit search to peer")
+    userbot_search_remote.add_argument("--limit", type=int, default=20, help="max results")
+    userbot_search_remote.set_defaults(func=cmd_userbot)
+    userbot_shared_media = userbot_sub.add_parser(
+        "shared-media",
+        help="list shared media for one allowlisted peer (LoadMedia)",
+    )
+    userbot_shared_media.add_argument("peer_id", type=int, help="numeric Bale peer ID")
+    userbot_shared_media.add_argument("--limit", type=int, default=20, help="max items")
+    userbot_shared_media.add_argument(
+        "--content-type",
+        type=int,
+        default=0,
+        help="SharedMedia content type filter (default: 0 = all)",
+    )
+    userbot_shared_media.set_defaults(func=cmd_userbot)
+    userbot_rpc_paths = userbot_sub.add_parser(
+        "rpc-paths",
+        help="list known Bale /bale.*/* gRPC paths from the offline APK inventory",
+    )
+    userbot_rpc_paths.add_argument("--service", default=None, help="filter by service name substring")
+    userbot_rpc_paths.add_argument("--query", default=None, help="filter by path substring")
+    userbot_rpc_paths.add_argument("--limit", type=int, default=100, help="max paths (1-100)")
+    userbot_rpc_paths.set_defaults(func=cmd_userbot)
     userbot_whoami = userbot_sub.add_parser("whoami", help="display the active account user id and status")
     userbot_whoami.set_defaults(func=cmd_userbot)
     userbot_contacts = userbot_sub.add_parser("search-contacts", help="search Bale contacts and public directory")
@@ -3403,6 +3432,23 @@ def cmd_userbot(args: argparse.Namespace) -> int:
         print(f"expires: {ttl:.0f}s" if ttl else "expires: unknown")
         return 0
 
+    if args.userbot_cmd == "rpc-paths":
+        from userbot_bale.mcp.rpc_paths import list_service_paths
+
+        payload = list_service_paths(
+            service=args.service, query=args.query, limit=args.limit,
+        )
+        paths = payload.get("paths", [])
+        if not paths:
+            print("no rpc paths matched")
+        for path in paths:
+            print(path)
+        print(
+            f"count={payload.get('count', 0)} total={payload.get('total', 0)} "
+            f"service={payload.get('service')} query={payload.get('query')}"
+        )
+        return 0
+
     record = AuthStore().load()
     if record is None:
         raise RuntimeError("no valid Bale session; run 'userbot-bale auth bale-login --save' first")
@@ -3476,6 +3522,52 @@ def cmd_userbot(args: argparse.Namespace) -> int:
             peer = m.get("peer_id")
             text = m.get("text", "")
             print(f"[{direction} peer={peer} sender={sender}] {text}")
+        return 0
+
+    if args.userbot_cmd == "search-remote":
+        if args.peer_id is not None and not store.is_peer_allowed(args.peer_id):
+            raise PermissionError(f"peer {args.peer_id} is not in the outbound allowlist")
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        client.start()
+        try:
+            results = client.search_messages_remote(
+                args.query, peer_id=args.peer_id, limit=args.limit,
+            )
+            if args.peer_id is not None:
+                results = [m for m in results if m.get("peer_id") == args.peer_id]
+            elif results:
+                allowed = set(store.allowed_peers())
+                results = [m for m in results if m.get("peer_id") in allowed]
+            if not results:
+                print(f"no remote messages found matching {args.query!r}")
+            for m in reversed(results):
+                direction = m.get("direction", "inbound")
+                sender = m.get("sender_id", 0)
+                peer = m.get("peer_id")
+                text = m.get("text", "")
+                print(f"[{direction} peer={peer} sender={sender}] {text}")
+        finally:
+            client.stop()
+        return 0
+
+    if args.userbot_cmd == "shared-media":
+        if not store.is_peer_allowed(args.peer_id):
+            raise PermissionError(f"peer {args.peer_id} is not in the outbound allowlist")
+        client = BaleUserClient(jwt=record.jwt, store=store)
+        client.start()
+        try:
+            media = client.list_shared_media(
+                args.peer_id, limit=args.limit, content_type=args.content_type,
+            )
+            if not media:
+                print(f"no shared media for peer {args.peer_id}")
+            for item in media:
+                sender = item.get("sender_id", 0)
+                peer = item.get("peer_id")
+                text = (item.get("text") or "").replace("\n", " ")
+                print(f"[peer={peer} sender={sender}] {text}")
+        finally:
+            client.stop()
         return 0
 
     if args.userbot_cmd == "search-contacts":

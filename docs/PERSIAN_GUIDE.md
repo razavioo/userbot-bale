@@ -107,6 +107,15 @@ userbot-bale userbot messages 123456789 --limit 20
 # جستجوی متن در تاریخچه پیامهای محلی
 userbot-bale userbot search "سفارش" --peer-id 123456789
 
+# جستجوی سمت‌سرور (bale.search.v1.Search)
+userbot-bale userbot search-remote "فاکتور" --limit 10
+
+# رسانه‌های اشتراکی یک چت مجاز (SharedMedia LoadMedia)
+userbot-bale userbot shared-media 123456789 --limit 10
+
+# فهرست مسیرهای gRPC شناخته‌شده از inventory آفلاین APK
+userbot-bale userbot rpc-paths --service messaging --query LoadHistory
+
 # علامتگذاری پیامها به عنوان خواندهشده تا یک زمان مشخص
 userbot-bale userbot mark-read 123456789 1789370000000
 

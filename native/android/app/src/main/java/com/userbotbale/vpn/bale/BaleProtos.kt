@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream
 object BaleProtos {
     const val AUTH_SERVICE = "bale.auth.v1.Auth"
     const val MEET_SERVICE = "bale.meet.v1.Meet"
+    const val MESSAGING_SERVICE = "bale.messaging.v2.Messaging"
     const val WEB_APP_ID = 4L
     const val WEB_API_KEY = "C28D46DC4C3A7A26564BFCC48B929086A95C93C98E789A19847BEE8627DE4E7D"
 
@@ -325,5 +326,133 @@ object BaleProtos {
         java.security.SecureRandom().nextBytes(b)
         val v = java.nio.ByteBuffer.wrap(b).long and ((1L shl 55) - 1)
         return if (v == 0L) 1L else v
+    }
+
+    fun encodeSendMessage(
+        peerId: Long,
+        text: String,
+        peerType: Int = 1,
+        accessHash: Long = 0,
+        rid: Long = randomRid(),
+    ): ByteArray {
+        val peer = ByteArrayOutputStream()
+        ProtoCodec.encVarintField(peer, 1, peerType.toLong())
+        ProtoCodec.encVarintField(peer, 2, peerId)
+        if (accessHash != 0L) ProtoCodec.encVarintField(peer, 3, accessHash)
+
+        val textMessage = ByteArrayOutputStream()
+        ProtoCodec.encLenDelim(textMessage, 1, text.toByteArray(Charsets.UTF_8))
+
+        val message = ByteArrayOutputStream()
+        ProtoCodec.encLenDelim(message, 15, textMessage.toByteArray())
+
+        val out = ByteArrayOutputStream()
+        ProtoCodec.encLenDelim(out, 1, peer.toByteArray())
+        ProtoCodec.encVarintField(out, 2, rid)
+        ProtoCodec.encLenDelim(out, 3, message.toByteArray())
+        ProtoCodec.encLenDelim(out, 6, peer.toByteArray())
+        return out.toByteArray()
+    }
+
+    data class InboundTextMessage(
+        val peerUserId: Long,
+        val senderUid: Long,
+        val rid: Long,
+        val text: String,
+        val date: Long = 0,
+        val peerType: Int = 1,
+    )
+
+    /**
+     * Recursively scan an update payload for UpdateMessage-shaped sub-trees.
+     * Mirrors Python `find_inbound_messages` in protos.py.
+     */
+    fun findInboundTextMessages(buf: ByteArray, maxDepth: Int = 6): List<InboundTextMessage> {
+        val found = ArrayList<InboundTextMessage>()
+
+        fun parseOutPeer(b: ByteArray): Pair<Int, Long> {
+            var type = 1
+            var id = 0L
+            for (f in ProtoCodec.walk(b)) {
+                when (val v = f.value) {
+                    is ProtoCodec.FieldValue.VarInt -> {
+                        if (f.number == 1) type = v.v.toInt()
+                        if (f.number == 2) id = v.v
+                    }
+                    else -> {}
+                }
+            }
+            return type to id
+        }
+
+        fun parseTextFromMessage(b: ByteArray): String? {
+            for (f in ProtoCodec.walk(b)) {
+                if (f.number == 15) {
+                    val inner = (f.value as? ProtoCodec.FieldValue.LenDelim)?.bytes ?: continue
+                    for (tf in ProtoCodec.walk(inner)) {
+                        if (tf.number == 1) {
+                            val s = (tf.value as? ProtoCodec.FieldValue.LenDelim)?.bytes ?: continue
+                            return s.toString(Charsets.UTF_8)
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+        fun parseUpdate(b: ByteArray): InboundTextMessage? {
+            var peerType = 1
+            var peerId = 0L
+            var sender = 0L
+            var date = 0L
+            var rid = 0L
+            var text: String? = null
+            for (f in ProtoCodec.walk(b)) {
+                when (f.value) {
+                    is ProtoCodec.FieldValue.VarInt -> {
+                        val v = (f.value as ProtoCodec.FieldValue.VarInt).v
+                        when (f.number) {
+                            2 -> sender = v
+                            3 -> date = v
+                            4 -> rid = v
+                        }
+                    }
+                    is ProtoCodec.FieldValue.LenDelim -> {
+                        val bytes = (f.value as ProtoCodec.FieldValue.LenDelim).bytes
+                        when (f.number) {
+                            1 -> {
+                                val (t, id) = parseOutPeer(bytes)
+                                peerType = t
+                                peerId = id
+                            }
+                            5 -> text = parseTextFromMessage(bytes)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            if (text == null) return null
+            return InboundTextMessage(peerId, sender, rid, text, date, peerType)
+        }
+
+        fun visit(b: ByteArray, depth: Int) {
+            if (depth > maxDepth || b.isEmpty()) return
+            parseUpdate(b)?.let { found.add(it) }
+            for (f in ProtoCodec.walk(b)) {
+                if (f.number >= 1) {
+                    val bytes = (f.value as? ProtoCodec.FieldValue.LenDelim)?.bytes
+                    if (bytes != null && bytes.isNotEmpty()) visit(bytes, depth + 1)
+                }
+            }
+        }
+
+        visit(buf, 0)
+        val seen = HashSet<Triple<Long, Long, String>>()
+        val out = ArrayList<InboundTextMessage>()
+        for (m in found) {
+            val key = Triple(m.rid, m.peerUserId, m.text)
+            if (seen.add(key)) out.add(m)
+        }
+        return out
     }
 }

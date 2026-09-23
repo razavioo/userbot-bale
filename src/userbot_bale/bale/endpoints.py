@@ -15,8 +15,8 @@ startup to learn where to connect. The format is Actor-Platform-style:
 - `<id>`: endpoint identifier (1013, 1014, ...).
 
 This module fetches that file and exposes it as a parsed list. The
-downstream transport (still TODO) uses these endpoints to connect and
-perform the MTProto-style auth-key handshake.
+downstream MTProto transport (`userbot_bale.bale.mtproto_backend`) uses
+these endpoints to connect and perform the auth-key handshake.
 """
 
 from __future__ import annotations
