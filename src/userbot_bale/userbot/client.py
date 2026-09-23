@@ -7,7 +7,7 @@ import time
 from typing import Any, Callable, Union
 
 from userbot_bale.bale.api import BaleApiClient
-from userbot_bale.bale.protos import DialogInfo, InboundMessage
+from userbot_bale.bale.protos import DialogInfo, InboundMessage, SearchMessagesPage, SharedMediaHit
 from userbot_bale.events import MessageEvent, NewMessage
 from userbot_bale.filters import Filter
 from userbot_bale.userbot.store import MemoryUserbotStore, UserbotStore
@@ -185,6 +185,73 @@ class BaleUserClient:
         self, query: str, *, peer_id: int | None = None, limit: int = 20,
     ) -> list[dict[str, object]]:
         return self.store.search_messages(query, peer_id=peer_id, limit=limit)
+
+    def search_messages_remote(
+        self, query: str, *, peer_id: int | None = None, limit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Server-side SearchMessages (bale.search.v1.Search)."""
+        if not self._started:
+            return []
+        try:
+            peer_type = None
+            if peer_id is not None:
+                peer_type = self._dialog_peer_types.get(peer_id)
+                if peer_type is None:
+                    self._remember_dialog_types(self._api.load_dialogs(limit=100))
+                    peer_type = self._dialog_peer_types.get(peer_id, 1)
+            page = self._api.search_messages_rpc(
+                query, peer_id=peer_id, peer_type=peer_type, limit=limit,
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            {
+                "message_id": f"search:{hit.peer_id}:{hit.rid}",
+                "peer_id": hit.peer_id,
+                "peer_type": hit.peer_type,
+                "sender_id": hit.sender_id,
+                "direction": (
+                    "outbound"
+                    if self._self_user_id is not None
+                    and hit.sender_id == self._self_user_id
+                    else "inbound"
+                ),
+                "text": hit.text or "",
+                "received_at": float(hit.date),
+                "source": "remote_search",
+                "result_count": page.result_count,
+            }
+            for hit in page.hits
+        ]
+
+    def list_shared_media(
+        self, peer_id: int, *, limit: int = 20, content_type: int = 0,
+    ) -> list[dict[str, object]]:
+        """SharedMedia LoadMedia for one dialog (allowlist enforced by caller)."""
+        if not self._started:
+            return []
+        try:
+            peer_type = self._dialog_peer_types.get(peer_id)
+            if peer_type is None:
+                self._remember_dialog_types(self._api.load_dialogs(limit=100))
+                peer_type = self._dialog_peer_types.get(peer_id, 1)
+            hits = self._api.load_shared_media(
+                peer_id, peer_type=peer_type, content_type=content_type, limit=limit,
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            {
+                "message_id": f"media:{hit.peer_id}:{hit.rid}",
+                "peer_id": hit.peer_id or peer_id,
+                "peer_type": hit.peer_type or peer_type,
+                "sender_id": hit.sender_id,
+                "text": hit.text or "",
+                "received_at": float(hit.date),
+                "source": "shared_media",
+            }
+            for hit in hits
+        ]
 
     def search_contacts(self, query: str) -> list[dict[str, object]]:
         if not self._started:

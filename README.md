@@ -44,6 +44,8 @@
   - `list_dialogs`: Retrieve recent server conversations filtered against the allowed peer set → `{dialogs, count}`.
   - `list_messages`: Read verified server/local chat history with an approved peer → `{messages, count}`.
   - `search_messages`: Search local database history by keyword across allowed chats → `{messages, count}`.
+  - `search_messages_remote`: Server-side text search via `bale.search.v1.Search/SearchMessages` → `{messages, count, query}` (allowlist applied).
+  - `list_shared_media`: List shared media for one allowlisted peer via SharedMedia `LoadMedia` → `{media, count, peer_id}`.
   - `search_contacts` & `resolve_phone`: Resolve names or phone numbers to numeric IDs → `{contacts, count}` / `{phone, user_id, is_allowed}`.
   - `list_rpc_paths`: Discover known Bale `/bale.*/*` gRPC paths from the offline APK inventory → `{paths, count, total, service, query}`.
   - `send_text`: Two-phase outbound send to an allowlisted peer. First call returns `{needs_confirm, confirm_token, preview, expires_in}` without sending; second call with the same `peer_id`/`text` and `confirm_token` delivers `{ok, peer_id, confirmed}` (token TTL 5 minutes).

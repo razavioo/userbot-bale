@@ -33,6 +33,27 @@ Regenerate inventory after jadx:
   MTProto key exchange. gRPC/auth truth remains the jadx proto path above.
 - MCP: `list_rpc_paths` exposes the offline `/bale.*/*` inventory (308 paths).
 
+## Ghidra findings (libsqlcipher.so, AARCH64)
+
+- Headless Ghidra 11.3.2; project: `/tmp/opencode/bale-apk/ghidra-proj/bale_sqlcipher`.
+- Export: `/tmp/opencode/bale-apk/ghidra-out/sqlcipher_funcs.txt` (**14224** functions).
+- Content: Android SQLite JNI (`register_android_database_SQLiteConnection`,
+  `throw_sqlite3_exception*`) plus full `sqlite3_*` core (malloc, VFS, mutex,
+  status). Name is SQLCipher-enabled packaging of the platform database stack.
+- ~513 lines match sqlite/sqlcipher/crypto keywords; named (non-`FUN_*`)
+  symbols ≈ 1139. This is local storage crypto, not the MTProto/gRPC path.
+
+## Search + shared media RPCs (from jadx, 2026-09-23)
+
+- `/bale.search.v1.Search/SearchMessages` — `RequestSearchMessages`:
+  field 1 `SearchCondition` (piece_text at 6), field 2 packed
+  `UpdateOptimization`. Response: field 1 `MessageSearchItem[]`,
+  field 4 `BytesValue load_more_state`, field 7 `result_count`.
+- `/bale.shared_media.v1.SharedMediaService/LoadMedia` — the app uses
+  `SharedMedia$RequestLoadMedia` (ExPeer at field 1), not
+  `SharedMediaOuterClass` (OutExPeer). See `protos.py` `RequestLoadMedia`.
+
+
 ## Auth facts confirmed from this APK (2026-09-23)
 
 - `RequestValidateCode.is_jwt` is `google.protobuf.BoolValue` (field 3),

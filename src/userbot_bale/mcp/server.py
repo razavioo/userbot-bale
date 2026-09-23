@@ -59,6 +59,34 @@ class BaleMcpService:
         contacts = self._client.search_contacts(query)
         return {"contacts": contacts, "count": len(contacts)}
 
+    def search_messages_remote(
+        self, query: str, peer_id: int | None = None, limit: int = 20,
+    ) -> dict[str, object]:
+        if peer_id is not None:
+            self._require_allowed_peer(peer_id)
+        self._validate_limit(limit)
+        self._ensure_started()
+        results = self._client.search_messages_remote(query, peer_id=peer_id, limit=limit)
+        allowed_peers = set(self._store.allowed_peers())
+        filtered = [
+            msg for msg in results
+            if peer_id is not None or msg.get("peer_id") in allowed_peers
+        ]
+        if peer_id is not None:
+            filtered = [msg for msg in filtered if msg.get("peer_id") == peer_id]
+        return {"messages": filtered, "count": len(filtered), "query": query}
+
+    def list_shared_media(
+        self, peer_id: int, limit: int = 20, content_type: int = 0,
+    ) -> dict[str, object]:
+        self._require_allowed_peer(peer_id)
+        self._validate_limit(limit)
+        self._ensure_started()
+        media = self._client.list_shared_media(
+            peer_id, limit=limit, content_type=content_type,
+        )
+        return {"media": media, "count": len(media), "peer_id": peer_id}
+
     def resolve_phone(self, phone: str) -> dict[str, object]:
         self._ensure_started()
         user_id = self._client.resolve_phone(phone)
@@ -196,6 +224,20 @@ def create_server(service: BaleMcpService | None = None):
     def search_contacts(query: str) -> dict[str, object]:
         """Search Bale contacts and directory by name or phone query."""
         return service.search_contacts(query)
+
+    @server.tool(annotations=read_only)
+    def search_messages_remote(
+        query: str, peer_id: int | None = None, limit: int = 20,
+    ) -> dict[str, object]:
+        """Server-side text search via bale.search.v1.Search (read-only; allowlist applied)."""
+        return service.search_messages_remote(query, peer_id=peer_id, limit=limit)
+
+    @server.tool(annotations=read_only)
+    def list_shared_media(
+        peer_id: int, limit: int = 20, content_type: int = 0,
+    ) -> dict[str, object]:
+        """List shared media for one allowlisted peer via SharedMedia LoadMedia (read-only)."""
+        return service.list_shared_media(peer_id, limit=limit, content_type=content_type)
 
     @server.tool(annotations=read_only)
     def resolve_phone(phone: str) -> dict[str, object]:

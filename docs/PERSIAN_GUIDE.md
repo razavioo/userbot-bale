@@ -158,7 +158,9 @@ userbot-bale mcp serve
 - `account_status`: وضعیت لاگین و توکن و لیست مجاز → `{state, user_id, expires_in, allowed_peers}`
 - `list_dialogs`: دریافت لیست چتها → `{dialogs, count}`
 - `list_messages`: خواندن پیامهای یک چت مجاز → `{messages, count}`
-- `search_messages`: جستجو در متن پیامها → `{messages, count}`
+- `search_messages`: جستجو در متن پیامها (محلی) → `{messages, count}`
+- `search_messages_remote`: جستجوی سمت‌سرور با `SearchMessages` → `{messages, count, query}` (اعمال allowlist)
+- `list_shared_media`: رسانه‌های اشتراک‌گذاری‌شده یک چت مجاز → `{media, count, peer_id}`
 - `search_contacts` و `resolve_phone`: جستجوی مخاطب و تبدیل شماره به آیدی → `{contacts, count}` / `{phone, user_id, is_allowed}`
 - `list_rpc_paths`: فهرست مسیرهای gRPC شناخته‌شده از inventory خام APK (فقط‌خواندنی) → `{paths, count, total, service, query}`
 - `mark_read`: تیک خواندهشدن پیامها → `{ok, peer_id, date}`

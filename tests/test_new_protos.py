@@ -452,3 +452,143 @@ def test_message_read_zero_date_still_encoded():
     # date=0 is a valid timestamp (epoch); must always be emitted.
     buf = RequestMessageRead(peer=_PEER, date=0).encode()
     assert _first_varint_field(buf, 2) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RequestSearchMessages + parse_search_messages_response
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_search_messages_encodes_query_at_piece_text():
+    from userbot_bale.bale.protos import RequestSearchMessages
+
+    buf = RequestSearchMessages(query="hello").encode()
+    cond = _first_len_delim_field(buf, 1)
+    assert cond is not None
+    # SearchCondition field 6 = SearchPieceText
+    piece = _first_len_delim_field(cond, 6)
+    assert piece is not None
+    q = _first_len_delim_field(piece, 1)
+    assert q == b"hello"
+
+
+def test_search_messages_encodes_optional_peer():
+    from userbot_bale.bale.protos import RequestSearchMessages
+
+    peer = OutPeer(user_id=42, type=1, access_hash=7)
+    buf = RequestSearchMessages(query="x", peer=peer).encode()
+    cond = _first_len_delim_field(buf, 1)
+    assert cond is not None
+    peer_cond = _first_len_delim_field(cond, 3)
+    assert peer_cond is not None
+    inner = _first_len_delim_field(peer_cond, 1)
+    assert inner == peer.encode()
+
+
+def test_search_messages_packed_optimizations():
+    from userbot_bale.bale.protos import RequestSearchMessages
+
+    buf = RequestSearchMessages(query="x").encode()
+    packed = _first_len_delim_field(buf, 2)
+    assert packed == bytes((2,))  # STRIP_ENTITIES
+
+
+def test_parse_search_messages_response_empty():
+    from userbot_bale.bale.protos import parse_search_messages_response
+
+    page = parse_search_messages_response(b"")
+    assert page.hits == []
+    assert page.result_count == 0
+    assert page.load_more_state == b""
+
+
+def test_parse_search_messages_response_hit():
+    from userbot_bale.bale.protos import _encode_message_with_text, parse_search_messages_response
+
+    result = bytearray()
+    result += _enc_len_delim(1, OutPeer(user_id=99, type=2).encode())
+    result += _enc_tag(2, 0) + _enc_varint(555)
+    result += _enc_tag(3, 0) + _enc_varint(1700)
+    result += _enc_tag(4, 0) + _enc_varint(10)
+    result += _enc_len_delim(5, _encode_message_with_text("match"))
+    # MessageSearchItem wraps MessageSearchResult at field 1.
+    item = _enc_len_delim(1, bytes(result))
+    # ResponseSearchMessages wraps each MessageSearchItem at field 1.
+    buf = _enc_len_delim(1, item) + _enc_tag(7, 0) + _enc_varint(1)
+    page = parse_search_messages_response(buf)
+    assert page.result_count == 1
+    assert len(page.hits) == 1
+    hit = page.hits[0]
+    assert hit.peer_id == 99
+    assert hit.peer_type == 2
+    assert hit.rid == 555
+    assert hit.date == 1700
+    assert hit.sender_id == 10
+    assert hit.text == "match"
+
+
+def test_parse_search_messages_load_more_state():
+    from userbot_bale.bale.protos import parse_search_messages_response
+
+    state = _enc_len_delim(1, b"cursor")
+    buf = _enc_len_delim(4, state)
+    page = parse_search_messages_response(buf)
+    assert page.load_more_state == b"cursor"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RequestLoadMedia + parse_load_media_response
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_load_media_encodes_ex_peer():
+    from userbot_bale.bale.protos import ExPeer, RequestLoadMedia
+
+    peer = ExPeer(user_id=7, type=3, access_hash=11)
+    buf = RequestLoadMedia(peer=peer).encode()
+    enc = _first_len_delim_field(buf, 1)
+    assert enc == peer.encode()
+
+
+def test_load_media_defaults_backward_mode():
+    from userbot_bale.bale.protos import ExPeer, RequestLoadMedia
+
+    buf = RequestLoadMedia(peer=ExPeer(user_id=1)).encode()
+    assert _first_varint_field(buf, 4) == 2
+
+
+def test_load_media_date_wrapped_int64():
+    from userbot_bale.bale.protos import ExPeer, RequestLoadMedia
+
+    buf = RequestLoadMedia(peer=ExPeer(user_id=1), date=1_700_000_000).encode()
+    wrapped = _first_len_delim_field(buf, 2)
+    assert wrapped is not None
+    assert _first_varint_field(wrapped, 1) == 1_700_000_000
+
+
+def test_load_media_content_type_when_set():
+    from userbot_bale.bale.protos import ExPeer, RequestLoadMedia
+
+    buf = RequestLoadMedia(peer=ExPeer(user_id=1), content_type=9).encode()
+    assert _first_varint_field(buf, 3) == 9
+
+
+def test_parse_load_media_response_empty():
+    from userbot_bale.bale.protos import parse_load_media_response
+
+    assert parse_load_media_response(b"") == []
+
+
+def test_parse_load_media_response_single():
+    from userbot_bale.bale.protos import ExPeer, _encode_message_with_text, parse_load_media_response
+
+    body = bytearray()
+    body += _enc_len_delim(1, ExPeer(user_id=5, type=1).encode())
+    body += _enc_tag(2, 0) + _enc_varint(42)
+    body += _enc_tag(3, 0) + _enc_varint(1701)
+    body += _enc_tag(4, 0) + _enc_varint(8)
+    body += _enc_len_delim(5, _encode_message_with_text("photo"))
+    buf = _enc_len_delim(1, bytes(body))
+    hits = parse_load_media_response(buf)
+    assert len(hits) == 1
+    assert hits[0].peer_id == 5
+    assert hits[0].rid == 42
+    assert hits[0].text == "photo"

@@ -15,6 +15,8 @@ contact import, raw RPCs, or call acceptance.
   dialog/message access and outbound text to the local allowlist.
 - MCP tools return object-shaped `structuredContent` (`{messages, count}`, `{dialogs, count}`, …).
   `list_rpc_paths` is a read-only offline inventory of `/bale.*/*` paths extracted from `bale.apk`.
+  `search_messages_remote` and `list_shared_media` are read-only server RPCs; both enforce the
+  outbound peer allowlist (`list_shared_media` requires an allowlisted `peer_id`).
   `send_text` is two-phase: the first call only returns a `confirm_token` (TTL 300 s) and does not
   deliver; only a matching second call with that token sends.
 - Outbound automation is capped at 20 messages per peer per minute. A failed network send consumes

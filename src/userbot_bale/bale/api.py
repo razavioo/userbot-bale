@@ -40,26 +40,31 @@ from typing import Callable, List, Optional
 from userbot_bale.bale.endpoints import Endpoint, fetch_endpoints
 from userbot_bale.bale.protos import (
     ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials,
-    DialogInfo, HistoryMessage, InboundMessage,
+    DialogInfo, ExPeer, HistoryMessage, InboundMessage,
     IncomingCallEvent,
     GET_WSS_URL_METHOD, JOIN_GROUP_CALL_METHOD, LEAVE_GROUP_CALL_METHOD,
-    LOAD_DIALOGS_METHOD, LOAD_GROUPED_DIALOGS_METHOD, LOAD_HISTORY_METHOD, MESSAGE_READ_METHOD,
+    LOAD_DIALOGS_METHOD, LOAD_GROUPED_DIALOGS_METHOD, LOAD_HISTORY_METHOD, LOAD_MEDIA_METHOD,
+    MESSAGE_READ_METHOD,
     NEWEST_HISTORY_DATE,
     MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PhoneToImport,
     RECEIVE_CALL_METHOD,
     RequestGetWssURL, RequestImportContacts, RequestJoinGroupCall,
     RequestLeaveGroupCall, RequestLoadDialogs, RequestLoadGroupedDialogs, RequestLoadHistory,
-    RequestMessageRead, RequestReceiveCall,
-    RequestSearchContacts, RequestSendMessage,
+    RequestLoadMedia, RequestMessageRead, RequestReceiveCall,
+    RequestSearchContacts, RequestSearchMessages, RequestSendMessage,
     RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
+    SEARCH_MESSAGES_METHOD, SEARCH_SERVICE, SHARED_MEDIA_SERVICE,
+    SearchMessagesPage, SharedMediaHit,
     ResolvedContact, ResponseAuth, encode_accept_call,
     find_inbound_messages, parse_call_credentials,
     parse_get_wss_url_response,
     parse_incoming_call_offer,
     parse_import_contacts_response, parse_load_dialogs_response,
     parse_load_grouped_dialogs_response,
-    parse_load_history_response, parse_response_auth,
-    parse_search_contacts_response, parse_transaction_hash,
+    parse_load_history_response, parse_load_media_response,
+    parse_response_auth,
+    parse_search_contacts_response, parse_search_messages_response,
+    parse_transaction_hash,
     parse_update_call_received,
 )
 from userbot_bale.bale.rpc_envelope import Response
@@ -637,6 +642,79 @@ class BaleApiClient:
         ).encode()
         log.info("sending MessageRead peer=%d date=%d", peer_id, date)
         self._ws.rpc(MESSAGING_SERVICE, MESSAGE_READ_METHOD, payload, timeout=10.0)
+
+    def search_messages_rpc(
+        self,
+        query: str,
+        *,
+        peer_id: int | None = None,
+        peer_type: int | None = None,
+        limit: int = 20,
+    ) -> SearchMessagesPage:
+        """bale.search.v1.Search/SearchMessages — server-side text search.
+
+        When ``peer_id`` is set, scopes the query to that dialog via
+        SearchPeerCondition (uses the cached access hash when available).
+        """
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        peer: OutPeer | None = None
+        if peer_id is not None:
+            ptype = peer_type
+            if ptype is None:
+                ptype = self._peer_type_for(peer_id)
+            access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+            peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestSearchMessages(query=query, peer=peer).encode()
+        log.info("sending SearchMessages query=%r peer=%s limit=%d", query, peer_id, limit)
+        resp = self._ws.rpc(SEARCH_SERVICE, SEARCH_MESSAGES_METHOD, payload, timeout=15.0)
+        page = parse_search_messages_response(resp.payload or resp.raw)
+        hits = page.hits[:limit] if limit else page.hits
+        return SearchMessagesPage(
+            hits=hits, result_count=page.result_count,
+            load_more_state=page.load_more_state,
+        )
+
+    def _peer_type_for(self, peer_id: int) -> int:
+        """Resolve peer_type from the dialog access-hash cache, refreshing once."""
+        for (ptype, pid) in self._dialog_access_hashes:
+            if pid == peer_id:
+                return ptype
+        try:
+            self.load_dialogs(limit=100)
+        except Exception:  # noqa: BLE001
+            log.debug("could not refresh dialog hashes before peer lookup", exc_info=True)
+        for (ptype, pid) in self._dialog_access_hashes:
+            if pid == peer_id:
+                return ptype
+        return 1
+
+    def load_shared_media(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+        date: int | None = None,
+        content_type: int = 0,
+        load_mode: int = 2,
+        limit: int = 20,
+    ) -> list[SharedMediaHit]:
+        """bale.shared_media.v1.SharedMediaService/LoadMedia — media in a dialog."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        payload = RequestLoadMedia(
+            peer=ExPeer(user_id=peer_id, type=ptype, access_hash=access),
+            date=date,
+            content_type=content_type,
+            load_mode=load_mode,
+        ).encode()
+        log.info("sending LoadMedia peer=%d type=%d content_type=%d", peer_id, ptype, content_type)
+        resp = self._ws.rpc(
+            SHARED_MEDIA_SERVICE, LOAD_MEDIA_METHOD, payload, timeout=15.0,
+        )
+        return parse_load_media_response(resp.payload or resp.raw)[:limit]
 
     def listen_incoming_calls(
         self,

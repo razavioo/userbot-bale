@@ -74,8 +74,10 @@ The server exposes these tools. Every tool returns a JSON **object**
 | `account_status` | `{state, user_id, expires_in, allowed_peers}` |
 | `list_dialogs(limit)` | `{dialogs, count}` (allowlisted only; `limit` 1–100) |
 | `list_messages(peer_id, limit)` | `{messages, count}` |
-| `search_messages(query, peer_id?, limit)` | `{messages, count}` (allowlisted only) |
+| `search_messages(query, peer_id?, limit)` | `{messages, count}` (local store; allowlisted only) |
+| `search_messages_remote(query, peer_id?, limit)` | `{messages, count, query}` (server-side SearchMessages; allowlist applied) |
 | `search_contacts(query)` | `{contacts, count}` |
+| `list_shared_media(peer_id, limit?, content_type?)` | `{media, count, peer_id}` (SharedMedia LoadMedia; allowlisted peer only) |
 | `resolve_phone(phone)` | `{phone, user_id, is_allowed}` |
 | `list_rpc_paths(service?, query?, limit)` | `{paths, count, total, service, query}` (offline APK inventory; read-only) |
 | `mark_read(peer_id, date)` | `{ok, peer_id, date}` |

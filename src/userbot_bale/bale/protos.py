@@ -1308,3 +1308,235 @@ def find_inbound_messages(buf: bytes, *, max_depth: int = 6) -> list[InboundMess
         seen.add(key)
         out.append(m)
     return out
+
+
+# ============================================================
+# Service: bale.search.v1.Search  (SearchMessages)
+# ============================================================
+
+SEARCH_SERVICE = "bale.search.v1.Search"
+SEARCH_MESSAGES_METHOD = "SearchMessages"
+
+# APK: UpdateOptimization_STRIP_ENTITIES (2). The Android client also
+# sends STRIP_COUNTERS / COMPACT_USERS on some paths; 2 alone is enough
+# for a text search response.
+SEARCH_OPTIMIZATIONS: tuple[int, ...] = (2,)
+
+
+@dataclass(frozen=True)
+class ExPeer:
+    """PeersStruct.ExPeer — type + id + access_hash (used by LoadMedia).
+
+    Wire (APK PeersStruct$ExPeer): field 1 type, 2 id, 3 access_hash.
+    ExPeerType reuses PRIVATE=1 / GROUP=2 / CHANNEL=3 for the common
+    dialog types our OutPeer already carries.
+    """
+    user_id: int
+    type: int = PEER_TYPE_PRIVATE
+    access_hash: int = 0
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_tag(1, 0) + _enc_varint(self.type)
+        out += _enc_tag(2, 0) + _enc_varint(self.user_id)
+        if self.access_hash:
+            out += _enc_tag(3, 0) + _enc_varint(self.access_hash)
+        return bytes(out)
+
+
+def _enc_int64_value(value: int) -> bytes:
+    """CollectionsStruct.Int64Value — { field 1 = int64 }."""
+    return _enc_tag(1, 0) + _enc_varint(value)
+
+
+@dataclass(frozen=True)
+class RequestSearchMessages:
+    """SearchOuterClass.RequestSearchMessages
+
+    Wire (APK SearchOuterClass$RequestSearchMessages):
+        field 1 (len-delim) = SearchCondition
+        field 2 (packed varint) = optimizations
+    SearchCondition piece_text is field 6 → SearchPieceText { query = 1 }.
+    Optional peer filter: SearchCondition field 3 → SearchPeerCondition
+    { peer = 1 (OutPeer) }.
+    """
+    query: str
+    peer: OutPeer | None = None
+    optimizations: tuple[int, ...] = SEARCH_OPTIMIZATIONS
+
+    def encode(self) -> bytes:
+        cond = bytearray()
+        if self.peer is not None:
+            peer_cond = _enc_len_delim(1, self.peer.encode())
+            cond += _enc_len_delim(3, bytes(peer_cond))
+        piece = _enc_len_delim(1, self.query.encode("utf-8"))
+        cond += _enc_len_delim(6, bytes(piece))
+        out = bytearray()
+        out += _enc_len_delim(1, bytes(cond))
+        if self.optimizations:
+            packed = b"".join(_enc_varint(v) for v in self.optimizations)
+            out += _enc_len_delim(2, packed)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    """One MessageSearchResult extracted from ResponseSearchMessages."""
+    peer_type: int
+    peer_id: int
+    rid: int
+    date: int
+    sender_id: int
+    text: str | None
+
+
+@dataclass(frozen=True)
+class SearchMessagesPage:
+    hits: list[SearchHit]
+    result_count: int = 0
+    load_more_state: bytes = b""
+
+
+def _parse_search_result(buf: bytes) -> SearchHit | None:
+    """MessageSearchResult: peer=1, rid=2, date=3, sender_id=4, content=5."""
+    peer_type = peer_id = rid = date = sender_id = 0
+    text: str | None = None
+    has_payload = False
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 2 and fn == 1:
+            peer_type, peer_id = _parse_out_peer(val)
+            has_payload = True
+        elif wt == 0 and fn == 2:
+            rid = val
+        elif wt == 0 and fn == 3:
+            date = val
+        elif wt == 0 and fn == 4:
+            sender_id = val
+        elif wt == 2 and fn == 5:
+            text = _parse_text_from_message(val)
+            has_payload = True
+    if not has_payload and not rid:
+        return None
+    return SearchHit(
+        peer_type=peer_type, peer_id=peer_id, rid=rid,
+        date=date, sender_id=sender_id, text=text,
+    )
+
+
+def parse_search_messages_response(buf: bytes) -> SearchMessagesPage:
+    """ResponseSearchMessages: results=1, load_more_state=4, result_count=7."""
+    hits: list[SearchHit] = []
+    result_count = 0
+    load_more = b""
+    for fn, val, wt in _walk_len_delim(buf):
+        if fn == 1 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            # MessageSearchItem wraps MessageSearchResult at field 1.
+            for ifn, ival, iwt in _walk_len_delim(val):
+                if ifn == 1 and iwt == 2:
+                    hit = _parse_search_result(ival)
+                    if hit is not None:
+                        hits.append(hit)
+        elif fn == 4 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            # BytesValue { value = 1 }
+            for ifn, ival, iwt in _walk_len_delim(val):
+                if ifn == 1 and iwt == 2 and isinstance(ival, (bytes, bytearray)):
+                    load_more = bytes(ival)
+        elif fn == 7 and wt == 0:
+            result_count = val
+    if not result_count:
+        result_count = len(hits)
+    return SearchMessagesPage(
+        hits=hits, result_count=result_count, load_more_state=load_more,
+    )
+
+
+# ============================================================
+# Service: bale.shared_media.v1.SharedMediaService  (LoadMedia)
+# ============================================================
+
+SHARED_MEDIA_SERVICE = "bale.shared_media.v1.SharedMediaService"
+LOAD_MEDIA_METHOD = "LoadMedia"
+
+# ListLoadMode enum (APK EnumC26225yL4 / LoadMode).
+LOAD_MODE_BACKWARD = 2
+LOAD_MODE_FORWARD = 1
+LOAD_MODE_BOTH = 3
+
+
+@dataclass(frozen=True)
+class RequestLoadMedia:
+    """SharedMedia.RequestLoadMedia (the type the Android app sends).
+
+    Wire (APK SharedMedia$RequestLoadMedia; path uses this, not
+    SharedMediaOuterClass which has OutExPeer):
+        field 1 (len-delim) = ExPeer
+        field 2 (len-delim) = Int64Value date  (paging cursor; optional)
+        field 3 (varint)    = content_type (MessageContentType)
+        field 4 (varint)    = load_mode (ListLoadMode; BACKWARD=2)
+        field 5 (varint)    = minimum_results
+    """
+    peer: ExPeer
+    date: int | None = None
+    content_type: int = 0
+    load_mode: int = LOAD_MODE_BACKWARD
+    minimum_results: int = 0
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        if self.date is not None:
+            out += _enc_len_delim(2, _enc_int64_value(self.date))
+        if self.content_type:
+            out += _enc_tag(3, 0) + _enc_varint(self.content_type)
+        if self.load_mode:
+            out += _enc_tag(4, 0) + _enc_varint(self.load_mode)
+        if self.minimum_results:
+            out += _enc_tag(5, 0) + _enc_varint(self.minimum_results)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class SharedMediaHit:
+    """MessageMediaResult: ex_peer=1, rid=2, date=3, sender_id=4, content=5."""
+    peer_type: int
+    peer_id: int
+    rid: int
+    date: int
+    sender_id: int
+    text: str | None
+
+
+def _parse_media_result(buf: bytes) -> SharedMediaHit | None:
+    peer_type = peer_id = rid = date = sender_id = 0
+    text: str | None = None
+    has_payload = False
+    for fn, val, wt in _walk_len_delim(buf):
+        if wt == 2 and fn == 1:
+            peer_type, peer_id = _parse_out_peer(val)
+            has_payload = True
+        elif wt == 0 and fn == 2:
+            rid = val
+        elif wt == 0 and fn == 3:
+            date = val
+        elif wt == 0 and fn == 4:
+            sender_id = val
+        elif wt == 2 and fn == 5:
+            text = _parse_text_from_message(val)
+            has_payload = True
+    if not has_payload and not rid:
+        return None
+    return SharedMediaHit(
+        peer_type=peer_type, peer_id=peer_id, rid=rid,
+        date=date, sender_id=sender_id, text=text,
+    )
+
+
+def parse_load_media_response(buf: bytes) -> list[SharedMediaHit]:
+    """ResponseLoadMedia.media_results is repeated field 1."""
+    out: list[SharedMediaHit] = []
+    for fn, val, wt in _walk_len_delim(buf):
+        if fn == 1 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            hit = _parse_media_result(val)
+            if hit is not None:
+                out.append(hit)
+    return out
