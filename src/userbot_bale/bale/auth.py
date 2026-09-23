@@ -154,28 +154,17 @@ class BaleAuth:
                 jwt = parsed.jwt
         if not jwt:
             # Most accounts: Bale requires a follow-up GetJWTToken call.
-            # Set the user_id on the same persistent client so the server
-            # can tie this request to the ValidateCode session.
+            # Try several gateway states seen live (2026-09-23): blank
+            # access_token + user_id → HTTP 401 even after clearing the
+            # blank cookie; session_id-only also 401 with user_id set.
             user_id = parse_user_id_from_auth_response(resp.body)
             log.warning(
-                "No JWT in ValidateCode response; calling GetJWTToken (user_id=%s)",
+                "No JWT in ValidateCode response; calling GetJWTToken "
+                "(user_id=%s, cookies=%s)",
                 user_id,
+                self._client.cookie_summaries(),
             )
-            try:
-                if user_id is not None:
-                    self._client.set_user_id(user_id)
-                # StartPhoneAuth plants a blank access_token= cookie that
-                # ValidateCode must echo, but GetJWTToken answers 401 when
-                # that blank value is still present in the jar.
-                self._client.clear_empty_cookies()
-                jwt_resp = self._client.unary(
-                    AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
-                )
-                jwt = parse_get_jwt_token_response(jwt_resp.body)
-                if jwt:
-                    log.warning("GetJWTToken OK; JWT length=%d", len(jwt))
-            except Exception as e:
-                log.warning("GetJWTToken failed: %s", e)
+            jwt = self._get_jwt_token(user_id)
         if not jwt:
             raise RuntimeError(
                 "Could not obtain JWT after ValidateCode + GetJWTToken. "
@@ -183,6 +172,56 @@ class BaleAuth:
             )
         log.info("Auth OK; JWT length=%d", len(jwt))
         return AuthSession(jwt=jwt, response_body=resp.body)
+
+    def _get_jwt_token(self, user_id: int | None) -> str | None:
+        """Try GetJWTToken under several cookie/user_id combinations.
+
+        Live-observed: HTTP 401 when blank access_token is present; also
+        401 after clear_empty_cookies() with user_id set. Strategy order
+        is cheapest-first so a working path short-circuits."""
+        from userbot_bale.bale.grpc_web import GrpcWebError
+
+        strategies: list[tuple[str, int | None, bool]] = [
+            # (label, user_id, clear_blank_cookies)
+            ("clear_blank+user_id", user_id, True),
+            ("keep_blank+user_id", user_id, False),
+            ("clear_blank+no_user", None, True),
+            ("keep_blank+no_user", None, False),
+        ]
+        last_err: Exception | None = None
+        for label, uid, clear in strategies:
+            if clear:
+                self._client.clear_empty_cookies()
+            if uid is not None:
+                self._client.set_user_id(uid)
+            else:
+                self._client.clear_user_id()
+            try:
+                log.warning("GetJWTToken attempt: %s", label)
+                jwt_resp = self._client.unary(
+                    AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
+                )
+            except GrpcWebError as e:
+                log.warning("GetJWTToken attempt %s failed: %s", label, e)
+                last_err = e
+                continue
+            except Exception as e:
+                log.warning("GetJWTToken attempt %s error: %s", label, e)
+                last_err = e
+                continue
+            jwt = parse_get_jwt_token_response(jwt_resp.body)
+            if jwt:
+                log.warning(
+                    "GetJWTToken OK via %s; JWT length=%d", label, len(jwt)
+                )
+                return jwt
+            log.warning(
+                "GetJWTToken attempt %s: HTTP %d but no JWT in body",
+                label, jwt_resp.http_status,
+            )
+        if last_err is not None:
+            log.warning("GetJWTToken all attempts failed; last=%s", last_err)
+        return None
 
     def sign_up(self, name: str, *, transaction_hash: str | None = None) -> AuthSession:
         """Complete sign-up for a fresh phone after validate_code raised
@@ -204,19 +243,12 @@ class BaleAuth:
         if not jwt:
             user_id = parse_user_id_from_auth_response(resp.body)
             log.warning(
-                "No JWT in SignUp response; calling GetJWTToken (user_id=%s)",
+                "No JWT in SignUp response; calling GetJWTToken "
+                "(user_id=%s, cookies=%s)",
                 user_id,
+                self._client.cookie_summaries(),
             )
-            try:
-                if user_id is not None:
-                    self._client.set_user_id(user_id)
-                self._client.clear_empty_cookies()
-                jwt_resp = self._client.unary(
-                    AUTH_SERVICE, "GetJWTToken", RequestGetJWTToken().encode()
-                )
-                jwt = parse_get_jwt_token_response(jwt_resp.body)
-            except Exception as e:
-                log.warning("GetJWTToken after SignUp failed: %s", e)
+            jwt = self._get_jwt_token(user_id)
         if not jwt:
             raise RuntimeError(
                 "SignUp succeeded but no JWT could be obtained "

@@ -73,3 +73,116 @@ def test_clear_empty_cookies_drops_blank_access_token():
         assert "keep_me" in names
     finally:
         client.close()
+
+
+def test_clear_empty_cookies_uses_domain_and_path():
+    client = GrpcWebClient()
+    try:
+        client._http.cookies.set(
+            "access_token", "", domain="bale.ai", path="/"
+        )
+        client.clear_empty_cookies()
+        names = {cookie.name for cookie in client._http.cookies.jar}
+        assert "access_token" not in names
+    finally:
+        client.close()
+
+
+def test_cookie_summaries_hide_values():
+    client = GrpcWebClient()
+    try:
+        client._http.cookies.set(
+            "access_token", "eyJ secret value", domain="next-ws.bale.ai"
+        )
+        summaries = client.cookie_summaries()
+        assert len(summaries) == 1
+        assert "eyJ" not in summaries[0]
+        assert "access_token@" in summaries[0]
+        assert "len=" in summaries[0]
+    finally:
+        client.close()
+
+
+def test_clear_user_id():
+    client = GrpcWebClient(user_id=42)
+    try:
+        assert client._user_id == 42
+        client.clear_user_id()
+        assert client._user_id is None
+    finally:
+        client.close()
+
+
+def test_clear_empty_cookies_uses_domain_and_path():
+    client = GrpcWebClient()
+    try:
+        client._http.cookies.set(
+            "access_token", "", domain="bale.ai", path="/"
+        )
+        client.clear_empty_cookies()
+        names = {cookie.name for cookie in client._http.cookies.jar}
+        assert "access_token" not in names
+    finally:
+        client.close()
+
+
+def test_cookie_summaries_hide_values():
+    client = GrpcWebClient()
+    try:
+        client._http.cookies.set(
+            "access_token", "eyJ secret", domain="next-ws.bale.ai"
+        )
+        summaries = client.cookie_summaries()
+        assert len(summaries) == 1
+        assert "eyJ" not in summaries[0]
+        assert "access_token@" in summaries[0]
+        assert "len=" in summaries[0]
+    finally:
+        client.close()
+
+
+def test_clear_user_id():
+    client = GrpcWebClient(user_id=42)
+    try:
+        assert client._user_id == 42
+        client.clear_user_id()
+        assert client._user_id is None
+    finally:
+        client.close()
+
+
+def test_clear_empty_cookies_uses_domain_and_path():
+    client = GrpcWebClient()
+    try:
+        client._http.cookies.set(
+            "access_token", "", domain="bale.ai", path="/"
+        )
+        client.clear_empty_cookies()
+        assert list(client._http.cookies.jar) == []
+    finally:
+        client.close()
+
+
+def test_cookie_summaries_hide_values():
+    client = GrpcWebClient()
+    try:
+        client._http.cookies.set(
+            "access_token", "eyJ secret", domain="next-ws.bale.ai"
+        )
+        summaries = client.cookie_summaries()
+        assert len(summaries) == 1
+        assert "eyJ" not in summaries[0]
+        assert "access_token@" in summaries[0]
+        assert "len=" in summaries[0]
+    finally:
+        client.close()
+
+
+def test_clear_user_id():
+    client = GrpcWebClient(user_id=42)
+    try:
+        assert client._user_id == 42
+        client.clear_user_id()
+        assert client._user_id is None
+    finally:
+        client.close()

@@ -32,6 +32,25 @@ def test_validate_code_minimal():
     assert b"123456" in buf
 
 
+def test_validate_code_is_jwt_is_boolvalue_not_scalar():
+    # field 3 must be google.protobuf.BoolValue { value: true @1 }
+    # (tag 0x1a, len 2, payload 0x08 0x01). A bare varint (tag 0x18)
+    # is dropped by the server and JWT is withheld from ResponseAuth.
+    buf = RequestValidateCode(
+        transaction_hash="tx_abc", code="123456", is_jwt=True
+    ).encode()
+    assert bytes.fromhex("1a020801") in buf
+    assert bytes.fromhex("1801") not in buf
+
+
+def test_validate_code_is_jwt_false_omits_field():
+    buf = RequestValidateCode(
+        transaction_hash="tx_abc", code="123456", is_jwt=False
+    ).encode()
+    assert bytes.fromhex("1a020801") not in buf
+    assert b"tx_abc" in buf
+
+
 def test_parse_response_auth_finds_jwt():
     # synthesize a ResponseAuth-ish blob with a plausible JWT in it.
     header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()

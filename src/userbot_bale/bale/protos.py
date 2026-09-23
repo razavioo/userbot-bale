@@ -796,7 +796,13 @@ class RequestValidateCode:
         out += _enc_len_delim(1, self.transaction_hash.encode("utf-8"))
         out += _enc_len_delim(2, self.code.encode("utf-8"))
         if self.is_jwt:
-            out += _enc_tag(3, 0) + _enc_varint(1)
+            # field 3 is google.protobuf.BoolValue { value: bool @1 },
+            # NOT a bare varint. A scalar wire-type is silently dropped
+            # by the server, which then withholds the JWT from
+            # ResponseAuth (no body JWT, no Set-Cookie) and forces the
+            # broken GetJWTToken fallback that answers HTTP 401.
+            bool_value = _enc_tag(1, 0) + _enc_varint(1)
+            out += _enc_len_delim(3, bool_value)
         return bytes(out)
 
 

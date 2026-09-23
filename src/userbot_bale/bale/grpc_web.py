@@ -132,7 +132,22 @@ class GrpcWebClient:
         call as authenticated-with-invalid-JWT and answer HTTP 401."""
         for cookie in list(self._http.cookies.jar):
             if not cookie.value:
-                self._http.cookies.delete(cookie.name)
+                self._http.cookies.delete(
+                    cookie.name, domain=cookie.domain, path=cookie.path
+                )
+
+    def cookie_summaries(self) -> list[str]:
+        """Safe cookie diagnostics: name, domain, path, value length only."""
+        out: list[str] = []
+        for cookie in self._http.cookies.jar:
+            out.append(
+                f"{cookie.name}@{cookie.domain}{cookie.path}"
+                f":len={len(cookie.value or '')}"
+            )
+        return out
+
+    def clear_user_id(self) -> None:
+        self._user_id = None
 
     def close(self) -> None:
         self._http.close()
@@ -173,19 +188,36 @@ class GrpcWebClient:
         # prior session; a browser stores this empty cookie and echoes it
         # back in ValidateCode, signalling flow continuity. Without it the
         # server won't set the real JWT cookie in the ValidateCode response.
+        # Honor Domain= from the header (Bale often uses Domain=bale.ai) so
+        # cross-subdomain cookies still attach to next-ws.bale.ai requests.
+        host = self._host.split("://", 1)[-1].split("/", 1)[0]
         for sc in set_cookies:
             head = sc.split(";", 1)[0].strip()
-            if "=" in head:
-                name, value = head.split("=", 1)
-                # httpx.Cookies.set domain=next-ws.bale.ai so it's sent
-                # on subsequent calls to the same host.
-                self._http.cookies.set(name.strip(), value.strip(), domain="next-ws.bale.ai")
+            if "=" not in head:
+                continue
+            name, value = head.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            domain = host
+            for part in sc.split(";")[1:]:
+                part = part.strip()
+                if part.lower().startswith("domain="):
+                    raw = part.split("=", 1)[1].strip().lstrip(".")
+                    if raw:
+                        domain = raw
+            # Also pin the request host so the cookie matches either form.
+            self._http.cookies.set(name, value, domain=domain)
+            if domain != host:
+                self._http.cookies.set(name, value, domain=host)
 
         # Synthesize Set-Cookie list from jar for extract_access_token().
         if not set_cookies and r.cookies:
             for name, value in r.cookies.items():
                 set_cookies.append(f"{name}={value}")
-        log.debug("gRPC-Web %s/%s: http=%d", service, method, r.status_code)
+        log.debug(
+            "gRPC-Web %s/%s: http=%d cookies=%s",
+            service, method, r.status_code, self.cookie_summaries(),
+        )
         body = b""
         trailer_text = ""
         for flags, frame_body in _unpack_frames(r.content):
