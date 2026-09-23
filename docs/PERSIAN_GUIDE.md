@@ -160,6 +160,7 @@ userbot-bale mcp serve
 - `list_messages`: خواندن پیامهای یک چت مجاز → `{messages, count}`
 - `search_messages`: جستجو در متن پیامها → `{messages, count}`
 - `search_contacts` و `resolve_phone`: جستجوی مخاطب و تبدیل شماره به آیدی → `{contacts, count}` / `{phone, user_id, is_allowed}`
+- `list_rpc_paths`: فهرست مسیرهای gRPC شناخته‌شده از inventory خام APK (فقط‌خواندنی) → `{paths, count, total, service, query}`
 - `mark_read`: تیک خواندهشدن پیامها → `{ok, peer_id, date}`
 - `send_text`: ارسال پاسخ به مخاطب مجاز در **دو مرحله** — فراخوانی اول فقط `confirm_token` برمی‌گرداند و چیزی نمی‌فرستد؛ فراخوانی دوم با همان `peer_id`/`text` و توکن، پیام را ارسال می‌کند (اعتبار توکن ۵ دقیقه). بدون `confirm_token` هیچ پیامی ارسال نمی‌شود.
 

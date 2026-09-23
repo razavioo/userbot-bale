@@ -19,8 +19,19 @@ Regenerate inventory after jadx:
 - Install: `~/.local/share/ghidra-dist/ghidra_11.3.2_PUBLIC`
 - Headless: `~/.local/bin/ghidra-analyzeHeadless`
 - Needs a full JDK (`javac`); set in `support/launch.properties`:
-  `JAVA_HOME_OVERRIDE=<jdk-root>`
+  `JAVA_HOME_OVERRIDE=/tmp/opencode/mamba_jdk` (micromamba openjdk 21)
 - Project: `/tmp/opencode/bale-apk/ghidra-proj`
+
+## Ghidra findings (libtmessages.45.so, AARCH64)
+
+- Analyzed with headless Ghidra 11.3.2; export:
+  `/tmp/opencode/bale-apk/ghidra-out/tmessages_funcs.txt` (9955 functions).
+- Project: `/tmp/opencode/bale-apk/ghidra-proj/bale`.
+- Dominant libraries: FFmpeg/libav (`av_*`, `ff_*`), libvpx/VP8/VP9, libjpeg,
+  libwebp, Opus; JNI under `Java_ir_nasim_tgwidgets_editor_messenger_*`.
+- Crypto symbols here (`av_aes_*`, `av_sha_*`) are media/HLS-oriented, not
+  MTProto key exchange. gRPC/auth truth remains the jadx proto path above.
+- MCP: `list_rpc_paths` exposes the offline `/bale.*/*` inventory (308 paths).
 
 ## Auth facts confirmed from this APK (2026-09-23)
 

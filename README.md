@@ -45,6 +45,7 @@
   - `list_messages`: Read verified server/local chat history with an approved peer → `{messages, count}`.
   - `search_messages`: Search local database history by keyword across allowed chats → `{messages, count}`.
   - `search_contacts` & `resolve_phone`: Resolve names or phone numbers to numeric IDs → `{contacts, count}` / `{phone, user_id, is_allowed}`.
+  - `list_rpc_paths`: Discover known Bale `/bale.*/*` gRPC paths from the offline APK inventory → `{paths, count, total, service, query}`.
   - `send_text`: Two-phase outbound send to an allowlisted peer. First call returns `{needs_confirm, confirm_token, preview, expires_in}` without sending; second call with the same `peer_id`/`text` and `confirm_token` delivers `{ok, peer_id, confirmed}` (token TTL 5 minutes).
   - `mark_read`: Acknowledge and mark messages as read up to a specific timestamp → `{ok, peer_id, date}`.
 

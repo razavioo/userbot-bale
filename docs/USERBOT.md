@@ -77,6 +77,7 @@ The server exposes these tools. Every tool returns a JSON **object**
 | `search_messages(query, peer_id?, limit)` | `{messages, count}` (allowlisted only) |
 | `search_contacts(query)` | `{contacts, count}` |
 | `resolve_phone(phone)` | `{phone, user_id, is_allowed}` |
+| `list_rpc_paths(service?, query?, limit)` | `{paths, count, total, service, query}` (offline APK inventory; read-only) |
 | `mark_read(peer_id, date)` | `{ok, peer_id, date}` |
 
 ### `send_text` two-phase confirm

@@ -8,11 +8,11 @@ import threading
 import time
 
 from userbot_bale.control.auth import AuthStore
+from userbot_bale.mcp.rpc_paths import list_service_paths
 from userbot_bale.userbot.client import BaleUserClient
 from userbot_bale.userbot.store import UserbotStore
 
 _CONFIRM_TTL_SECONDS = 300.0
-
 
 class BaleMcpService:
     """Tool implementation kept independent of a particular MCP SDK version."""
@@ -114,6 +114,15 @@ class BaleMcpService:
         self._client.mark_read(peer_id, date)
         return {"ok": True, "peer_id": peer_id, "date": date}
 
+    @staticmethod
+    def list_rpc_paths(
+        service: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        """Read-only discovery of Bale /bale.*/* paths from the APK inventory."""
+        return list_service_paths(service=service, query=query, limit=limit)
+
     def _prune_pending(self, now: float) -> None:
         expired = [token for token, (_, _, expires) in self._pending_sends.items() if now > expires]
         for token in expired:
@@ -137,14 +146,12 @@ class BaleMcpService:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
 
-
 def create_service() -> BaleMcpService:
     record = AuthStore().load()
     if record is None:
         raise RuntimeError("no valid Bale session; run 'userbot-bale auth bale-login --save' first")
     store = UserbotStore()
     return BaleMcpService(BaleUserClient(jwt=record.jwt, store=store), store)
-
 
 def create_server(service: BaleMcpService | None = None):
     """Create an MCP stdio server without exposing raw Bale RPC access."""
@@ -199,6 +206,19 @@ def create_server(service: BaleMcpService | None = None):
     def list_dialogs(limit: int = 20) -> dict[str, object]:
         """List recent Bale dialogs using the authenticated account."""
         return service.list_dialogs(limit)
+
+    @server.tool(annotations=read_only)
+    def list_rpc_paths(
+        service: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        """List known Bale gRPC /bale.*/* service paths from the offline APK inventory (read-only)."""
+        # Parameter `service` shadows the outer BaleMcpService instance;
+        # list_rpc_paths is a staticmethod, so call it on the class.
+        return BaleMcpService.list_rpc_paths(
+            service=service, query=query, limit=limit,
+        )
 
     @server.tool(annotations=ToolAnnotations(
         readOnlyHint=False,

@@ -35,6 +35,7 @@ async def test_mcp_stdio_handshake_lists_and_calls_tools(tmp_path, monkeypatch) 
                 "search_contacts",
                 "resolve_phone",
                 "list_dialogs",
+                "list_rpc_paths",
                 "send_text",
                 "mark_read",
             }
@@ -53,6 +54,8 @@ async def test_mcp_stdio_handshake_lists_and_calls_tools(tmp_path, monkeypatch) 
             send_props = (tools_by_name["send_text"].inputSchema or {}).get("properties", {})
             assert "confirm_token" in send_props
 
+            assert tools_by_name["list_rpc_paths"].annotations.readOnlyHint is True
+
             result = await session.call_tool("account_status")
             assert result.isError is False
             assert result.structuredContent == {
@@ -61,3 +64,15 @@ async def test_mcp_stdio_handshake_lists_and_calls_tools(tmp_path, monkeypatch) 
                 "expires_in": "unknown",
                 "allowed_peers": [],
             }
+
+            rpc = await session.call_tool(
+                "list_rpc_paths", {"service": "auth.v1", "limit": 50}
+            )
+            assert rpc.isError is False
+            assert rpc.structuredContent is not None
+            assert rpc.structuredContent["total"] == 16
+            assert rpc.structuredContent["count"] == 16
+            assert all(
+                path.startswith("/bale.auth.v1.Auth/")
+                for path in rpc.structuredContent["paths"]
+            )
