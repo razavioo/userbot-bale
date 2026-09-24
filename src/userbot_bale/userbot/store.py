@@ -51,7 +51,6 @@ class UserbotStore:
                     peer_id INTEGER PRIMARY KEY,
                     peer_type INTEGER NOT NULL
                 );
-                );
                 """
             )
             self._conn.commit()
