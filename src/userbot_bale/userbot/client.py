@@ -91,7 +91,7 @@ class BaleUserClient:
         peer_type: int | None = None,
         reply_to: int | None = None,
         is_silent: bool = False,
-    ) -> None:
+    ) -> int | None:
         if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
             self.store.audit("outbound_rejected", peer_id=peer_id, detail="peer_not_allowlisted")
             raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
@@ -108,7 +108,7 @@ class BaleUserClient:
             raise RuntimeError("outbound rate limit reached for this peer")
         resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
         try:
-            self._api.send_message(
+            rid = self._api.send_message(
                 peer_id,
                 text.encode("utf-8"),
                 peer_type=resolved_peer_type,
@@ -116,15 +116,16 @@ class BaleUserClient:
                 is_silent=is_silent,
             )
         except TypeError:
-            self._api.send_message(peer_id, text.encode("utf-8"))
+            rid = self._api.send_message(peer_id, text.encode("utf-8"))
         message_id = "out:" + hashlib.sha256(
             f"{peer_id}:{time.time_ns()}:{text}".encode("utf-8")
         ).hexdigest()
         self.store.record_message(
             message_id=message_id, peer_id=peer_id, sender_id=self._self_user_id or 0,
-            direction="outbound", text=text,
+            direction="outbound", text=text, peer_type=resolved_peer_type,
         )
         self.store.audit("outbound_sent", peer_id=peer_id, detail=f"characters={len(text)}")
+        return rid
 
     def list_dialogs(self, limit: int = 20) -> list[dict[str, object]]:
         remote: list[dict[str, object]] = []
@@ -317,17 +318,17 @@ class BaleUserClient:
             and message.sender_uid == self._self_user_id
         ):
             return
-        peer_id = message.sender_uid or message.peer_user_id
+        peer_id = message.peer_user_id if message.peer_type != 1 else (message.sender_uid or message.peer_user_id)
         fingerprint = hashlib.sha256(
             f"{peer_id}:{message.text}".encode("utf-8")
         ).hexdigest()
-        message_id = f"in:{peer_id}:{message.rid}" if message.rid else f"in:{fingerprint}"
+        message_id = f"in:{message.peer_type or 1}:{peer_id}:{message.rid}" if message.rid else f"in:{fingerprint}"
         received_at = time.time()
         if message.peer_type and peer_id:
             self._dialog_peer_types[peer_id] = message.peer_type
         if not self.store.record_message(
             message_id=message_id, peer_id=peer_id, sender_id=message.sender_uid,
-            direction="inbound", text=message.text, received_at=received_at,
+            direction="inbound", text=message.text, received_at=received_at, peer_type=message.peer_type or 1,
         ):
             return
         event = MessageEvent(

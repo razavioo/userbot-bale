@@ -1,6 +1,7 @@
 """userbot-bale — comprehensive Bale Messenger automation framework, userbot engine, and transport core."""
 
 from userbot_bale import events, filters
+from userbot_bale.bridge import DeliveryStore, MultiTenantBridge
 from userbot_bale.events import Message, MessageEvent
 from userbot_bale.framing import Frame, FrameFlag, Reassembler, fragment
 from userbot_bale.userbot.async_client import AsyncBaleClient, BaleClient
@@ -13,10 +14,12 @@ __all__ = [
     "BaleClient",
     "BaleUserClient",
     "Codec",
+    "DeliveryStore",
     "Frame",
     "FrameFlag",
     "Message",
     "MessageEvent",
+    "MultiTenantBridge",
     "Protocol",
     "Reassembler",
     "SAMPLE_RATE",

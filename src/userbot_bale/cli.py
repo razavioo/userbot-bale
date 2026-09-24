@@ -2683,6 +2683,8 @@ def build_parser() -> argparse.ArgumentParser:
     userbot_resolve = userbot_sub.add_parser("resolve-phone", help="resolve phone number to numeric user ID")
     userbot_resolve.add_argument("phone", help="phone number e.g. +98912...")
     userbot_resolve.set_defaults(func=cmd_userbot)
+    userbot_bridge = userbot_sub.add_parser("bridge", help="run multi-tenant HTTP bridge server")
+    userbot_bridge.set_defaults(func=lambda args: __import__("userbot_bale.bridge", fromlist=["run_bridge_server"]).run_bridge_server())
 
     mcp = sub.add_parser("mcp", help="serve Bale tools over Model Context Protocol")
     mcp_sub = mcp.add_subparsers(dest="mcp_cmd", required=True)

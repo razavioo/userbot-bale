@@ -462,7 +462,7 @@ class BaleApiClient:
         peer_type: int = 1,
         quoted_rid: int | None = None,
         is_silent: bool = False,
-    ) -> None:
+    ) -> int:
         """Send a text message to `peer_id` via
         `/bale.messaging.v2.Messaging/SendMessage`.
 
@@ -480,7 +480,10 @@ class BaleApiClient:
 
         access_key = (peer_type, peer_id)
         access_hash = self._dialog_access_hashes.get(access_key, 0)
+        import secrets
+        rid = secrets.randbits(53)
         req = RequestSendMessage(
+            rid=rid,
             peer=OutPeer(user_id=peer_id, type=peer_type, access_hash=access_hash),
             text=text,
             quoted_rid=quoted_rid,
@@ -489,6 +492,10 @@ class BaleApiClient:
         payload = req.encode()
         log.info("SendMessage peer=%d bytes=%d", peer_id, len(body))
         self._ws.rpc(MESSAGING_SERVICE, "SendMessage", payload, timeout=15.0)
+        history = self.load_history(peer_id, peer_type=peer_type, limit=20)
+        if any(message.rid == rid for message in history):
+            return rid
+        raise RuntimeError("Send could not be confirmed; inspect history before retrying")
 
     def listen_messages(
         self,

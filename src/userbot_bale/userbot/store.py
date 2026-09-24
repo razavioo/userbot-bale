@@ -47,6 +47,11 @@ class UserbotStore:
                     user_id INTEGER NOT NULL,
                     resolved_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS peer_types (
+                    peer_id INTEGER PRIMARY KEY,
+                    peer_type INTEGER NOT NULL
+                );
+                );
                 """
             )
             self._conn.commit()
@@ -93,6 +98,7 @@ class UserbotStore:
         direction: str,
         text: str,
         received_at: float | None = None,
+        peer_type: int = 1,
     ) -> bool:
         """Persist a message and return whether it was newly inserted."""
         with self._lock:
@@ -103,6 +109,10 @@ class UserbotStore:
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (message_id, peer_id, sender_id, direction, text, received_at or time.time()),
+            )
+            self._conn.execute(
+                "INSERT OR REPLACE INTO peer_types(peer_id, peer_type) VALUES (?, ?)",
+                (peer_id, peer_type),
             )
             self._conn.commit()
         return cursor.rowcount == 1
@@ -214,9 +224,11 @@ class UserbotStore:
                 """,
                 (limit,),
             ).fetchall()
+            types = dict(self._conn.execute("SELECT peer_id, peer_type FROM peer_types").fetchall())
         return [
             {
                 "peer_id": int(row[0]),
+                "peer_type": types.get(int(row[0]), 1),
                 "last_message_at": float(row[1]),
                 "message_count": int(row[2]),
                 "source": "local_observed",
@@ -296,6 +308,7 @@ class MemoryUserbotStore:
         direction: str,
         text: str,
         received_at: float | None = None,
+        peer_type: int = 1,
     ) -> bool:
         with self._lock:
             if message_id in self._message_ids:
@@ -308,6 +321,7 @@ class MemoryUserbotStore:
                 "direction": direction,
                 "text": text,
                 "received_at": received_at or time.time(),
+                "peer_type": peer_type,
             })
             return True
 
