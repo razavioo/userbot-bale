@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QAction, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -421,6 +422,9 @@ class LoginView(QWidget):
         self.send_btn.setObjectName("primary")
         self.send_btn.clicked.connect(self._on_send_clicked)
 
+        self.baleonly = QCheckBox("Send code inside the Bale app (no SMS)")
+        self.baleonly.toggled.connect(self._on_baleonly_toggled)
+
         self.code = QLineEdit()
         self.code.setPlaceholderText("12345")
         self.code.setEnabled(False)
@@ -435,6 +439,7 @@ class LoginView(QWidget):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
         form.addRow("Phone number", self.phone)
+        form.addRow("Delivery", self.baleonly)
         form.addRow("SMS code", self.code)
 
         button_row = QHBoxLayout()
@@ -477,15 +482,34 @@ class LoginView(QWidget):
     def _set_banner(self, title: str, body: str, tone: str = "info") -> None:
         self.banner.set_banner(Banner(title, body, tone))
 
+    def _on_baleonly_toggled(self, checked: bool) -> None:
+        self.send_btn.setText("Send Bale app code" if checked else "Send SMS code")
+        self.code.setPlaceholderText("Code from Bale app" if checked else "12345")
+
     def _on_send_clicked(self) -> None:
         phone_ok, message = validate_phone_input(self.phone.text())
         if not phone_ok:
             self._set_banner("Phone number needs attention", message, "err")
             return
+        baleonly = self.baleonly.isChecked()
         self.send_btn.setEnabled(False)
         self._set_stage("phone")
-        self._set_banner("Sending code", "We are requesting an SMS code from Bale. Keep this window open.", "info")
-        worker = StartSmsWorker(self.phone.text().strip())
+        if baleonly:
+            self._set_banner(
+                "Sending code",
+                "We are requesting a code inside your Bale app. You must already be signed in to Bale on your phone.",
+                "info",
+            )
+        else:
+            self._set_banner(
+                "Sending code",
+                "We are requesting an SMS code from Bale. Keep this window open.",
+                "info",
+            )
+        worker = StartSmsWorker(
+            self.phone.text().strip(),
+            code_channel="baleonly" if baleonly else "default",
+        )
         worker.ok.connect(self._on_sms_sent)
         worker.failed.connect(self._on_sms_failed)
         self._sms_worker = worker
@@ -495,14 +519,38 @@ class LoginView(QWidget):
         self._auth_handle = self._sms_worker.auth_handle() if self._sms_worker else None
         self.code.setEnabled(True)
         self.code.setFocus()
-        self.send_btn.setText("Resend code")
+        self.send_btn.setText(
+            "Send Bale app code" if self.baleonly.isChecked() else "Resend code"
+        )
         self._set_stage("code")
-        self._set_banner("Code sent", "Enter the SMS code below, then continue to the pairing screen.", "ok")
+        if self.baleonly.isChecked():
+            self._set_banner(
+                "Code sent",
+                "Enter the code from your Bale app below, then continue to the pairing screen.",
+                "ok",
+            )
+        else:
+            self._set_banner(
+                "Code sent",
+                "Enter the SMS code below, then continue to the pairing screen.",
+                "ok",
+            )
         self._refresh_actions()
 
     def _on_sms_failed(self, err: str) -> None:
         self.send_btn.setEnabled(True)
-        self._set_banner("We could not send the SMS code", friendly_error_message(err, context="login"), "err")
+        if self.baleonly.isChecked():
+            self._set_banner(
+                "We could not send the Bale app code",
+                friendly_error_message(err, context="login"),
+                "err",
+            )
+        else:
+            self._set_banner(
+                "We could not send the SMS code",
+                friendly_error_message(err, context="login"),
+                "err",
+            )
         self._refresh_actions()
 
     def _on_verify_clicked(self) -> None:

@@ -295,8 +295,27 @@ class BaleAuthBrowser:
         except Exception:
             pass
 
-    def start_phone_auth(self, phone_number: int) -> str:
-        return self._loop.run_until_complete(self._async_start_phone_auth(phone_number))
+    def start_phone_auth(
+        self,
+        phone_number: int,
+        *,
+        send_code_type: int | None = None,
+    ) -> str:
+        from userbot_bale.bale.auth import BaleCodeChannelUnavailable
+        from userbot_bale.bale.protos import SEND_CODE_TYPE_BALEONLY
+
+        if send_code_type == SEND_CODE_TYPE_BALEONLY:
+            # The web login UI always issues StartPhoneAuth with DEFAULT/SMS
+            # first; there is no supported way to force BALEONLY without
+            # rewriting the protobuf body. Fail closed instead of silently
+            # sending an SMS.
+            raise BaleCodeChannelUnavailable(
+                "browser login cannot request the baleonly channel; use --method grpc",
+                requested=SEND_CODE_TYPE_BALEONLY,
+            )
+        return self._loop.run_until_complete(
+            self._async_start_phone_auth(phone_number)
+        )
 
     def validate_code(self, code: str, **_) -> "AuthSession":
         from userbot_bale.bale.auth import AuthSession

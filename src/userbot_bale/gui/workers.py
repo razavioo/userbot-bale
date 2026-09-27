@@ -16,33 +16,59 @@ log = logging.getLogger(__name__)
 
 
 class StartSmsWorker(QObject):
-    """Step 1 of phone login: POST StartPhoneAuth → SMS → transaction_hash."""
+    """Step 1 of phone login: POST StartPhoneAuth → OTP → transaction_hash.
+
+    ``code_channel='baleonly'`` requests in-app Bale delivery (forces the
+    direct gRPC backend; the browser UI always starts with SMS/DEFAULT)."""
 
     ok = Signal(str)           # transaction_hash
     failed = Signal(str)       # human-readable error
 
-    def __init__(self, phone: str) -> None:
+    def __init__(self, phone: str, *, code_channel: str = "default") -> None:
         super().__init__()
         self._phone = phone.lstrip("+").strip()
+        self._code_channel = (code_channel or "default").strip().lower()
 
     def run(self) -> None:
+        from userbot_bale.bale.auth import BaleCodeChannelUnavailable
         from userbot_bale.bale.grpc_web import GrpcWebError
 
         if not self._phone.isdigit():
             self.failed.emit("Phone must be digits (with or without +).")
             return
-        # Prefer browser-based auth (real Chrome TLS fingerprint → server
-        # sets JWT cookie). Fall back to direct httpx if Playwright is absent.
-        try:
-            from userbot_bale.bale.auth_browser import BaleAuthBrowser
-            self._auth = BaleAuthBrowser()
-            log.info("Using browser auth (Playwright)")
-        except ImportError:
+
+        send_code_type = None
+        if self._code_channel in {"baleonly", "bale"}:
+            from userbot_bale.bale.protos import SEND_CODE_TYPE_BALEONLY
+
+            send_code_type = SEND_CODE_TYPE_BALEONLY
             from userbot_bale.bale.auth import BaleAuth
+
             self._auth = BaleAuth()
-            log.info("Using direct gRPC-Web auth")
+            log.info("Using direct gRPC-Web auth (baleonly channel)")
+        else:
+            # Prefer browser-based auth (real Chrome TLS fingerprint → server
+            # sets JWT cookie). Fall back to direct httpx if Playwright is absent.
+            try:
+                from userbot_bale.bale.auth_browser import BaleAuthBrowser
+                self._auth = BaleAuthBrowser()
+                log.info("Using browser auth (Playwright)")
+            except ImportError:
+                from userbot_bale.bale.auth import BaleAuth
+                self._auth = BaleAuth()
+                log.info("Using direct gRPC-Web auth")
         try:
-            tx = self._auth.start_phone_auth(int(self._phone))
+            tx = self._auth.start_phone_auth(
+                int(self._phone),
+                send_code_type=send_code_type,
+            )
+        except BaleCodeChannelUnavailable as e:
+            self.failed.emit(
+                "Bale did not deliver the code through the Bale app. "
+                "Sign in to the Bale mobile app with this number first. "
+                f"({e})"
+            )
+            return
         except GrpcWebError as e:
             self.failed.emit(f"Bale rejected: {e.message or e}")
             return

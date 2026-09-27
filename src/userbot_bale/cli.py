@@ -2571,7 +2571,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_bale_login = auth_sub.add_parser(
         "bale-login",
-        help="recommended: real Bale phone/SMS login with optional local save",
+        help="recommended: real Bale phone/SMS login (or in-app Bale code) with optional local save",
     )
     auth_bale_login.add_argument("--phone", required=True, help="phone in E.164, with or without '+'")
     auth_bale_login.add_argument("--app-id", type=int, default=WEB_APP_ID)
@@ -2583,6 +2583,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "browser", "grpc"],
         default="auto",
         help="auth backend (default: auto; prefer browser like GUI)",
+    )
+    auth_bale_login.add_argument(
+        "--code-channel",
+        choices=["default", "baleonly"],
+        default="default",
+        help=(
+            "OTP delivery channel: 'baleonly' sends the code inside an "
+            "already-signed-in Bale app (no SMS, no bot); forces --method grpc"
+        ),
     )
     auth_bale_login.add_argument(
         "--headful",
@@ -3260,16 +3269,32 @@ def cmd_bale_auth(args: argparse.Namespace) -> int:
 
 
 def _run_bale_auth_login(args: argparse.Namespace) -> str:
-    """Run Bale phone/SMS auth flow and return a JWT.
+    """Run Bale phone auth flow and return a JWT.
 
     Modes:
       - browser: Playwright/web.bale.ai cookie flow (same path as GUI)
       - grpc: direct gRPC-Web flow
       - auto: prefer browser, fallback to grpc
+
+    ``--code-channel baleonly`` always uses the direct gRPC path so the
+    first StartPhoneAuth carries send_code_type=BALEONLY (the browser
+    UI would otherwise request DEFAULT/SMS first).
     """
     method = getattr(args, "method", "auto")
+    code_channel = getattr(args, "code_channel", "default") or "default"
     if method not in {"auto", "browser", "grpc"}:
         raise SystemExit(f"unknown auth method: {method}")
+    if code_channel not in {"default", "baleonly"}:
+        raise SystemExit(f"unknown code channel: {code_channel}")
+
+    if code_channel == "baleonly":
+        if method != "grpc":
+            print(
+                "[bale-auth] --code-channel baleonly requires the grpc backend; "
+                "overriding --method",
+                file=sys.stderr,
+            )
+        return _run_bale_auth_login_grpc(args)
 
     if method == "browser":
         return _run_bale_auth_login_browser(args)
@@ -3327,8 +3352,13 @@ def _run_bale_auth_login_browser(args: argparse.Namespace) -> str:
 
 def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
     """Direct gRPC-Web fallback used by CLI."""
-    from userbot_bale.bale.auth import BaleAuth, NeedsSignUpException
+    from userbot_bale.bale.auth import (
+        BaleAuth,
+        BaleCodeChannelUnavailable,
+        NeedsSignUpException,
+    )
     from userbot_bale.bale.grpc_web import GrpcWebError
+    from userbot_bale.bale.protos import SEND_CODE_TYPE_BALEONLY
 
     phone = str(args.phone).lstrip("+")
     if not phone.isdigit():
@@ -3336,6 +3366,11 @@ def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
     device_hash = (
         bytes.fromhex(args.device_hash_hex) if args.device_hash_hex else None
     )
+    code_channel = getattr(args, "code_channel", "default") or "default"
+    send_code_type = (
+        SEND_CODE_TYPE_BALEONLY if code_channel == "baleonly" else None
+    )
+    code_label = "Bale in-app code" if code_channel == "baleonly" else "SMS code"
 
     auth = BaleAuth(
         app_id=args.app_id,
@@ -3344,15 +3379,27 @@ def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
         device_hash=device_hash,
     )
     try:
-        tx = auth.start_phone_auth(int(phone))
+        tx = auth.start_phone_auth(int(phone), send_code_type=send_code_type)
+    except BaleCodeChannelUnavailable as e:
+        raise SystemExit(
+            "Bale did not deliver the code through the Bale app channel. "
+            "Sign in to the Bale mobile app with this number first, then retry. "
+            f"({e})"
+        )
     except GrpcWebError as e:
         raise SystemExit(f"StartPhoneAuth failed: {e}")
-    print(f"[bale-auth] SMS sent; transaction_hash={tx}", file=sys.stderr)
+    if code_channel == "baleonly":
+        print(
+            f"[bale-auth] code sent to your Bale app; transaction_hash={tx}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"[bale-auth] SMS sent; transaction_hash={tx}", file=sys.stderr)
 
     # Loop: some accounts get 1 wrong code; let them retry without
-    # re-sending SMS (since the transaction is still valid).
+    # re-sending (since the transaction is still valid).
     for attempt in range(1, 4):
-        code = input("SMS code: ").strip()
+        code = input(f"{code_label}: ").strip()
         try:
             session = auth.validate_code(code)
             break
@@ -3371,7 +3418,7 @@ def _run_bale_auth_login_grpc(args: argparse.Namespace) -> str:
         except GrpcWebError as e:
             if "EXPIRED" in e.message:
                 raise SystemExit(
-                    f"code expired (attempt {attempt}); rerun to send a fresh SMS"
+                    f"code expired (attempt {attempt}); rerun to send a fresh code"
                 )
             print(f"[bale-auth] {e.message}; retry {attempt}/3", file=sys.stderr)
     else:

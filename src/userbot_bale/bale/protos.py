@@ -743,6 +743,27 @@ AUTH_SERVICE = "bale.auth.v1.Auth"
 WEB_APP_ID = 4
 WEB_API_KEY = "C28D46DC4C3A7A26564BFCC48B929086A95C93C98E789A19847BEE8627DE4E7D"
 
+# AuthSendCodeType enum from the web bundle (AUTHSENDCODETYPE_*).
+# BALEONLY delivers the OTP inside an already-signed-in Bale app session
+# instead of SMS — no bot required.
+SEND_CODE_TYPE_UNKNOWN = 0
+SEND_CODE_TYPE_DEFAULT = 1
+SEND_CODE_TYPE_BALEONLY = 2
+SEND_CODE_TYPE_SMS = 3
+SEND_CODE_TYPE_CALL = 4
+SEND_CODE_TYPE_EMAIL = 5
+
+SEND_CODE_TYPE_NAMES = {
+    SEND_CODE_TYPE_UNKNOWN: "unknown",
+    SEND_CODE_TYPE_DEFAULT: "default",
+    SEND_CODE_TYPE_BALEONLY: "baleonly",
+    SEND_CODE_TYPE_SMS: "sms",
+    SEND_CODE_TYPE_CALL: "call",
+    SEND_CODE_TYPE_EMAIL: "email",
+}
+
+SEND_CODE_TYPE_BY_NAME = {name: value for value, name in SEND_CODE_TYPE_NAMES.items()}
+
 
 @dataclass(frozen=True)
 class RequestStartPhoneAuth:
@@ -903,6 +924,80 @@ def parse_transaction_hash(buf: bytes) -> str | None:
     if m is None:
         return None
     return m.group(1).decode("ascii")
+
+
+@dataclass(frozen=True)
+class ResponseStartPhoneAuth:
+    """ResponseStartPhoneAuth from the web bundle encoder/decoder.
+
+    Field numbers (verified against web.bale.ai index.js, 2026-09-23):
+        1  transaction_hash        (string)
+        2  is_registered           (bool)
+        3  activation_type         (int32)
+        4  is_imei_ok              (bool)
+        5  sent_code_type          (int32 → AuthSendCodeType)
+        6  code_expiration_date    (message; opaque)
+        7  next_send_code_type     (int32)
+        8  next_send_code_wait_time(message; opaque)
+        9  code_timeout            (message; opaque)
+        10 ex_info_address         (repeated message; opaque)
+        11 available_send_code_types (repeated int32, packed or not)
+    """
+
+    transaction_hash: str = ""
+    is_registered: bool = False
+    activation_type: int = 0
+    sent_code_type: int = 0
+    next_send_code_type: int = 0
+    available_send_code_types: tuple[int, ...] = ()
+
+
+def _unpack_varints(buf: bytes) -> list[int]:
+    values: list[int] = []
+    pos = 0
+    while pos < len(buf):
+        try:
+            value, pos = _dec_varint(buf, pos)
+        except (IndexError, ValueError):
+            break
+        values.append(value)
+    return values
+
+
+def parse_response_start_phone_auth(buf: bytes) -> ResponseStartPhoneAuth:
+    """Decode ResponseStartPhoneAuth. Tolerates malformed tails."""
+    transaction_hash = ""
+    is_registered = False
+    activation_type = 0
+    sent_code_type = 0
+    next_send_code_type = 0
+    available: list[int] = []
+    for fn, val, wt in _walk_len_delim(buf):
+        if fn == 1 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            try:
+                transaction_hash = bytes(val).decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+        elif fn == 2 and wt == 0:
+            is_registered = bool(val)
+        elif fn == 3 and wt == 0:
+            activation_type = int(val)
+        elif fn == 5 and wt == 0:
+            sent_code_type = int(val)
+        elif fn == 7 and wt == 0:
+            next_send_code_type = int(val)
+        elif fn == 11 and wt == 0:
+            available.append(int(val))
+        elif fn == 11 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            available.extend(_unpack_varints(bytes(val)))
+    return ResponseStartPhoneAuth(
+        transaction_hash=transaction_hash,
+        is_registered=is_registered,
+        activation_type=activation_type,
+        sent_code_type=sent_code_type,
+        next_send_code_type=next_send_code_type,
+        available_send_code_types=tuple(available),
+    )
 
 
 # ============================================================

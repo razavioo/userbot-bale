@@ -382,9 +382,34 @@ class AppControlBridge:
         phone = str(payload.get("phone", "")).strip()
         if not phone:
             return ActionResult(False, "Enter a phone number to sign in.", data=self.app_state())
+        code_channel = str(
+            payload.get("codeChannel", payload.get("code_channel", "")) or ""
+        ).strip().lower()
+        send_code_type: int | None = None
+        if code_channel in {"baleonly", "bale"}:
+            from userbot_bale.bale.protos import SEND_CODE_TYPE_BALEONLY
+
+            send_code_type = SEND_CODE_TYPE_BALEONLY
         session_id = str(int(time.time() * 1000))
         auth = self._make_auth(session_id=session_id)
-        tx = auth.start_phone_auth(int(phone.lstrip("+")))
+        from userbot_bale.bale.auth import BaleCodeChannelUnavailable
+
+        try:
+            if send_code_type is not None:
+                tx = auth.start_phone_auth(
+                    int(phone.lstrip("+")),
+                    send_code_type=send_code_type,
+                )
+            else:
+                tx = auth.start_phone_auth(int(phone.lstrip("+")))
+        except BaleCodeChannelUnavailable as exc:
+            return ActionResult(
+                False,
+                "The code could not be delivered through the Bale app. "
+                "Sign in to Bale on your phone with this number, then try again. "
+                f"({exc})",
+                data=self.app_state(),
+            )
         if self._auth_factory is not None:
             self._auth_sessions[str(tx)] = auth
         save_auth_flow(
@@ -392,10 +417,23 @@ class AppControlBridge:
                 "transaction_hash": str(tx),
                 "session_id": session_id,
                 "phone": phone,
+                "code_channel": code_channel or "default",
                 "created_at": time.time(),
             }
         )
-        return ActionResult(True, "SMS code sent.", data={"transactionHash": str(tx), "sessionID": session_id})
+        if send_code_type is not None:
+            message = "Code sent to your Bale app."
+        else:
+            message = "SMS code sent."
+        return ActionResult(
+            True,
+            message,
+            data={
+                "transactionHash": str(tx),
+                "sessionID": session_id,
+                "codeChannel": code_channel or "default",
+            },
+        )
 
     def verify_auth(self, payload: dict[str, Any]) -> ActionResult:
         flow = load_auth_flow()

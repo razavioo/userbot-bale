@@ -39,14 +39,19 @@ from userbot_bale.bale.grpc_web import (
 )
 from userbot_bale.bale.protos import (
     AUTH_SERVICE,
+    SEND_CODE_TYPE_BALEONLY,
+    SEND_CODE_TYPE_NAMES,
+    SEND_CODE_TYPE_UNKNOWN,
     RequestGetJWTToken,
     RequestSignUp,
     RequestStartPhoneAuth,
     RequestValidateCode,
+    ResponseStartPhoneAuth,
     WEB_API_KEY,
     WEB_APP_ID,
     parse_get_jwt_token_response,
     parse_response_auth,
+    parse_response_start_phone_auth,
     parse_transaction_hash,
     parse_user_id_from_auth_response,
 )
@@ -63,6 +68,41 @@ class NeedsSignUpException(Exception):
         )
         self.transaction_hash = transaction_hash
         self.detail = detail
+
+
+class BaleCodeChannelUnavailable(Exception):
+    """StartPhoneAuth was asked for a specific OTP channel (e.g. BALEONLY)
+    but the server did not deliver on that channel. Never falls back to
+    SMS — callers must surface this to the user."""
+
+    def __init__(
+        self,
+        detail: str = "",
+        *,
+        requested: int = SEND_CODE_TYPE_BALEONLY,
+        sent_code_type: int | None = None,
+        available: tuple[int, ...] = (),
+    ) -> None:
+        requested_name = SEND_CODE_TYPE_NAMES.get(requested, str(requested))
+        sent_name = (
+            SEND_CODE_TYPE_NAMES.get(sent_code_type, str(sent_code_type))
+            if sent_code_type is not None
+            else "unset"
+        )
+        available_names = tuple(
+            SEND_CODE_TYPE_NAMES.get(v, str(v)) for v in available
+        )
+        message = (
+            f"Requested OTP channel {requested_name!r} is unavailable "
+            f"(server sent={sent_name!r}, available={available_names!r})"
+        )
+        if detail:
+            message = f"{message}: {detail}"
+        super().__init__(message)
+        self.detail = detail
+        self.requested = requested
+        self.sent_code_type = sent_code_type
+        self.available = available
 
 log = logging.getLogger(__name__)
 
@@ -99,9 +139,29 @@ class BaleAuth:
         self._device_hash = device_hash or str(uuid.uuid4()).encode("ascii")
         self._client = GrpcWebClient(session_id=session_id)
         self._last_tx: str | None = None
+        self._last_start_meta: ResponseStartPhoneAuth | None = None
+        self._last_send_code_type: int = 0
 
-    def start_phone_auth(self, phone_number: int) -> str:
-        """Trigger SMS to `phone_number` (int, no '+', digits only).
+    @property
+    def last_start_meta(self) -> ResponseStartPhoneAuth | None:
+        """Structured StartPhoneAuth response from the most recent call."""
+        return self._last_start_meta
+
+    def start_phone_auth(
+        self,
+        phone_number: int,
+        *,
+        send_code_type: int | None = None,
+    ) -> str:
+        """Trigger an OTP for `phone_number` (int, no '+', digits only).
+
+        ``send_code_type`` maps to RequestStartPhoneAuth.tag 9
+        (AuthSendCodeType). Pass ``SEND_CODE_TYPE_BALEONLY`` to deliver
+        the code inside an already-signed-in Bale app instead of SMS.
+        When BALEONLY is requested and the server does not honor it,
+        raises :class:`BaleCodeChannelUnavailable` — there is no SMS
+        fallback.
+
         Returns the `transaction_hash` to hand to validate_code().
         Raises GrpcWebError on rejection (rate-limit, invalid phone)."""
         req = RequestStartPhoneAuth(
@@ -110,16 +170,54 @@ class BaleAuth:
             api_key=self._api_key,
             device_hash=self._device_hash,
             device_title=self._device_title,
+            send_code_type=int(send_code_type or 0),
         )
         resp = self._client.unary(AUTH_SERVICE, "StartPhoneAuth", req.encode())
-        tx = parse_transaction_hash(resp.body)
+        parsed = parse_response_start_phone_auth(resp.body)
+        tx = parsed.transaction_hash or parse_transaction_hash(resp.body)
+        self._last_start_meta = parsed
+        self._last_send_code_type = int(send_code_type or 0)
         if not tx:
             raise RuntimeError(
                 f"StartPhoneAuth returned no transaction_hash; body={resp.body[:80]!r}"
             )
+        if send_code_type == SEND_CODE_TYPE_BALEONLY:
+            self._require_baleonly(parsed)
         self._last_tx = tx
-        log.info("StartPhoneAuth OK; transaction_hash=%s", tx)
+        log.info(
+            "StartPhoneAuth OK; transaction_hash=%s sent_code_type=%s available=%s",
+            tx,
+            SEND_CODE_TYPE_NAMES.get(parsed.sent_code_type, parsed.sent_code_type),
+            [
+                SEND_CODE_TYPE_NAMES.get(v, v)
+                for v in parsed.available_send_code_types
+            ],
+        )
         return tx
+
+    @staticmethod
+    def _require_baleonly(meta: ResponseStartPhoneAuth) -> None:
+        """Fail closed when the server did not deliver via BALEONLY."""
+        available = meta.available_send_code_types
+        sent_ok = meta.sent_code_type == SEND_CODE_TYPE_BALEONLY
+        list_ok = not available or SEND_CODE_TYPE_BALEONLY in available
+        if sent_ok and list_ok:
+            return
+        if not sent_ok:
+            detail = "server did not select the baleonly channel"
+        else:
+            detail = "baleonly missing from available_send_code_types"
+        if meta.sent_code_type in {0, SEND_CODE_TYPE_UNKNOWN} and not available:
+            detail = (
+                "no send-code metadata in response; an active Bale app "
+                "session is usually required for baleonly delivery"
+            )
+        raise BaleCodeChannelUnavailable(
+            detail,
+            requested=SEND_CODE_TYPE_BALEONLY,
+            sent_code_type=meta.sent_code_type,
+            available=available,
+        )
 
     def validate_code(self, code: str, *, transaction_hash: str | None = None) -> AuthSession:
         """Submit the SMS code. Returns AuthSession with the JWT on
