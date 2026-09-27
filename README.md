@@ -162,24 +162,99 @@ userbot-bale userbot run --echo
 
 ### 5. Serving MCP for AI Clients
 
-Configure your MCP-compliant client (e.g. Claude Desktop configuration `claude_desktop_config.json`):
+`userbot-bale` exposes a Model Context Protocol (MCP) server over `stdio` conforming to the MCP 2024-11-05+ specification. This enables AI assistants (**Claude Desktop**, **opencode**, **Cursor**, **Windsurf**, or custom LLM agent systems) to interact safely with Bale Messenger.
+
+#### Prerequisites
+
+Before connecting your AI client:
+1. Complete authentication: `userbot-bale auth bale-login --phone +98912xxxxxxx --save`
+2. Add allowlisted peers: `userbot-bale userbot allow-peer 123456789` (Required: outbound and private reading tools fail closed for unapproved peers).
+
+#### Configuration Examples
+
+##### 🔹 opencode (`~/.config/opencode/opencode.jsonc` or project `.opencode/opencode.json`)
+
+```json
+{
+  "mcp": {
+    "bale": {
+      "type": "local",
+      "command": ["userbot-bale", "mcp", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+
+##### 🔹 Claude Desktop (`claude_desktop_config.json`)
 
 ```json
 {
   "mcpServers": {
-    "userbot-bale": {
-      "command": "/path/to/userbot-bale/.venv/bin/userbot-bale",
+    "bale": {
+      "command": "userbot-bale",
       "args": ["mcp", "serve"]
     }
   }
 }
 ```
 
-Or run manually in stdio mode:
+##### 🔹 Cursor (`.cursor/mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "bale": {
+      "command": "userbot-bale",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+##### 🔹 Direct / Zero-Install with `uvx`
+
+You can run directly from GitHub without cloning or manual virtualenvs:
+
+```json
+{
+  "mcpServers": {
+    "bale": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/razavioo/userbot-bale.git", "userbot-bale", "mcp", "serve"]
+    }
+  }
+}
+```
+
+Or test stdio connectivity from your terminal:
 
 ```bash
 userbot-bale mcp serve
 ```
+
+#### MCP Tools Reference
+
+All tools return standard single-object JSON payloads (`structuredContent` object shape):
+
+| Tool Name | Type | Description | Key Parameters | Output Shape |
+|:---|:---:|:---|:---|:---|
+| `account_status` | 🔍 Read-only | Returns active auth state, user ID, token expiration, and allowlisted peers. | None | `{state, user_id, expires_in, allowed_peers}` |
+| `list_dialogs` | 🔍 Read-only | Retrieves recent conversation dialogs for the authenticated user. | `limit` *(int, default: 20)* | `{dialogs, count}` |
+| `list_messages` | 🔍 Read-only | Fetches verified message history with an allowlisted peer. | `peer_id` *(int, required)*,<br>`limit` *(int, default: 20)* | `{messages, count}` |
+| `search_messages` | 🔍 Read-only | Searches local SQLite indexed message history across allowed peers. | `query` *(str, required)*,<br>`peer_id` *(int, optional)*,<br>`limit` *(int, default: 20)* | `{messages, count}` |
+| `search_messages_remote` | 🔍 Read-only | Performs server-side search via `bale.search.v1.Search/SearchMessages`. | `query` *(str, required)*,<br>`limit` *(int, default: 20)* | `{messages, count, query}` |
+| `list_shared_media` | 🔍 Read-only | Lists shared media files with an allowlisted peer. | `peer_id` *(int, required)*,<br>`limit` *(int, default: 20)*,<br>`content_type` *(str, optional)* | `{media, count, peer_id}` |
+| `search_contacts` | 🔍 Read-only | Searches contacts by name or username query. | `query` *(str, required)* | `{contacts, count}` |
+| `resolve_phone` | 🔍 Read-only | Resolves a phone number into its numeric Bale user ID. | `phone` *(str, required)* | `{phone, user_id, is_allowed}` |
+| `list_rpc_paths` | 🔍 Read-only | Inspects known Bale `/bale.*/*` gRPC service paths from offline APK inventory. | `service` *(str, optional)*,<br>`query` *(str, optional)*,<br>`limit` *(int, default: 100)* | `{paths, count, total, service, query}` |
+| `mark_read` | ✍️ Action | Acknowledges messages as read up to a specified millisecond timestamp. | `peer_id` *(int, required)*,<br>`date` *(int, timestamp)* | `{ok, peer_id, date}` |
+| `send_text` | 🛡️ Two-Phase | Sends a text message to an allowlisted peer with confirmation gating. | `peer_id` *(int, required)*,<br>`text` *(str, required)*,<br>`confirm_token` *(str, optional)* | Phase 1: `{needs_confirm, confirm_token, preview, expires_in}`<br>Phase 2: `{ok, peer_id, confirmed}` |
+
+##### 🛡️ Two-Phase Safe Confirmation for `send_text`
+To prevent runaway LLM loops or accidental message spam:
+1. **Phase 1 (Preview & Token):** The agent calls `send_text(peer_id=..., text=...)` without a token. No message is sent. The server generates a cryptographic single-use token (`confirm_token`, TTL: 5 minutes) and returns `{needs_confirm: true, confirm_token: "...", preview: {...}}`.
+2. **Phase 2 (Execution):** The agent or human reviews the preview and calls `send_text(peer_id=..., text=..., confirm_token="...")`. The server verifies that the token matches the recipient and text, delivers the message, and invalidates the token.
 
 ---
 
