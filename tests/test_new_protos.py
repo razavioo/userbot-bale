@@ -478,7 +478,12 @@ def test_search_messages_encodes_optional_peer():
     buf = RequestSearchMessages(query="x", peer=peer).encode()
     cond = _first_len_delim_field(buf, 1)
     assert cond is not None
-    peer_cond = _first_len_delim_field(cond, 3)
+    # SearchCondition wraps in searchAndCondition (tag 1) containing andQuery (repeated tag 1)
+    and_cond = _first_len_delim_field(cond, 1)
+    assert and_cond is not None
+    first_item = _first_len_delim_field(and_cond, 1)
+    assert first_item is not None
+    peer_cond = _first_len_delim_field(first_item, 3)
     assert peer_cond is not None
     inner = _first_len_delim_field(peer_cond, 1)
     assert inner == peer.encode()
@@ -592,3 +597,64 @@ def test_parse_load_media_response_single():
     assert hits[0].peer_id == 5
     assert hits[0].rid == 42
     assert hits[0].text == "photo"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SearchPeer, SearchMessageMore, UpdateMessage, DeleteMessage, Typing, Reaction
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_search_peer_encodes_query():
+    from userbot_bale.bale.protos import RequestSearchPeer
+
+    req = RequestSearchPeer(query="news", peer_type=2)
+    buf = req.encode()
+    assert buf is not None
+    assert b"news" in buf
+
+
+def test_search_message_more_encodes_cursor_and_query():
+    from userbot_bale.bale.protos import RequestSearchMessageMore
+
+    req = RequestSearchMessageMore(load_more_state=b"cursor_abc", query="hello")
+    buf = req.encode()
+    assert b"cursor_abc" in buf
+    assert b"hello" in buf
+
+
+def test_update_message_encodes_peer_rid_and_text():
+    from userbot_bale.bale.protos import OutPeer, RequestUpdateMessage
+
+    peer = OutPeer(user_id=123, type=1)
+    req = RequestUpdateMessage(peer=peer, rid=999, text="edited text")
+    buf = req.encode()
+    assert b"edited text" in buf
+
+
+def test_delete_message_encodes_rids():
+    from userbot_bale.bale.protos import OutPeer, RequestDeleteMessage
+
+    peer = OutPeer(user_id=123, type=1)
+    req = RequestDeleteMessage(peer=peer, rids=[100, 200], just_mine=True)
+    buf = req.encode()
+    assert len(buf) > 0
+
+
+def test_typing_and_stop_typing():
+    from userbot_bale.bale.protos import OutPeer, RequestTyping, RequestStopTyping
+
+    peer = OutPeer(user_id=123, type=1)
+    t_buf = RequestTyping(peer=peer).encode()
+    st_buf = RequestStopTyping(peer=peer).encode()
+    assert len(t_buf) > 0
+    assert len(st_buf) > 0
+
+
+def test_reaction_encode():
+    from userbot_bale.bale.protos import OutPeer, RequestMessageSetReaction, RequestMessageRemoveReaction
+
+    peer = OutPeer(user_id=123, type=1)
+    set_buf = RequestMessageSetReaction(peer=peer, rid=55, code="❤️", date=12345).encode()
+    rem_buf = RequestMessageRemoveReaction(peer=peer, rid=55, code="❤️", date=12345).encode()
+    assert "❤️".encode("utf-8") in set_buf
+    assert "❤️".encode("utf-8") in rem_buf
+

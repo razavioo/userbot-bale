@@ -364,6 +364,148 @@ class AsyncBaleClient:
             for hit in page.hits
         ]
 
+    async def search_peer(
+        self, query: str, *, peer_type: int | None = 2, limit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Search public channels, groups, and bots (bale.search.v1.Search/SearchPeer)."""
+        if not self._started:
+            return []
+        try:
+            results = await asyncio.to_thread(self._api.search_peer, query, peer_type=peer_type, limit=limit)
+        except Exception:
+            return []
+        return [
+            {
+                "peer_id": r.peer_id,
+                "peer_type": r.peer_type,
+                "title": r.title,
+                "description": r.description,
+                "members_count": r.members_count,
+                "is_public": r.is_public,
+                "is_joined": r.is_joined,
+            }
+            for r in results
+        ]
+
+    async def edit_text(
+        self,
+        peer_id: int,
+        rid: int,
+        text: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Edit previously sent message text."""
+        if self._enforce_allowlist:
+            if not self._store.is_peer_allowed(peer_id):
+                raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        text = text.strip()
+        if not text:
+            raise ValueError("message text cannot be empty")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        await asyncio.to_thread(self._api.edit_message, peer_id, rid, text, peer_type=resolved_peer_type)
+
+    async def delete_message(
+        self,
+        peer_id: int,
+        rid: int | list[int],
+        *,
+        peer_type: int | None = None,
+        just_mine: bool = False,
+    ) -> None:
+        """Delete message(s) from a dialog."""
+        if self._enforce_allowlist:
+            if not self._store.is_peer_allowed(peer_id):
+                raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        await asyncio.to_thread(self._api.delete_message, peer_id, rid, peer_type=resolved_peer_type, just_mine=just_mine)
+
+    async def send_typing(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Indicate typing status to a peer."""
+        if self._enforce_allowlist and not self._store.is_peer_allowed(peer_id):
+            return
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        try:
+            await asyncio.to_thread(self._api.send_typing, peer_id, peer_type=resolved_peer_type)
+        except Exception:
+            pass
+
+    async def stop_typing(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Stop typing status indicator."""
+        if self._enforce_allowlist and not self._store.is_peer_allowed(peer_id):
+            return
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        try:
+            await asyncio.to_thread(self._api.stop_typing, peer_id, peer_type=resolved_peer_type)
+        except Exception:
+            pass
+
+    async def set_reaction(
+        self,
+        peer_id: int,
+        rid: int,
+        code: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Add emoji reaction to a message."""
+        if self._enforce_allowlist and not self._store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        await asyncio.to_thread(self._api.set_reaction, peer_id, rid, code, peer_type=resolved_peer_type)
+
+    async def remove_reaction(
+        self,
+        peer_id: int,
+        rid: int,
+        code: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Remove emoji reaction from a message."""
+        if self._enforce_allowlist and not self._store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        await asyncio.to_thread(self._api.remove_reaction, peer_id, rid, code, peer_type=resolved_peer_type)
+
+    async def pin_message(
+        self,
+        peer_id: int,
+        rid: int,
+        *,
+        peer_type: int | None = None,
+        just_mine: bool = False,
+    ) -> None:
+        """Pin a message."""
+        if self._enforce_allowlist and not self._store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        await asyncio.to_thread(self._api.pin_message, peer_id, rid, peer_type=resolved_peer_type, just_mine=just_mine)
+
+    async def unpin_messages(
+        self,
+        peer_id: int,
+        rid: int | list[int],
+        *,
+        peer_type: int | None = None,
+        unpin_all: bool = False,
+    ) -> None:
+        """Unpin message(s)."""
+        if self._enforce_allowlist and not self._store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        await asyncio.to_thread(self._api.unpin_messages, peer_id, rid, peer_type=resolved_peer_type, unpin_all=unpin_all)
+
     async def list_shared_media(
         self, peer_id: int, *, limit: int = 20, content_type: int = 0,
     ) -> list[dict[str, object]]:

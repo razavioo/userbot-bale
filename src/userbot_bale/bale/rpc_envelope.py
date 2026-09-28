@@ -81,11 +81,11 @@ def _dec_tag(buf: bytes, pos: int) -> tuple[int, int, int]:
 DEFAULT_SESSION_ID = str(int(time.time() * 1_000))
 
 DEFAULT_METADATA: Dict[str, str] = {
-    "app_version": "151668",
+    "app_version": "173855",
     "browser_type": "1",
     "browser_version": "147.0.0.0",
     "os_type": "4",
-    "mt_app_version": "151668",
+    "mt_app_version": "173855",
     "mt_browser_type": "1",
     "mt_browser_version": "147.0.0.0",
     "mt_os_type": "4",

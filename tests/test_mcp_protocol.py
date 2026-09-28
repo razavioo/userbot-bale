@@ -34,12 +34,18 @@ async def test_mcp_stdio_handshake_lists_and_calls_tools(tmp_path, monkeypatch) 
                 "search_messages",
                 "search_messages_remote",
                 "search_contacts",
+                "search_peer",
                 "list_shared_media",
                 "resolve_phone",
                 "list_dialogs",
                 "list_rpc_paths",
                 "send_text",
                 "mark_read",
+                "edit_text",
+                "delete_message",
+                "send_typing",
+                "set_reaction",
+                "pin_message",
             }
             assert tools_by_name["list_messages"].annotations.readOnlyHint is True
             assert tools_by_name["send_text"].annotations.readOnlyHint is False

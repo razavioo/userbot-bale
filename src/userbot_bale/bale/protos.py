@@ -1406,11 +1406,32 @@ def find_inbound_messages(buf: bytes, *, max_depth: int = 6) -> list[InboundMess
 
 
 # ============================================================
-# Service: bale.search.v1.Search  (SearchMessages)
+# Service: bale.search.v1.Search  (SearchMessages, SearchPeer, SearchMessageMore)
 # ============================================================
 
 SEARCH_SERVICE = "bale.search.v1.Search"
 SEARCH_MESSAGES_METHOD = "SearchMessages"
+SEARCH_PEER_METHOD = "SearchPeer"
+SEARCH_MESSAGE_MORE_METHOD = "SearchMessageMore"
+
+SEARCH_PEER_TYPE_GROUPS = 0
+SEARCH_PEER_TYPE_CONTACTS = 1
+SEARCH_PEER_TYPE_PUBLIC = 2
+
+# Messaging & Presence & Abacus methods
+UPDATE_MESSAGE_METHOD = "UpdateMessage"
+DELETE_MESSAGE_METHOD = "DeleteMessage"
+PIN_MESSAGE_METHOD = "PinMessage"
+UNPIN_MESSAGES_METHOD = "UnPinMessages"
+MESSAGE_RECEIVED_METHOD = "MessageReceived"
+
+PRESENCE_SERVICE = "bale.presence.v1.Presence"
+TYPING_METHOD = "Typing"
+STOP_TYPING_METHOD = "StopTyping"
+
+ABACUS_SERVICE = "bale.abacus.v1.Abacus"
+MESSAGE_SET_REACTION_METHOD = "MessageSetReaction"
+MESSAGE_REMOVE_REACTION_METHOD = "MessageRemoveReaction"
 
 # APK: UpdateOptimization_STRIP_ENTITIES (2). The Android client also
 # sends STRIP_COUNTERS / COMPACT_USERS on some paths; 2 alone is enough
@@ -1460,12 +1481,15 @@ class RequestSearchMessages:
     optimizations: tuple[int, ...] = SEARCH_OPTIMIZATIONS
 
     def encode(self) -> bytes:
-        cond = bytearray()
+        piece = _enc_len_delim(1, self.query.encode("utf-8"))
+        cond_piece = _enc_len_delim(6, bytes(piece))
         if self.peer is not None:
             peer_cond = _enc_len_delim(1, self.peer.encode())
-            cond += _enc_len_delim(3, bytes(peer_cond))
-        piece = _enc_len_delim(1, self.query.encode("utf-8"))
-        cond += _enc_len_delim(6, bytes(piece))
+            cond_peer = _enc_len_delim(3, bytes(peer_cond))
+            and_query = _enc_len_delim(1, cond_peer) + _enc_len_delim(1, cond_piece)
+            cond = _enc_len_delim(1, and_query)
+        else:
+            cond = cond_piece
         out = bytearray()
         out += _enc_len_delim(1, bytes(cond))
         if self.optimizations:
@@ -1635,3 +1659,302 @@ def parse_load_media_response(buf: bytes) -> list[SharedMediaHit]:
             if hit is not None:
                 out.append(hit)
     return out
+
+
+# ============================================================
+# SearchPeer & SearchMessageMore
+# ============================================================
+
+@dataclass(frozen=True)
+class RequestSearchMessageMore:
+    """bale.search.v1.Search/SearchMessageMore
+
+    Wire (from modulesBuilder.js ss):
+        field 1 (len-delim) = load_more_state (BytesValue { field 1: bytes })
+        field 2 (len-delim) = SearchCondition
+        field 3 (packed varint) = optimizations
+    """
+    load_more_state: bytes
+    query: str
+    peer: OutPeer | None = None
+    optimizations: tuple[int, ...] = SEARCH_OPTIMIZATIONS
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        lm_val = _enc_len_delim(1, self.load_more_state)
+        out += _enc_len_delim(1, bytes(lm_val))
+
+        cond = bytearray()
+        if self.peer is not None:
+            peer_cond = _enc_len_delim(1, self.peer.encode())
+            cond += _enc_len_delim(3, bytes(peer_cond))
+        piece = _enc_len_delim(1, self.query.encode("utf-8"))
+        cond += _enc_len_delim(6, bytes(piece))
+        out += _enc_len_delim(2, bytes(cond))
+
+        if self.optimizations:
+            packed = b"".join(_enc_varint(v) for v in self.optimizations)
+            out += _enc_len_delim(3, packed)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestSearchPeer:
+    """bale.search.v1.Search/SearchPeer
+
+    Wire (from modulesBuilder.js se):
+        field 1 (repeated SearchCondition) = query
+        field 2 (packed varint) = optimizations
+    """
+    query: str
+    peer_type: int | None = SEARCH_PEER_TYPE_PUBLIC
+    optimizations: tuple[int, ...] = ()
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        if self.peer_type is not None:
+            cond_ptype = _enc_len_delim(5, _enc_tag(1, 0) + _enc_varint(self.peer_type))
+            out += _enc_len_delim(1, bytes(cond_ptype))
+        piece = _enc_len_delim(1, self.query.encode("utf-8"))
+        cond_piece = _enc_len_delim(6, bytes(piece))
+        out += _enc_len_delim(1, bytes(cond_piece))
+        if self.optimizations:
+            packed = b"".join(_enc_varint(v) for v in self.optimizations)
+            out += _enc_len_delim(2, packed)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class PeerSearchResult:
+    peer_type: int
+    peer_id: int
+    access_hash: int
+    title: str
+    description: str = ""
+    members_count: int = 0
+    is_public: bool = True
+    is_joined: bool = False
+
+
+def parse_search_peer_response(buf: bytes) -> list[PeerSearchResult]:
+    """Parse ResponseSearchPeer (modulesBuilder.js st):
+    field 1: searchResults (repeated I$)
+    """
+    results: list[PeerSearchResult] = []
+    for fn, val, wt in _walk_len_delim(buf):
+        if fn == 1 and wt == 2 and isinstance(val, (bytes, bytearray)):
+            peer_type = peer_id = access_hash = 0
+            title = ""
+            desc = ""
+            members = 0
+            is_pub = True
+            is_j = False
+            for ifn, ival, iwt in _walk_len_delim(val):
+                if ifn == 1 and iwt == 2:
+                    for pfn, pval, pwt in _walk_len_delim(ival):
+                        if pfn == 1 and pwt == 0:
+                            peer_type = pval
+                        elif pfn == 2 and pwt == 0:
+                            peer_id = pval
+                        elif pfn == 3 and pwt == 0:
+                            access_hash = pval
+                elif ifn == 2 and iwt == 2 and isinstance(ival, (bytes, bytearray)):
+                    title = ival.decode("utf-8", errors="replace")
+                elif ifn == 3 and iwt == 2 and isinstance(ival, (bytes, bytearray)):
+                    for sfn, sval, swt in _walk_len_delim(ival):
+                        if sfn == 1 and swt == 2:
+                            desc = sval.decode("utf-8", errors="replace")
+                elif ifn == 4 and iwt == 2 and isinstance(ival, (bytes, bytearray)):
+                    for mfn, mval, mwt in _walk_len_delim(ival):
+                        if mfn == 1 and mwt == 0:
+                            members = mval
+                elif ifn == 7 and iwt == 2 and isinstance(ival, (bytes, bytearray)):
+                    for bfn, bval, bwt in _walk_len_delim(ival):
+                        if bfn == 1 and bwt == 0:
+                            is_pub = bool(bval)
+                elif ifn == 8 and iwt == 2 and isinstance(ival, (bytes, bytearray)):
+                    for jfn, jval, jwt in _walk_len_delim(ival):
+                        if jfn == 1 and jwt == 0:
+                            is_j = bool(jval)
+            if peer_id or title:
+                results.append(PeerSearchResult(
+                    peer_type=peer_type or 2,
+                    peer_id=peer_id,
+                    access_hash=access_hash,
+                    title=title,
+                    description=desc,
+                    members_count=members,
+                    is_public=is_pub,
+                    is_joined=is_j,
+                ))
+    return results
+
+
+# ============================================================
+# Messaging Actions: Update, Delete, Reaction, Typing, Pin
+# ============================================================
+
+@dataclass(frozen=True)
+class RequestUpdateMessage:
+    """bale.messaging.v2.Messaging/UpdateMessage:
+        field 1 (len-delim) = peer (OutPeer)
+        field 2 (varint)    = rid (int64)
+        field 3 (len-delim) = updatedMessage (Message containing text_message at 15)
+    """
+    peer: OutPeer
+    rid: int
+    text: str
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(2, 0) + _enc_varint(self.rid)
+        out += _enc_len_delim(3, _encode_message_with_text(self.text))
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestDeleteMessage:
+    """bale.messaging.v2.Messaging/DeleteMessage:
+        field 1 (len-delim)        = peer (OutPeer)
+        field 2 (repeated varint)  = rids (int64)
+        field 4 (len-delim)        = justMine (BooleanValue)
+    """
+    peer: OutPeer
+    rids: list[int]
+    just_mine: bool = False
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        for rid in self.rids:
+            out += _enc_tag(2, 0) + _enc_varint(rid)
+        if self.just_mine:
+            out += _enc_len_delim(4, _enc_bool_value(True))
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestTyping:
+    """bale.presence.v1.Presence/Typing:
+        field 1 (len-delim) = peer (OutPeer)
+        field 3 (varint)    = typingType (0 = text)
+    """
+    peer: OutPeer
+    typing_type: int = 0
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(3, 0) + _enc_varint(self.typing_type)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestStopTyping:
+    """bale.presence.v1.Presence/StopTyping:
+        field 1 (len-delim) = peer (OutPeer)
+        field 2 (varint)    = typingType (0 = text)
+    """
+    peer: OutPeer
+    typing_type: int = 0
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(2, 0) + _enc_varint(self.typing_type)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestMessageSetReaction:
+    """bale.abacus.v1.Abacus/MessageSetReaction:
+        field 1 (len-delim) = peer (OutPeer)
+        field 2 (varint)    = rid (int64)
+        field 3 (string)    = code (emoji text like '❤️')
+        field 4 (varint)    = date (int64 ms timestamp)
+    """
+    peer: OutPeer
+    rid: int
+    code: str
+    date: int = 0
+
+    def encode(self) -> bytes:
+        import time as _time
+        ts = self.date or int(_time.time() * 1000)
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(2, 0) + _enc_varint(self.rid)
+        out += _enc_len_delim(3, self.code.encode("utf-8"))
+        out += _enc_tag(4, 0) + _enc_varint(ts)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestMessageRemoveReaction:
+    """bale.abacus.v1.Abacus/MessageRemoveReaction:
+        field 1 (len-delim) = peer (OutPeer)
+        field 2 (varint)    = rid (int64)
+        field 3 (string)    = code
+        field 4 (varint)    = date
+    """
+    peer: OutPeer
+    rid: int
+    code: str
+    date: int = 0
+
+    def encode(self) -> bytes:
+        import time as _time
+        ts = self.date or int(_time.time() * 1000)
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        out += _enc_tag(2, 0) + _enc_varint(self.rid)
+        out += _enc_len_delim(3, self.code.encode("utf-8"))
+        out += _enc_tag(4, 0) + _enc_varint(ts)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestPinMessage:
+    """bale.messaging.v2.Messaging/PinMessage:
+        field 1 (len-delim) = peer (ExPeer)
+        field 2 (len-delim) = messageId (field 1: rid, field 2: date)
+        field 3 (varint)    = justMine (bool)
+    """
+    peer: ExPeer
+    rid: int
+    date: int = 0
+    just_mine: bool = False
+
+    def encode(self) -> bytes:
+        import time as _time
+        ts = self.date or int(_time.time() * 1000)
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        msg_id = _enc_tag(1, 0) + _enc_varint(self.rid) + _enc_tag(2, 0) + _enc_varint(ts)
+        out += _enc_len_delim(2, bytes(msg_id))
+        if self.just_mine:
+            out += _enc_tag(3, 0) + _enc_varint(1)
+        return bytes(out)
+
+
+@dataclass(frozen=True)
+class RequestUnPinMessages:
+    """bale.messaging.v2.Messaging/UnPinMessages:
+        field 1 (len-delim) = peer (ExPeer)
+        field 2 (len-delim) = messageIds (repeated messageId)
+        field 3 (varint)    = all (bool)
+    """
+    peer: ExPeer
+    rids: list[int]
+    unpin_all: bool = False
+
+    def encode(self) -> bytes:
+        out = bytearray()
+        out += _enc_len_delim(1, self.peer.encode())
+        for rid in self.rids:
+            msg_id = _enc_tag(1, 0) + _enc_varint(rid)
+            out += _enc_len_delim(2, bytes(msg_id))
+        if self.unpin_all:
+            out += _enc_tag(3, 0) + _enc_varint(1)
+        return bytes(out)

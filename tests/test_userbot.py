@@ -85,7 +85,7 @@ def test_user_client_ignores_own_get_diff_echo() -> None:
     client._on_inbound(InboundMessage(peer_user_id=77, sender_uid=77, rid=1, text="own"))
     client._on_inbound(InboundMessage(peer_user_id=12, sender_uid=12, rid=2, text="external"))
 
-    assert store.recorded == ["in:12:2"]
+    assert store.recorded == ["in:1:12:2"]
     assert [event.text for event in events] == ["external"]
 
 
@@ -162,7 +162,7 @@ def test_user_client_persists_inbound_and_rejects_unapproved_send(tmp_path) -> N
     api.callback(InboundMessage(peer_user_id=11, sender_uid=11, rid=9, text="hello"))
     api.callback(InboundMessage(peer_user_id=11, sender_uid=11, rid=9, text="hello"))
     assert [event.text for event in events] == ["hello"]
-    assert store.list_messages(11)[0]["message_id"] == "in:11:9"
+    assert store.list_messages(11)[0]["message_id"] == "in:1:11:9"
     with pytest.raises(PermissionError):
         client.send_text(11, "no")
     store.allow_peer(11)

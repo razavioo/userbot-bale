@@ -225,6 +225,154 @@ class BaleUserClient:
             for hit in page.hits
         ]
 
+    def search_peer(
+        self, query: str, *, peer_type: int | None = 2, limit: int = 20,
+    ) -> list[dict[str, object]]:
+        """Search public channels, groups, and bots (bale.search.v1.Search/SearchPeer)."""
+        if not self._started:
+            return []
+        try:
+            results = self._api.search_peer(query, peer_type=peer_type, limit=limit)
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            {
+                "peer_id": r.peer_id,
+                "peer_type": r.peer_type,
+                "title": r.title,
+                "description": r.description,
+                "members_count": r.members_count,
+                "is_public": r.is_public,
+                "is_joined": r.is_joined,
+            }
+            for r in results
+        ]
+
+    def edit_text(
+        self,
+        peer_id: int,
+        rid: int,
+        text: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Edit a previously sent message."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            self.store.audit("edit_rejected", peer_id=peer_id, detail="peer_not_allowlisted")
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        text = text.strip()
+        if not text:
+            raise ValueError("message text cannot be empty")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        self._api.edit_message(peer_id, rid, text, peer_type=resolved_peer_type)
+        self.store.audit("outbound_edited", peer_id=peer_id, detail=f"rid={rid}")
+
+    def delete_message(
+        self,
+        peer_id: int,
+        rid: int | list[int],
+        *,
+        peer_type: int | None = None,
+        just_mine: bool = False,
+    ) -> None:
+        """Delete message(s) from a dialog."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            self.store.audit("delete_rejected", peer_id=peer_id, detail="peer_not_allowlisted")
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        self._api.delete_message(peer_id, rid, peer_type=resolved_peer_type, just_mine=just_mine)
+        self.store.audit("outbound_deleted", peer_id=peer_id, detail=f"rids={rid}")
+
+    def send_typing(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Indicate typing status to a peer."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            return
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        try:
+            self._api.send_typing(peer_id, peer_type=resolved_peer_type)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def stop_typing(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Stop typing status."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            return
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        try:
+            self._api.stop_typing(peer_id, peer_type=resolved_peer_type)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_reaction(
+        self,
+        peer_id: int,
+        rid: int,
+        code: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Add emoji reaction to a message."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        self._api.set_reaction(peer_id, rid, code, peer_type=resolved_peer_type)
+        self.store.audit("reaction_set", peer_id=peer_id, detail=f"rid={rid},code={code}")
+
+    def remove_reaction(
+        self,
+        peer_id: int,
+        rid: int,
+        code: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """Remove emoji reaction from a message."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        self._api.remove_reaction(peer_id, rid, code, peer_type=resolved_peer_type)
+        self.store.audit("reaction_removed", peer_id=peer_id, detail=f"rid={rid},code={code}")
+
+    def pin_message(
+        self,
+        peer_id: int,
+        rid: int,
+        *,
+        peer_type: int | None = None,
+        just_mine: bool = False,
+    ) -> None:
+        """Pin a message."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        self._api.pin_message(peer_id, rid, peer_type=resolved_peer_type, just_mine=just_mine)
+        self.store.audit("message_pinned", peer_id=peer_id, detail=f"rid={rid}")
+
+    def unpin_messages(
+        self,
+        peer_id: int,
+        rid: int | list[int],
+        *,
+        peer_type: int | None = None,
+        unpin_all: bool = False,
+    ) -> None:
+        """Unpin message(s)."""
+        if self.enforce_allowlist and not self.store.is_peer_allowed(peer_id):
+            raise PermissionError(f"peer {peer_id} is not in the outbound allowlist")
+        resolved_peer_type = peer_type or self._dialog_peer_types.get(peer_id, 1)
+        self._api.unpin_messages(peer_id, rid, peer_type=resolved_peer_type, unpin_all=unpin_all)
+        self.store.audit("messages_unpinned", peer_id=peer_id, detail=f"rids={rid}")
+
     def list_shared_media(
         self, peer_id: int, *, limit: int = 20, content_type: int = 0,
     ) -> list[dict[str, object]]:

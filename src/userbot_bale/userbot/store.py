@@ -16,7 +16,12 @@ class UserbotStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (data_dir() / "userbot.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._conn = sqlite3.connect(str(self.path), timeout=10.0, check_same_thread=False)
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(

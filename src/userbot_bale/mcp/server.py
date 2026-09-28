@@ -67,14 +67,57 @@ class BaleMcpService:
         self._validate_limit(limit)
         self._ensure_started()
         results = self._client.search_messages_remote(query, peer_id=peer_id, limit=limit)
-        allowed_peers = set(self._store.allowed_peers())
-        filtered = [
-            msg for msg in results
-            if peer_id is not None or msg.get("peer_id") in allowed_peers
-        ]
         if peer_id is not None:
-            filtered = [msg for msg in filtered if msg.get("peer_id") == peer_id]
-        return {"messages": filtered, "count": len(filtered), "query": query}
+            results = [msg for msg in results if msg.get("peer_id") == peer_id]
+        return {"messages": results, "count": len(results), "query": query}
+
+    def search_peer(
+        self, query: str, limit: int = 20,
+    ) -> dict[str, object]:
+        self._validate_limit(limit)
+        self._ensure_started()
+        peers = self._client.search_peer(query, limit=limit)
+        return {"peers": peers, "count": len(peers), "query": query}
+
+    def edit_text(
+        self, peer_id: int, rid: int, text: str,
+    ) -> dict[str, object]:
+        self._require_allowed_peer(peer_id)
+        self._ensure_started()
+        self._client.edit_text(peer_id, rid, text)
+        return {"ok": True, "peer_id": peer_id, "rid": rid, "text": text}
+
+    def delete_message(
+        self, peer_id: int, rid: int,
+    ) -> dict[str, object]:
+        self._require_allowed_peer(peer_id)
+        self._ensure_started()
+        self._client.delete_message(peer_id, rid)
+        return {"ok": True, "peer_id": peer_id, "rid": rid}
+
+    def send_typing(
+        self, peer_id: int,
+    ) -> dict[str, object]:
+        self._require_allowed_peer(peer_id)
+        self._ensure_started()
+        self._client.send_typing(peer_id)
+        return {"ok": True, "peer_id": peer_id}
+
+    def set_reaction(
+        self, peer_id: int, rid: int, code: str,
+    ) -> dict[str, object]:
+        self._require_allowed_peer(peer_id)
+        self._ensure_started()
+        self._client.set_reaction(peer_id, rid, code)
+        return {"ok": True, "peer_id": peer_id, "rid": rid, "code": code}
+
+    def pin_message(
+        self, peer_id: int, rid: int,
+    ) -> dict[str, object]:
+        self._require_allowed_peer(peer_id)
+        self._ensure_started()
+        self._client.pin_message(peer_id, rid)
+        return {"ok": True, "peer_id": peer_id, "rid": rid}
 
     def list_shared_media(
         self, peer_id: int, limit: int = 20, content_type: int = 0,
@@ -233,6 +276,11 @@ def create_server(service: BaleMcpService | None = None):
         return service.search_messages_remote(query, peer_id=peer_id, limit=limit)
 
     @server.tool(annotations=read_only)
+    def search_peer(query: str, limit: int = 20) -> dict[str, object]:
+        """Search public Bale channels, groups, and bots by keyword."""
+        return service.search_peer(query, limit=limit)
+
+    @server.tool(annotations=read_only)
     def list_shared_media(
         peer_id: int, limit: int = 20, content_type: int = 0,
     ) -> dict[str, object]:
@@ -281,6 +329,56 @@ def create_server(service: BaleMcpService | None = None):
     def mark_read(peer_id: int, date: int) -> dict[str, object]:
         """Mark incoming messages as read up to a specific timestamp date for an approved peer."""
         return service.mark_read(peer_id, date)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+    def edit_text(peer_id: int, rid: int, text: str) -> dict[str, object]:
+        """Edit a previously sent message in an allowlisted chat."""
+        return service.edit_text(peer_id, rid, text)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+    def delete_message(peer_id: int, rid: int) -> dict[str, object]:
+        """Delete a message by rid in an allowlisted chat."""
+        return service.delete_message(peer_id, rid)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+    def send_typing(peer_id: int) -> dict[str, object]:
+        """Send typing status indicator to an allowlisted chat."""
+        return service.send_typing(peer_id)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+    def set_reaction(peer_id: int, rid: int, code: str) -> dict[str, object]:
+        """Set emoji reaction on a message in an allowlisted chat."""
+        return service.set_reaction(peer_id, rid, code)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+    def pin_message(peer_id: int, rid: int) -> dict[str, object]:
+        """Pin a message by rid in an allowlisted chat."""
+        return service.pin_message(peer_id, rid)
 
     return server
 

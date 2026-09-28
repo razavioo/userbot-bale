@@ -39,22 +39,26 @@ from typing import Callable, List, Optional
 
 from userbot_bale.bale.endpoints import Endpoint, fetch_endpoints
 from userbot_bale.bale.protos import (
-    ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials,
-    DialogInfo, ExPeer, HistoryMessage, InboundMessage,
+    ABACUS_SERVICE, ACCEPT_CALL_METHOD, AUTH_SERVICE, CallCredentials,
+    DELETE_MESSAGE_METHOD, DialogInfo, ExPeer, HistoryMessage, InboundMessage,
     IncomingCallEvent,
     GET_WSS_URL_METHOD, JOIN_GROUP_CALL_METHOD, LEAVE_GROUP_CALL_METHOD,
     LOAD_DIALOGS_METHOD, LOAD_GROUPED_DIALOGS_METHOD, LOAD_HISTORY_METHOD, LOAD_MEDIA_METHOD,
-    MESSAGE_READ_METHOD,
+    MESSAGE_READ_METHOD, MESSAGE_REMOVE_REACTION_METHOD, MESSAGE_SET_REACTION_METHOD,
     NEWEST_HISTORY_DATE,
-    MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PhoneToImport,
+    MEET_SERVICE, MESSAGING_SERVICE, OutPeer, PIN_MESSAGE_METHOD, PeerSearchResult,
+    PhoneToImport, PRESENCE_SERVICE,
     RECEIVE_CALL_METHOD,
-    RequestGetWssURL, RequestImportContacts, RequestJoinGroupCall,
+    RequestDeleteMessage, RequestGetWssURL, RequestImportContacts, RequestJoinGroupCall,
     RequestLeaveGroupCall, RequestLoadDialogs, RequestLoadGroupedDialogs, RequestLoadHistory,
-    RequestLoadMedia, RequestMessageRead, RequestReceiveCall,
-    RequestSearchContacts, RequestSearchMessages, RequestSendMessage,
-    RequestStartLiveKitCall, RequestStartPhoneAuth, RequestValidateCode,
-    SEARCH_MESSAGES_METHOD, SEARCH_SERVICE, SHARED_MEDIA_SERVICE,
-    SearchMessagesPage, SharedMediaHit,
+    RequestLoadMedia, RequestMessageRead, RequestMessageRemoveReaction, RequestMessageSetReaction,
+    RequestPinMessage, RequestReceiveCall, RequestSearchContacts, RequestSearchMessageMore,
+    RequestSearchMessages, RequestSearchPeer, RequestSendMessage, RequestStartLiveKitCall,
+    RequestStartPhoneAuth, RequestStopTyping, RequestTyping, RequestUnPinMessages,
+    RequestUpdateMessage, RequestValidateCode,
+    SEARCH_MESSAGE_MORE_METHOD, SEARCH_MESSAGES_METHOD, SEARCH_PEER_METHOD, SEARCH_SERVICE,
+    SHARED_MEDIA_SERVICE, STOP_TYPING_METHOD, SearchMessagesPage, SharedMediaHit,
+    TYPING_METHOD, UNPIN_MESSAGES_METHOD, UPDATE_MESSAGE_METHOD,
     ResolvedContact, ResponseAuth, encode_accept_call,
     find_inbound_messages, parse_call_credentials,
     parse_get_wss_url_response,
@@ -64,6 +68,7 @@ from userbot_bale.bale.protos import (
     parse_load_history_response, parse_load_media_response,
     parse_response_auth,
     parse_search_contacts_response, parse_search_messages_response,
+    parse_search_peer_response,
     parse_transaction_hash,
     parse_update_call_received,
 )
@@ -681,6 +686,188 @@ class BaleApiClient:
             hits=hits, result_count=page.result_count,
             load_more_state=page.load_more_state,
         )
+
+    def search_messages_more_rpc(
+        self,
+        load_more_state: bytes,
+        query: str,
+        *,
+        peer_id: int | None = None,
+        peer_type: int | None = None,
+        limit: int = 20,
+    ) -> SearchMessagesPage:
+        """bale.search.v1.Search/SearchMessageMore — next page of search results."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        peer: OutPeer | None = None
+        if peer_id is not None:
+            ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+            access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+            peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestSearchMessageMore(
+            load_more_state=load_more_state, query=query, peer=peer,
+        ).encode()
+        resp = self._ws.rpc(SEARCH_SERVICE, SEARCH_MESSAGE_MORE_METHOD, payload, timeout=15.0)
+        page = parse_search_messages_response(resp.payload or resp.raw)
+        hits = page.hits[:limit] if limit else page.hits
+        return SearchMessagesPage(
+            hits=hits, result_count=page.result_count,
+            load_more_state=page.load_more_state,
+        )
+
+    def search_peer(
+        self,
+        query: str,
+        *,
+        peer_type: int | None = 2,
+        limit: int = 20,
+    ) -> list[PeerSearchResult]:
+        """bale.search.v1.Search/SearchPeer — search public channels, groups, bots."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        payload = RequestSearchPeer(query=query, peer_type=peer_type).encode()
+        resp = self._ws.rpc(SEARCH_SERVICE, SEARCH_PEER_METHOD, payload, timeout=15.0)
+        results = parse_search_peer_response(resp.payload or resp.raw)
+        return results[:limit] if limit else results
+
+    def edit_message(
+        self,
+        peer_id: int,
+        rid: int,
+        text: str,
+        *,
+        peer_type: int | None = None,
+    ) -> None:
+        """bale.messaging.v2.Messaging/UpdateMessage — edit previously sent message text."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestUpdateMessage(peer=peer, rid=rid, text=text).encode()
+        self._ws.rpc(MESSAGING_SERVICE, UPDATE_MESSAGE_METHOD, payload, timeout=10.0)
+
+    def delete_message(
+        self,
+        peer_id: int,
+        rid: int | list[int],
+        *,
+        peer_type: int | None = None,
+        just_mine: bool = False,
+    ) -> None:
+        """bale.messaging.v2.Messaging/DeleteMessage — delete message(s)."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        rids = [rid] if isinstance(rid, int) else list(rid)
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestDeleteMessage(peer=peer, rids=rids, just_mine=just_mine).encode()
+        self._ws.rpc(MESSAGING_SERVICE, DELETE_MESSAGE_METHOD, payload, timeout=10.0)
+
+    def send_typing(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+        typing_type: int = 0,
+    ) -> None:
+        """bale.presence.v1.Presence/Typing — send typing action."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestTyping(peer=peer, typing_type=typing_type).encode()
+        self._ws.rpc(PRESENCE_SERVICE, TYPING_METHOD, payload, timeout=5.0)
+
+    def stop_typing(
+        self,
+        peer_id: int,
+        *,
+        peer_type: int | None = None,
+        typing_type: int = 0,
+    ) -> None:
+        """bale.presence.v1.Presence/StopTyping — clear typing action."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestStopTyping(peer=peer, typing_type=typing_type).encode()
+        self._ws.rpc(PRESENCE_SERVICE, STOP_TYPING_METHOD, payload, timeout=5.0)
+
+    def set_reaction(
+        self,
+        peer_id: int,
+        rid: int,
+        code: str,
+        *,
+        peer_type: int | None = None,
+        date: int = 0,
+    ) -> None:
+        """bale.abacus.v1.Abacus/MessageSetReaction — add emoji reaction to a message."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestMessageSetReaction(peer=peer, rid=rid, code=code, date=date).encode()
+        self._ws.rpc(ABACUS_SERVICE, MESSAGE_SET_REACTION_METHOD, payload, timeout=10.0)
+
+    def remove_reaction(
+        self,
+        peer_id: int,
+        rid: int,
+        code: str,
+        *,
+        peer_type: int | None = None,
+        date: int = 0,
+    ) -> None:
+        """bale.abacus.v1.Abacus/MessageRemoveReaction — remove emoji reaction."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = OutPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestMessageRemoveReaction(peer=peer, rid=rid, code=code, date=date).encode()
+        self._ws.rpc(ABACUS_SERVICE, MESSAGE_REMOVE_REACTION_METHOD, payload, timeout=10.0)
+
+    def pin_message(
+        self,
+        peer_id: int,
+        rid: int,
+        *,
+        peer_type: int | None = None,
+        date: int = 0,
+        just_mine: bool = False,
+    ) -> None:
+        """bale.messaging.v2.Messaging/PinMessage — pin a message."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = ExPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestPinMessage(peer=peer, rid=rid, date=date, just_mine=just_mine).encode()
+        self._ws.rpc(MESSAGING_SERVICE, PIN_MESSAGE_METHOD, payload, timeout=10.0)
+
+    def unpin_messages(
+        self,
+        peer_id: int,
+        rid: int | list[int],
+        *,
+        peer_type: int | None = None,
+        unpin_all: bool = False,
+    ) -> None:
+        """bale.messaging.v2.Messaging/UnPinMessages — unpin message(s)."""
+        if self._ws is None:
+            raise RuntimeError("BaleApiClient not started")
+        rids = [rid] if isinstance(rid, int) else list(rid)
+        ptype = peer_type if peer_type is not None else self._peer_type_for(peer_id)
+        access = self._dialog_access_hashes.get((ptype, peer_id), 0)
+        peer = ExPeer(user_id=peer_id, type=ptype, access_hash=access)
+        payload = RequestUnPinMessages(peer=peer, rids=rids, unpin_all=unpin_all).encode()
+        self._ws.rpc(MESSAGING_SERVICE, UNPIN_MESSAGES_METHOD, payload, timeout=10.0)
 
     def _peer_type_for(self, peer_id: int) -> int:
         """Resolve peer_type from the dialog access-hash cache, refreshing once."""
